@@ -24,6 +24,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
       workState:params.get('workState'),stage:params.get('stage'),relevance:params.get('relevance'),exception:params.get('exception'),
       waitingWith:params.get('waitingWith'),horizon:['7','14','21','30'].includes(params.get('horizon') || '')?Number(params.get('horizon')):null,
       attention:attention as 'upcoming-21'|'missed-unallocated-no-submission'|null,
+      includeExpired:params.get('includeExpired')==='true',actionClass:params.get('actionClass'),
+      responsibilityType:params.get('responsibilityType'),ageDays:Number(params.get('ageDays'))>0?Number(params.get('ageDays')):null,
     })
     if(!snapshot)snapshot=await writeReportSnapshot(access.context.tenantId,access.context.user.id,scopeKey,filterKey,report)
     const format=params.get('format')
@@ -37,11 +39,12 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     const contexts=report.members.filter(m=>!params.get('drillMemberId')||m.id===params.get('drillMemberId')).flatMap(m=>m.schools.filter(s=>!params.get('drillSchoolId')||s.id===params.get('drillSchoolId')).flatMap(s=>s.calls.filter(c=>!params.get('drillCallId')||c.id===params.get('drillCallId')).map(c=>({member:m,school:s,call:c}))))
     const calls=contexts.map(row=>row.call)
     const items=calls.flatMap(c=>c.applications)
-    const nextActions=report.actions.filter(a=>a.status==='OPEN')
+    const nextActions=report.actions.filter(a=>['OPEN','ACKNOWLEDGED'].includes(a.status))
     let payload:unknown
     if(level==='calls')payload=slice(calls.map(c=>({...c,applications:undefined,matches:undefined})))
     else if(level==='applications')payload=slice(items)
     else if(level==='matches')payload=slice(calls.flatMap(c=>c.matches))
+    else if(view==='workbench')payload={rows:report.workbench,headSummary:report.headSummary}
     else if(view==='performance')payload={rows:report.performance,weekly:report.weekly}
     else if(view==='weekly-review')payload={...report.weekly,urgentActions:nextActions.filter(a=>a.blocker || a.due_at && a.due_at<=window.asOf),
       urgentOpportunities:contexts.filter(({call})=>call.quality==='confirmed'&&call.gaps.some(g=>['UNTOUCHED','MATCHED_UNALLOCATED','APPROACHED_UNALLOCATED'].includes(g))&&

@@ -5,6 +5,7 @@ import { stagePdfUpload } from '@/lib/fundingIntake/appRouterUpload'
 import { toFundingImportJobView } from '@/lib/fundingIntake/compat'
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
+import { prisma } from '@/lib/prisma'
 
 export const runtime = 'nodejs'
 
@@ -50,6 +51,7 @@ async function parseCreateRequest(request: NextRequest) {
         inputType,
         visibility,
         sourceFile: stagedPdf,
+        originSchoolId: typeof formData.get('originSchoolId') === 'string' ? String(formData.get('originSchoolId')) : undefined,
       } as const
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to stage upload'
@@ -77,6 +79,7 @@ async function parseCreateRequest(request: NextRequest) {
     visibility: parseVisibility(body.visibility),
     sourceUrl: typeof body.sourceUrl === 'string' ? body.sourceUrl : undefined,
     rawText: typeof body.rawText === 'string' ? body.rawText : undefined,
+    originSchoolId: typeof body.originSchoolId === 'string' ? body.originSchoolId : undefined,
   } as const
 }
 
@@ -115,11 +118,21 @@ export async function POST(request: NextRequest) {
       return visibilityResponse
     }
 
+    let originSchool: { id:string; name:string } | null = null
+    if (auth.operator.tenantId) {
+      if (!payload.originSchoolId) throw new FundingImportRequestError('Select the school responsible for reviewing this incoming call.', 400, 'ORIGIN_SCHOOL_REQUIRED')
+      originSchool = await prisma.tenantOrgUnit.findFirst({where:{id:payload.originSchoolId,tenant_id:auth.operator.tenantId,depth:0,is_active:true},select:{id:true,name:true}})
+      if (!originSchool) throw new FundingImportRequestError('Origin school not found.', 400, 'ORIGIN_SCHOOL_INVALID')
+    }
+
     const job = await fundingIntakeService.createJob(auth.operator, {
       inputType: payload.inputType === 'file' ? 'pdf' : payload.inputType,
       sourceUrl: payload.sourceUrl,
       sourceText: payload.rawText,
       sourceFile: payload.sourceFile,
+      originSchoolId: originSchool?.id,
+      originSchoolName: originSchool?.name,
+      originSchoolSource: originSchool ? 'SELECTED_AT_INGEST' : undefined,
     })
 
     const details = await fundingIntakeService.getJobDetails(job.id, auth.operator)

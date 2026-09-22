@@ -214,6 +214,38 @@ export function relevantCallWhereSql(
   return Prisma.sql`(${Prisma.join(clauses, ' OR ')})`
 }
 
+/**
+ * Operational DSR routing is stricter than taxonomy discovery.  A school sees
+ * fresh work only when the origin attribution names it or a current person in
+ * the school matches.  Recorded human work remains visible for audit.
+ */
+export function actionableSchoolCallWhereSql(
+  tenantId: string,
+  schoolId: string,
+  alias = 'fc'
+): Prisma.Sql {
+  const callId = Prisma.raw(`${alias}.id`)
+  const originSchool = Prisma.raw(`${alias}.origin_school_id`)
+  return Prisma.sql`(
+    ${originSchool}=${schoolId}
+    OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
+      WHERE match.tenant_id=${tenantId} AND match.school_id=${schoolId}
+        AND match.funding_call_id=${callId} AND match.is_current)
+    OR EXISTS(SELECT 1 FROM call_school_triage triage
+      WHERE triage.tenant_id=${tenantId} AND triage.org_unit_id=${schoolId}
+        AND triage.funding_call_id=${callId} AND triage.decided_at IS NOT NULL)
+    OR EXISTS(SELECT 1 FROM dsr_applications application
+      WHERE application.tenant_id=${tenantId} AND application.school_id=${schoolId}
+        AND application.call_id=${callId})
+    OR EXISTS(SELECT 1 FROM dsr_actions action
+      WHERE action.tenant_id=${tenantId} AND action.school_id=${schoolId}
+        AND action.call_id=${callId})
+    OR EXISTS(SELECT 1 FROM dsr_opportunity_dispositions disposition
+      WHERE disposition.tenant_id=${tenantId} AND disposition.school_id=${schoolId}
+        AND disposition.call_id=${callId})
+  )`
+}
+
 export interface CallRelevance {
   tier: RelevanceTier
   /** Plain-English explanation, e.g. "Pharmacy → Pharmaceutics". */

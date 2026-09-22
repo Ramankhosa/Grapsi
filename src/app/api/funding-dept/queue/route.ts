@@ -5,7 +5,6 @@ import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import {
   loadUnitAreaProfile,
   relevanceForCalls,
-  relevantCallWhereSql,
 } from '@/lib/funding/callUnitRelevance'
 import { getMembership } from '@/lib/fundingDept/membershipService'
 import { queueStateSql, type QueueState as LadderState } from '@/lib/fundingDept/queueState'
@@ -117,9 +116,22 @@ export async function GET(request: NextRequest) {
   const relevantSql =
     relevanceMode === 'all'
       ? Prisma.sql`TRUE`
-      : // A call this school pinned counts as relevant even when the taxonomy
-        // disagrees — the classification is global, this judgement is local.
-        relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: school.id })
+      : Prisma.sql`(
+          fc.origin_school_id=${school.id}
+          OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
+            WHERE match.tenant_id=${context.tenantId} AND match.school_id=${school.id}
+              AND match.funding_call_id=fc.id AND match.is_current)
+          OR EXISTS(SELECT 1 FROM call_school_triage decided
+            WHERE decided.tenant_id=${context.tenantId} AND decided.org_unit_id=${school.id}
+              AND decided.funding_call_id=fc.id AND decided.decided_at IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM call_assignments ca
+            WHERE ca.tenant_id=${context.tenantId} AND ca.funding_call_id=fc.id
+              AND ca.assignee_org_unit_id=ANY(${scopeArray}))
+          OR EXISTS(SELECT 1 FROM dsr_actions action
+            WHERE action.tenant_id=${context.tenantId} AND action.school_id=${school.id} AND action.call_id=fc.id)
+          OR EXISTS(SELECT 1 FROM dsr_opportunity_dispositions disposition
+            WHERE disposition.tenant_id=${context.tenantId} AND disposition.school_id=${school.id} AND disposition.call_id=fc.id)
+        )`
 
   const now = new Date()
   const filters: Prisma.Sql[] = [
@@ -216,8 +228,8 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     schools: selectableUnits.map((unit) => ({ id: unit.id, name: unit.name, code: unit.code })),
     school: { id: school.id, name: school.name, code: school.code },
-    // The banner condition: nothing mapped, so the filter cannot narrow and the
-    // officer is looking at the whole catalog. Says so rather than pretending.
+    // Mapping remains a data-quality signal, but no longer fans the complete
+    // catalog out to an unmapped school.
     isUnmapped: profile.isUnmapped,
     relevance: relevanceMode,
     state,
@@ -236,7 +248,7 @@ export async function GET(request: NextRequest) {
         triageNote: row.triage_note,
         liveAssignments: row.live_assignments,
         relevanceTier: match?.tier ?? 'none',
-        relevanceReason: match?.reason ?? null,
+        relevanceReason: match?.reason ?? 'Visible because this is the origin school, a current person match exists, or the school has recorded work.',
       }
     }),
   })

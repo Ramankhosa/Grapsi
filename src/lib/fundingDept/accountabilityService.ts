@@ -24,7 +24,7 @@ import { notTakenUpSql } from '@/lib/assignments/shared'
 import {
   loadUnitAreaProfile,
   relevanceForCalls,
-  relevantCallWhereSql,
+  actionableSchoolCallWhereSql,
   type CallRelevance,
 } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
@@ -861,7 +861,7 @@ export async function getSchoolCallLedger(
   const scopeArray = textArray(scopeIds)
 
   const profile = await loadUnitAreaProfile(tenantId, [schoolId])
-  const relevant = relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: schoolId })
+  const relevant = actionableSchoolCallWhereSql(tenantId, schoolId, 'fc')
 
   const callRows = await prisma.$queryRaw<
     Array<{

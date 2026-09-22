@@ -89,6 +89,9 @@ export interface FundingImportRequest {
   visibility: FundingVisibility
   sourceUrl?: string
   rawText?: string
+  originSchoolId?: string
+  originSchoolName?: string
+  originSchoolSource?: string
 }
 
 export interface FundingImportAssetView {

@@ -1,15 +1,17 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { loadUnitAreaProfile, relevanceForCalls, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { loadUnitAreaProfile, relevanceForCalls } from '@/lib/funding/callUnitRelevance'
 import { textArray, visibleCallSql } from './callSql'
 import { applicationState, day, evidenceFingerprint, hasSubmissionEvidence, inPeriod, median, opportunityActionState, opportunityDeadlineAttention, overdueAt, ratio, type ApplicationRow, type AttentionFilter, type ReportMode } from './managementRules'
 import { resolveActivityWindow } from './accountabilityService'
+import { isExpiredInIndia, resolveResponsibility } from './responsibility'
 
 export type ActionRow = {
   id: string; tenant_id: string; school_id: string; call_id: string | null; application_id: string | null
   title: string; owner_user_id: string; owner_name: string; waiting_with: string; status: string
   is_next: boolean; due_at: Date | null; blocker: string | null; deadline_type: string
   created_at: Date; updated_at: Date; completed_at: Date | null; version: number
+  acknowledged_at: Date | null; acknowledged_by_user_id: string | null; resolution_note: string | null
 }
 type Contact = { id: string; application_id: string; school_id: string; call_id: string | null; actor_id: string; actor_name: string; kind: string; target: string; happened_at: Date; note: string }
 type EventRow = { id: string; school_id: string | null; entity_type: string; entity_id: string; kind: string; before_data: any; after_data: any; occurred_at: Date; inferred: boolean; actor_user_id: string | null; reason: string | null }
@@ -18,6 +20,10 @@ export type ManagementFilters = {
   mode: ReportMode; start: Date; end: Date; asOf: Date; workState?: string | null; stage?: string | null
   relevance?: string | null; exception?: string | null; waitingWith?: string | null; horizon?: number | null
   attention?: AttentionFilter | null
+  includeExpired?: boolean
+  actionClass?: string | null
+  responsibilityType?: string | null
+  ageDays?: number | null
 }
 export async function managementWindow(tenantId: string, params: URLSearchParams) {
   const asOf = new Date()
@@ -70,7 +76,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       WHERE f.tenant_id=${tenantId} AND f.assignment_id IS NULL AND u.path[1]=ANY(${textArray(ids)}) AND f.happened_at<=${at}`),
     prisma.$queryRaw<ActionRow[]>(Prisma.sql`SELECT a.*,COALESCE(u.name,u.email) owner_name FROM dsr_actions a JOIN users u ON u.id=a.owner_user_id
       WHERE a.tenant_id=${tenantId} AND a.school_id=ANY(${textArray(ids)}) AND a.created_at<=${at} ORDER BY a.is_next DESC,a.due_at NULLS LAST,a.id`),
-    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids},first_seen_at:{lte:at}}}),
+    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids},is_current:true,first_seen_at:{lte:at}}}),
     prisma.$queryRaw<Array<{ school_id:string;call_id:string;first_seen_at:Date;inferred:boolean }>>(Prisma.sql`SELECT * FROM dsr_opportunity_observations WHERE tenant_id=${tenantId} AND school_id=ANY(${textArray(ids)}) AND first_seen_at<=${at}`),
     prisma.$queryRaw<Array<{ application_id:string;evidence_fingerprint:string;reviewer_user_id:string;verified_at:Date }>>(Prisma.sql`SELECT * FROM dsr_submission_verifications WHERE tenant_id=${tenantId} AND verified_at<=${at}`),
     prisma.$queryRaw<Array<{application_id:string;id:string}>>(Prisma.sql`SELECT 'assignment:'||assignment_id application_id,id FROM assignment_documents WHERE tenant_id=${tenantId} AND kind='PROPOSAL'
@@ -80,7 +86,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     prisma.callCandidate.findMany({where:{tenant_id:tenantId},select:{funding_call_id:true,user_id:true,status:true,created_at:true,updated_at:true,created_by_user_id:true}}),
     prisma.$queryRaw<Array<{call_id:string;scope:any;completeness:string;completed_at:Date}>>(Prisma.sql`SELECT call_id,scope,completeness,completed_at FROM dsr_matching_runs WHERE tenant_id=${tenantId} AND completed_at<=${at} ORDER BY completed_at DESC`),
     prisma.$queryRaw<Array<{school_id:string;call_id:string;reason:string;explanation:string|null;actor_user_id:string;updated_at:Date}>>(Prisma.sql`SELECT * FROM dsr_opportunity_dispositions WHERE tenant_id=${tenantId} AND school_id=ANY(${textArray(ids)})`),
-    prisma.user.findMany({where:{tenantId},select:{id:true,name:true,email:true,researcher_profile:{select:{org_unit_id:true,org_unit:{select:{path:true}}}}}}),
+    prisma.user.findMany({where:{tenantId,status:'ACTIVE'},select:{id:true,name:true,email:true,researcher_profile:{select:{org_unit_id:true,research_areas:true,keywords:true,org_unit:{select:{path:true}}}}}}),
   ])
   const peopleMap = new Map(people.map(p=>[p.id,{id:p.id,name:p.name || p.email,email:p.email}]))
   const personSchool = new Map(people.map(p=>[p.id,p.researcher_profile?.org_unit?.path[0] || null]))
@@ -91,7 +97,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     const appContacts = contacts.filter(c=>c.application_id===row.id)
     const facultyContacts = appContacts.filter(external).sort((a,b)=>b.happened_at.getTime()-a.happened_at.getTime())
     const appActions = actions.filter(a=>a.application_id===row.id)
-    const nextAction = appActions.find(a=>a.is_next && a.status==='OPEN') || null
+    const nextAction = appActions.find(a=>a.is_next && ['OPEN','ACKNOWLEDGED'].includes(a.status)) || null
     const proof = documents.filter(d=>d.application_id===row.id).map(d=>d.id)
     const verification = verifications.find(v=>v.application_id===row.id && v.evidence_fingerprint===evidenceFingerprint(row,proof)) || null
     const evidenceAvailable = hasSubmissionEvidence(row,proof)
@@ -102,7 +108,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       agency: state.outstanding && !state.submitted && overdueAt(row.agency_deadline,at),
       internal: state.outstanding && !state.submitted && overdueAt(row.internal_deadline,at),
       review: state.outstanding && ['PROPOSAL_DRAFTING','INTERNAL_REVIEW'].includes(state.stage) && overdueAt(row.review_deadline,at),
-      action: appActions.some(a=>a.status==='OPEN' && overdueAt(a.due_at,at)),
+      action: appActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status) && overdueAt(a.due_at,at)),
     }
     const firstSeen = row.call_id ? observationMap.get(`${row.school_id}:${row.call_id}`)?.first_seen_at || null : row.created_at
     const exceptions = [Object.values(overdue).some(Boolean)?'overdue':null,
@@ -123,25 +129,29 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     (!filters.workState || a.workState===filters.workState) && (!filters.stage || a.stage===filters.stage) &&
     (!filters.exception || a.exceptions.includes(filters.exception)) &&
     (!filters.waitingWith || a.nextAction?.waiting_with===filters.waitingWith) &&
-    (!filters.horizon || [a.agency_deadline,a.internal_deadline,a.review_deadline,...a.actions.filter(x=>x.status==='OPEN').map(x=>x.due_at)]
+    (!filters.horizon || [a.agency_deadline,a.internal_deadline,a.review_deadline,...a.actions.filter(x=>['OPEN','ACKNOWLEDGED'].includes(x.status)).map(x=>x.due_at)]
       .some(d=>d && new Date(d).getTime()<=at.getTime()+filters.horizon!*day && a.outstanding))
   const isActivity = (a:typeof apps[number])=>inPeriod(a.created_at,filters.start,filters.end) || inPeriod(a.submitted_at,filters.start,filters.end) ||
     a.contacts.some(c=>external(c) && inPeriod(c.happened_at,filters.start,filters.end)) || a.actions.some(x=>inPeriod(x.completed_at,filters.start,filters.end))
   const rawSchoolRows = await Promise.all(schools.map(async school => {
     const profile = await loadUnitAreaProfile(tenantId,[school.id])
-    const relevant = relevantCallWhereSql(profile,'fc',{pinnedForUnitId:school.id})
-    const calls = await prisma.$queryRaw<Array<{id:string;title:string;agency:string|null;deadline:Date|null;triage:string|null}>>(Prisma.sql`
+    const calls = await prisma.$queryRaw<Array<{id:string;title:string;agency:string|null;deadline:Date|null;triage:string|null;decided_at:Date|null;origin_school_id:string|null;origin_school_name:string|null;origin_school_source:string|null}>>(Prisma.sql`
       SELECT fc.id,COALESCE(fc.scheme_title,fc.title) title,COALESCE(fc.agency_name,fc."agencyName") agency,
-      COALESCE(fc.close_date,fc."deadlineAt") deadline,tri.status triage
+      COALESCE(fc.close_date,fc."deadlineAt") deadline,tri.status triage,tri.decided_at,
+      fc.origin_school_id,fc.origin_school_name,fc.origin_school_source
       FROM funding_calls fc LEFT JOIN call_school_triage tri ON tri.funding_call_id=fc.id AND tri.org_unit_id=${school.id} AND tri.tenant_id=${tenantId}
-      WHERE fc."createdAt"<=${at} AND (
-        (${visibleCallSql(tenantId)} AND ${relevant}) OR
-        (EXISTS(SELECT 1 FROM dsr_opportunity_observations o WHERE o.tenant_id=${tenantId} AND o.school_id=${school.id} AND o.call_id=fc.id)
-         AND (fc."tenantId"=${tenantId} OR (fc."tenantId" IS NULL AND fc.visibility='GLOBAL_PUBLISHED')))
-        OR EXISTS(SELECT 1 FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.school_id=${school.id} AND a.call_id=fc.id)) ORDER BY fc.id`)
+      WHERE fc."createdAt"<=${at} AND ${visibleCallSql(tenantId)} AND (
+        fc.origin_school_id=${school.id}
+        OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
+          WHERE match.tenant_id=${tenantId} AND match.school_id=${school.id} AND match.funding_call_id=fc.id AND match.is_current)
+        OR (tri.decided_at IS NOT NULL)
+        OR EXISTS(SELECT 1 FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.school_id=${school.id} AND a.call_id=fc.id)
+        OR EXISTS(SELECT 1 FROM dsr_actions a WHERE a.tenant_id=${tenantId} AND a.school_id=${school.id} AND a.call_id=fc.id)
+        OR EXISTS(SELECT 1 FROM dsr_opportunity_dispositions d WHERE d.tenant_id=${tenantId} AND d.school_id=${school.id} AND d.call_id=fc.id)
+      ) ORDER BY fc.id`)
     const relevance = await relevanceForCalls(profile,calls.map(c=>c.id))
     const allSchoolApps = apps.filter(a=>a.school_id===school.id)
-    for (const app of allSchoolApps.filter(a=>!a.call_id)) calls.push({id:`adhoc:${app.proposal_id}`,title:app.title,agency:app.agency,deadline:app.agency_deadline,triage:null})
+    for (const app of allSchoolApps.filter(a=>!a.call_id)) calls.push({id:`adhoc:${app.proposal_id}`,title:app.title,agency:app.agency,deadline:app.agency_deadline,triage:null,decided_at:null,origin_school_id:null,origin_school_name:null,origin_school_source:null})
     const callRows = calls.flatMap(call=>{
       if (filters.callId && filters.callId!==call.id) return []
       if (filters.callSearch && !`${call.title} ${call.id}`.toLowerCase().includes(filters.callSearch.toLowerCase())) return []
@@ -149,9 +159,6 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const callApps = allSchoolApps.filter(a=>adHoc ? `adhoc:${a.proposal_id}`===call.id : a.call_id===call.id)
       const observation = observationMap.get(`${school.id}:${call.id}`)
       const firstSeen = observation?.first_seen_at || (adHoc ? callApps[0]?.created_at : null) || null
-      const quality = adHoc?'ad-hoc':call.triage==='NOT_RELEVANT'?'dismissed':call.triage==='RELEVANT'?'confirmed':profile.isUnmapped?'unmapped':
-        ['direct','broad','keyword'].includes(relevance.get(call.id)?.tier || '')?'confirmed':relevance.get(call.id)?.tier==='unclassified'?'unclassified':'unmatched'
-      if (filters.relevance && filters.relevance!==quality && filters.relevance!==relevance.get(call.id)?.tier) return []
       const callMatches = matches.filter(m=>m.school_id===school.id && m.funding_call_id===call.id)
       const callActions = actions.filter(a=>a.school_id===school.id && a.call_id===call.id && !a.application_id)
       const matchedUsers = new Set(callMatches.map(m=>m.user_id))
@@ -162,10 +169,15 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const externalContactRows = contactRows.filter(external)
       const disposition = dispositions.find(d=>d.school_id===school.id && d.call_id===call.id) || null
       const latestRun = runs.find(r=>r.call_id===call.id && (r.scope.schoolIds as string[] | undefined)?.includes(school.id))
-      const callActionOverdue = callActions.some(a=>a.status==='OPEN'&&overdueAt(a.due_at,at))
+      const hasRecordedWork = Boolean(call.decided_at || callApps.length || callActions.length || disposition)
+      const isOrigin = call.origin_school_id===school.id
+      const isMatched = callMatches.length>0
+      const quality = adHoc?'ad-hoc':call.triage==='NOT_RELEVANT'?'dismissed':isMatched||call.triage==='RELEVANT'?'confirmed':hasRecordedWork?'historical-work':isOrigin?'origin':'unmatched'
+      if (filters.relevance && filters.relevance!==quality && filters.relevance!==relevance.get(call.id)?.tier) return []
+      const callActionOverdue = callActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)&&overdueAt(a.due_at,at))
       const actionState = opportunityActionState({applications:callApps.length,candidatesReviewed:considered,
         externalContacts:externalContactRows.length,recordedActions:callActions.length,dispositionRecorded:Boolean(disposition)})
-      const unallocated = quality==='confirmed' && !callApps.some(a=>a.assignment_id)
+      const unallocated = (quality==='confirmed'||quality==='origin') && !callApps.some(a=>a.assignment_id)
       const formalAllocationCount = callApps.filter(a=>Boolean(a.assignment_id)).length
       const submittedApplicationCount = callApps.filter(a=>a.submitted).length
       const hasAnySubmission = submittedApplicationCount>0
@@ -183,8 +195,11 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         latestRun?.completeness!=='COMPLETE'?'MATCHING_INCOMPLETE':null,
       ].filter(Boolean) as string[] : []
       const remaining = callApps.filter(a=>appMatches(a) && (filters.mode==='pending'?a.outstanding:filters.mode==='activity'?isActivity(a):true))
-      const dueCall = !filters.horizon || [call.deadline,...callActions.filter(a=>a.status==='OPEN').map(a=>a.due_at)]
+      const dueCall = !filters.horizon || [call.deadline,...callActions.filter(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)).map(a=>a.due_at)]
         .some(value=>value&&value.getTime()<=at.getTime()+filters.horizon!*day)
+      const callExpired=isExpiredInIndia(call.deadline,at)
+      const hasLiveWork=callApps.some(a=>a.outstanding)||callActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status))
+      if(callExpired&&!filters.includeExpired&&!hasLiveWork)return []
       if (filters.mode==='cohort' && !inPeriod(firstSeen,filters.start,filters.end)) return []
       const callException = !filters.exception || filters.exception==='overdue' && (overdueAt(call.deadline,at)||callActionOverdue) ||
         filters.exception==='missing-deadline' && !call.deadline ||
@@ -192,9 +207,9 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         filters.exception==='untouched' && gaps.includes('UNTOUCHED') ||
         filters.exception==='approached-unallocated' && gaps.includes('APPROACHED_UNALLOCATED') ||
         filters.exception==='unallocated-no-matches' && gaps.includes('NO_MATCH_UNALLOCATED')
-      const callWaiting = !filters.waitingWith || callActions.some(a=>a.status==='OPEN'&&a.waiting_with===filters.waitingWith)
+      const callWaiting = !filters.waitingWith || callActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)&&a.waiting_with===filters.waitingWith)
       const showOpportunityGap = unallocated && dueCall && callException && callWaiting && !filters.workState && !filters.stage
-      if (filters.mode==='pending' && remaining.length===0 && !showOpportunityGap && !callActions.some(a=>a.status==='OPEN'&&callWaiting&&callException)) return []
+      if (filters.mode==='pending' && remaining.length===0 && !showOpportunityGap && !callActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)&&callWaiting&&callException)) return []
       if (filters.mode==='activity' && remaining.length===0 && !contacts.some(c=>c.call_id===call.id && c.school_id===school.id && inPeriod(c.happened_at,filters.start,filters.end) && external(c))) return []
       if ((filters.workState || filters.stage || filters.exception || filters.waitingWith) && !remaining.length && !showOpportunityGap) return []
       const lastAction = [...contactRows.map(c=>({at:c.happened_at,by:c.actor_name})),
@@ -203,8 +218,21 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         ...(disposition?[{at:disposition.updated_at,by:peopleMap.get(disposition.actor_user_id)?.name || 'Officer not recorded'}]:[]),
         ...callApps.map(a=>({at:a.updated_at,by:a.allocatedBy?.name || a.submissionRecorder?.name || 'Officer not recorded'})),
       ].sort((a,b)=>b.at.getTime()-a.at.getTime())[0] || null
+      const baseResponsibility={asOf:at,firstSeenAt:firstSeen,deadline:call.deadline,intakeReady:true,
+        originSchoolMissing:!call.origin_school_id,schoolUnmapped:profile.isUnmapped,ownerMissing:!owners.has(school.id),
+        matchingComplete:latestRun?.completeness==='COMPLETE',matchedPeople:callMatches.length,applications:callApps.length,
+        activeApplications:callApps.filter(a=>a.outstanding).length,assignments:formalAllocationCount,candidatesReviewed:considered,
+        contacts:externalContactRows.length,dispositionRecorded:Boolean(disposition),triageDecisionRecorded:Boolean(call.decided_at),
+        actions:callActions,lastActivityAt:lastAction?.at,internalDeadlineOverdue:callApps.some(a=>a.overdue.internal||a.overdue.review)}
+      const responsibilities=[
+        ...(isOrigin?[resolveResponsibility({...baseResponsibility,responsibilityType:'ORIGIN_REVIEW'})]:[]),
+        ...(isMatched||hasRecordedWork?[resolveResponsibility({...baseResponsibility,responsibilityType:'MATCHED_FOLLOW_UP'})]:[]),
+      ]
+      if(filters.responsibilityType&&!responsibilities.some(r=>r.responsibilityType===filters.responsibilityType))return []
+      if(filters.actionClass&&!responsibilities.some(r=>r.actionClass===filters.actionClass))return []
+      if(filters.ageDays&&!responsibilities.some(r=>(r.daysSinceActivity??0)>=filters.ageDays!))return []
       return [{...call,schoolId:school.id,quality,firstSeen,inferred:observation?.inferred ?? false,
-        reason:call.triage==='RELEVANT'?'School marked relevant':call.triage==='NOT_RELEVANT'?'School marked not relevant':relevance.get(call.id)?.reason || null,
+        reason:call.triage==='RELEVANT'?'School marked relevant':call.triage==='NOT_RELEVANT'?'School marked not relevant':isOrigin?'Selected as origin school':callMatches[0]?.match_reason || relevance.get(call.id)?.reason || null,
         matchedFaculty:callMatches.length,matchCompleteness:latestRun?.completeness || 'UNKNOWN',matches:callMatches.map(m=>{
           const allocation=callApps.find(a=>a.faculty_id===m.user_id&&Boolean(a.assignment_id))
           const independent=callApps.find(a=>a.faculty_id===m.user_id&&!a.assignment_id)
@@ -223,7 +251,8 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         actionState:actionState.touched?'ACTED_ON':'UNTOUCHED',touchSignals:actionState.signals,gaps,lastAction,actions:callActions,disposition,
         daysToDeadline:deadlineRisk.daysToDeadline,deadlineStatus:deadlineRisk.status,upcoming21,hasAnySubmission,
         missedUnallocatedNoSubmission,missedExplanationStatus:missedUnallocatedNoSubmission?(disposition?'EXPLAINED':'UNEXPLAINED'):null,
-        suggestedActionOwner:owners.get(school.id)?.user || null,
+        suggestedActionOwner:owners.get(school.id)?.user || null,responsibilities,isExpired:callExpired,retainedBecauseLiveWork:callExpired&&hasLiveWork,
+        visibilityReasons:[...(isOrigin?['ORIGIN_SCHOOL']:[]),...(isMatched?['MATCHED_RESEARCHERS']:[]),...(hasRecordedWork&&!isMatched?['RECORDED_WORK']:[])],
       }]
     })
     return {...school,ownerId:owners.get(school.id)?.id || 'unassigned',owner:owners.get(school.id)?.user || null,
@@ -293,21 +322,49 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       performedSubmissions:scopedApps.filter(a=>a.submission_recorder===member.userId&&inPeriod(a.submitted_at,filters.start,filters.end)).length,
       performedContacts:contacts.filter(c=>external(c) && c.actor_id===member.userId && inPeriod(c.happened_at,filters.start,filters.end)).length,money}
   })
-  const faculty=people.filter(p=>scopedApps.some(a=>a.faculty_id===p.id) || matches.some(m=>m.user_id===p.id)).map(p=>{
+  const faculty=people.filter(p=>Boolean(personSchool.get(p.id)&&ids.includes(personSchool.get(p.id)!))).map(p=>{
     const facultyMatches=matches.filter(m=>m.user_id===p.id && (!filters.callId || m.funding_call_id===filters.callId))
     const items=scopedApps.filter(a=>a.faculty_id===p.id)
     const approached=candidates.filter(c=>c.user_id===p.id && ['APPROACHED','ASSIGNED'].includes(c.status) && facultyMatches.some(m=>m.funding_call_id===c.funding_call_id))
+    const activityDates=[...items.map(a=>a.updated_at),...candidates.filter(c=>c.user_id===p.id).map(c=>c.updated_at)].sort((a,b)=>b.getTime()-a.getTime())
     return {id:p.id,name:p.name || p.email,suitableOpportunities:facultyMatches.length,approached:approached.length,
       neverApproached:facultyMatches.filter(m=>!approached.some(c=>c.funding_call_id===m.funding_call_id) && !items.some(a=>a.call_id===m.funding_call_id)).length,
       allocations:items.filter(a=>!a.independent).length,active:items.filter(a=>a.outstanding).length,submitted:items.filter(a=>a.submitted).length,
-      completeness:'Recorded matches only; see matching run completeness',schoolIds:[...new Set([...items.map(a=>a.school_id),...facultyMatches.map(m=>m.school_id)])]}
+      completeness:'Current projected matches; see matching run completeness',schoolIds:[personSchool.get(p.id)!],
+      profileReady:Boolean(p.researcher_profile&&(p.researcher_profile.research_areas.length||p.researcher_profile.keywords.length)),
+      lastEngagementAt:activityDates[0]||null,engagement:items.some(a=>a.outstanding)?'ENGAGED':items.length||approached.length?'DORMANT':'NEVER_ASSIGNED'}
   })
+  const workbench=schoolRows.flatMap(s=>s.calls.flatMap(call=>call.responsibilities.map(responsibility=>({
+    ...call,workItemId:`${s.id}:${call.id}:${responsibility.responsibilityType}`,schoolId:s.id,schoolName:s.name,
+    memberId:s.ownerId,memberName:s.owner?.name||s.owner?.email||'Unassigned DSR ownership',
+    callId:call.id,responsibility,
+  })))).filter(row=>filters.includeExpired||!row.isExpired||row.retainedBecauseLiveWork)
+  workbench.sort((a,b)=>a.responsibility.priority-b.responsibility.priority ||
+    (a.deadline?.getTime()??Infinity)-(b.deadline?.getTime()??Infinity) || a.title.localeCompare(b.title))
+  const actionCounts={
+    new:actions.filter(a=>a.status==='OPEN').length,
+    acknowledged:actions.filter(a=>a.status==='ACKNOWLEDGED').length,
+    overdue:actions.filter(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)&&Boolean(a.due_at&&a.due_at<at)).length,
+    resolved:actions.filter(a=>a.status==='DONE'&&inPeriod(a.completed_at,filters.start,filters.end)).length,
+    cancelled:actions.filter(a=>a.status==='CANCELLED'&&inPeriod(a.completed_at,filters.start,filters.end)).length,
+  }
+  const headSummary={
+    actionOverdue:workbench.filter(r=>r.responsibility.queue==='ACTION_OVERDUE').length,
+    closingSoon:workbench.filter(r=>r.responsibility.queue==='CLOSING_SOON').length,
+    newToReview:workbench.filter(r=>r.responsibility.queue==='NEW_TO_REVIEW').length,
+    waitingOnOthers:workbench.filter(r=>r.responsibility.queue==='WAITING_ON_OTHERS').length,
+    inProgress:workbench.filter(r=>r.responsibility.queue==='IN_PROGRESS').length,
+    dataRouting:workbench.filter(r=>r.responsibility.queue==='DATA_ROUTING').length,
+    peopleNeverAssigned:faculty.filter(p=>p.engagement==='NEVER_ASSIGNED'&&p.suitableOpportunities>0).length,
+    uncoveredSchools:schoolRows.filter(s=>s.ownerId==='unassigned').length,
+    correctiveActions:actionCounts,
+  }
   return {asOf:at,mode:filters.mode,period:{start:filters.start,end:filters.end},members:rows,totals:summarize(schoolRows),attentionCounts,
     activity:{allocations:activityApps.filter(a=>a.assignment_id && inPeriod(a.created_at,filters.start,filters.end)).length,
       independent:activityApps.filter(a=>a.independent && inPeriod(a.created_at,filters.start,filters.end)).length,
       submissions:activityApps.filter(a=>inPeriod(a.submitted_at,filters.start,filters.end)).length,
       contacts:activityApps.reduce((n,a)=>n+a.contacts.filter(c=>external(c) && inPeriod(c.happened_at,filters.start,filters.end)).length,0)},
-    performance,weekly,faculty,applications:apps,actions:actions.filter(a=>includedCalls.some(c=>c.schoolId===a.school_id&&c.id===a.call_id) || a.application_id&&includedIds.has(a.application_id)),
+    performance,weekly,faculty,workbench,headSummary,applications:apps,actions:actions.filter(a=>includedCalls.some(c=>c.schoolId===a.school_id&&c.id===a.call_id) || a.application_id&&includedIds.has(a.application_id)),
     quality:{unknownFirstSeen:scopedApps.filter(a=>!a.firstSeen).length,inferredMatches:matches.filter(m=>m.inferred).length,
       unknownStageDates:scopedApps.filter(a=>!a.stageEnteredAt).length,matchingComplete:schoolRows.every(s=>s.calls.every(c=>c.matchCompleteness==='COMPLETE')),
       incompleteMatchingOpportunities:includedCalls.filter(c=>c.quality==='confirmed'&&c.matchCompleteness!=='COMPLETE').length,

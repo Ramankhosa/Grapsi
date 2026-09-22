@@ -5,6 +5,8 @@ import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { canReviewDept } from '@/lib/fundingDept/shared'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@/lib/prisma-generated'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 
@@ -157,4 +159,31 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       assigned: assignedUserIds.has(row.user.id),
     })),
   })
+}
+
+const originSchoolSchema = z.object({ originSchoolId: z.string().min(1), reason: z.string().trim().min(3).max(2000) })
+
+/** Audited correction for an intake attribution that was selected incorrectly. */
+export async function PATCH(request: NextRequest, { params }: { params: { callId: string } }) {
+  const context = await requireTenantScope(request)
+  if (isAccessError(context)) return NextResponse.json({ error: context.error }, { status: context.status })
+  if (!canReviewDept(context, context.scope)) return NextResponse.json({ error: 'Department-head access required.' }, { status: 403 })
+  try {
+    const input = originSchoolSchema.parse(await request.json())
+    const [call, school] = await Promise.all([
+      prisma.fundingCall.findFirst({where:{id:params.callId,tenantId:context.tenantId},select:{id:true,origin_school_id:true,origin_school_name:true,origin_school_source:true}}),
+      prisma.tenantOrgUnit.findFirst({where:{id:input.originSchoolId,tenant_id:context.tenantId,depth:0,is_active:true},select:{id:true,name:true}}),
+    ])
+    if (!call) return NextResponse.json({ error: 'Funding call not found.' }, { status: 404 })
+    if (!school) return NextResponse.json({ error: 'Origin school not found.' }, { status: 400 })
+    const after={origin_school_id:school.id,origin_school_name:school.name,origin_school_source:'CORRECTED_BY_DSR_HEAD'}
+    await prisma.$transaction(async tx=>{
+      await tx.fundingCall.update({where:{id:call.id},data:after})
+      await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
+        VALUES(${context.tenantId},${school.id},'ORIGIN_ATTRIBUTION',${call.id},${context.user.id},'CORRECTED',${JSON.stringify(call)}::jsonb,${JSON.stringify(after)}::jsonb,${input.reason})`)
+    })
+    return NextResponse.json({ saved:true, originSchool:school })
+  } catch (error) {
+    return NextResponse.json({ error:error instanceof z.ZodError?'Choose a school and explain the correction.':error instanceof Error?error.message:'Could not correct origin school.' }, { status:400 })
+  }
 }

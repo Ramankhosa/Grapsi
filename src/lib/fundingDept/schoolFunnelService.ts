@@ -1,5 +1,5 @@
 import { notTakenUpSql } from '@/lib/assignments/shared'
-import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { actionableSchoolCallWhereSql, loadUnitAreaProfile } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -85,7 +85,7 @@ async function funnelForSchool(
   const profile = await loadUnitAreaProfile(tenantId, [school.id])
   // Same predicate the officer's own queue uses, pin included, so a head's
   // 'pending' for a school and the officer's tab can never disagree.
-  const relevant = relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: school.id })
+  const relevant = actionableSchoolCallWhereSql(tenantId, school.id, 'fc')
 
   const liveAssignments = Prisma.sql`(
     SELECT COUNT(*)::int FROM call_assignments ca

@@ -23,7 +23,7 @@ import { notTakenUpSql } from '@/lib/assignments/shared'
 import {
   loadUnitAreaProfile,
   relevanceForCalls,
-  relevantCallWhereSql,
+  actionableSchoolCallWhereSql,
   type CallRelevance,
 } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
@@ -126,7 +126,7 @@ async function backlogForSchool(
   // Pin included, so this list and the school's own queue tab agree about which
   // calls concern it — including one the school itself declared relevant against
   // the classifier judgement.
-  const relevant = relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: school.id })
+  const relevant = actionableSchoolCallWhereSql(tenantId, school.id, 'fc')
 
   const liveAssignments = Prisma.sql`(
     SELECT COUNT(*)::int FROM call_assignments ca

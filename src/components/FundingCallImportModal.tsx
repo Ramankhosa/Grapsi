@@ -98,6 +98,7 @@ type ArtifactState = {
   bundle?: any;
   error?: string | null;
 };
+type OriginSchool = { id: string; name: string; isActive?: boolean; depth?: number };
 
 type FundingCallImportModalProps = {
   open: boolean;
@@ -465,6 +466,8 @@ export default function FundingCallImportModal({
   const [templateState, setTemplateState] = useState<ArtifactState>(emptyArtifactState);
   const [projectName, setProjectName] = useState('');
   const [selectedPriorityAreas, setSelectedPriorityAreas] = useState<string[]>([]);
+  const [originSchools, setOriginSchools] = useState<OriginSchool[]>([]);
+  const [originSchoolId, setOriginSchoolId] = useState('');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -569,6 +572,7 @@ export default function FundingCallImportModal({
     setTemplateState(emptyArtifactState);
     setProjectName('');
     setSelectedPriorityAreas([]);
+    setOriginSchoolId('');
     setLoading(false);
     setActionLoading(false);
     setError(null);
@@ -582,6 +586,22 @@ export default function FundingCallImportModal({
       resetWizardState();
     }
   }, [open, resetWizardState]);
+
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    apiRequest<{ units?: OriginSchool[]; schools?: OriginSchool[] }>('/api/tenant-admin/org-units')
+      .then((payload) => {
+        if (!current) return;
+        const roots = (payload.units || payload.schools || []).filter((unit) =>
+          (unit.depth === undefined || unit.depth === 0) && unit.isActive !== false
+        );
+        setOriginSchools(roots);
+        setOriginSchoolId((value) => value || (roots.length === 1 ? roots[0].id : ''));
+      })
+      .catch(() => { if (current) setOriginSchools([]); });
+    return () => { current = false; };
+  }, [open]);
 
   useEffect(() => {
     if (!allowedCallModes.includes(mode)) {
@@ -828,7 +848,8 @@ export default function FundingCallImportModal({
     : activeMode === 'file'
       ? Boolean(sourceFile)
       : sourceText.trim().length >= 80;
-  const canSubmitWithTemplateSelection = canSubmit && !templatePdfSelectionBlockingMessage;
+  const canSubmitWithTemplateSelection = canSubmit && !templatePdfSelectionBlockingMessage &&
+    (originSchools.length === 0 || Boolean(originSchoolId));
   const guidelineSummary = buildGuidelineSummary(guidelineState.run);
   const templateSummary = buildTemplateSummary(templateState.run);
   const isGuidelineComplete = (status = guidelineState.status) => status === 'accepted' || status === 'skipped';
@@ -874,6 +895,7 @@ export default function FundingCallImportModal({
         const formData = new FormData();
         formData.append('inputType', 'file');
         formData.append('file', sourceFile);
+        if (originSchoolId) formData.append('originSchoolId', originSchoolId);
         response = await apiRequest(importEndpoint, {
           method: 'POST',
           body: formData,
@@ -887,6 +909,7 @@ export default function FundingCallImportModal({
             sourceUrl: activeMode === 'url' ? sourceUrl : undefined,
             sourceText: activeMode === 'text' ? sourceText : undefined,
             rawText: activeMode === 'text' ? sourceText : undefined,
+            originSchoolId: originSchoolId || undefined,
           }),
         });
       }
@@ -1338,6 +1361,21 @@ export default function FundingCallImportModal({
                     ? 'Paste the funding call text. URL and PDF uploads are disabled for this project creation flow.'
                     : 'Use the official URL when available. HTTP and HTTPS URLs are supported. If the call is only in a document, upload the PDF.'}
                 </p>
+                {originSchools.length > 0 ? (
+                  <label className="mt-4 block text-sm font-medium text-slate-800">
+                    School responsible for intake review <span className="text-red-600">*</span>
+                    <select
+                      value={originSchoolId}
+                      onChange={(event) => setOriginSchoolId(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                      required
+                    >
+                      <option value="">Select school</option>
+                      {originSchools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
+                    </select>
+                    <span className="mt-1 block text-xs font-normal text-slate-500">This is the origin-school DSR responsible for reviewing the incoming call. Research matches may create separate duties for other schools.</span>
+                  </label>
+                ) : null}
                 <div className="mt-4 flex flex-wrap gap-2">
                   {allowedCallModes.includes('url') ? (
                     <SourceButton active={activeMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setMode('url')} />

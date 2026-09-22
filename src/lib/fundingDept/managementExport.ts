@@ -2,6 +2,14 @@ import AdmZip from 'adm-zip'
 import type { ManagementReport } from './managementService'
 import { csvCell } from './managementRules'
 export function exportTables(report:ManagementReport) {
+  const workbench:unknown[][]=[['Member','School','Call ID','Call','Agency','Agency deadline','Responsibility','Priority queue','Action class','Why visible','Matched faculty','Next action','Action owner','Waiting with','Action due','Blocker','Last action by','Last activity','Days since activity','Expired','Retained because live work']]
+  for(const row of report.workbench) {
+    const action=row.responsibility.nextAction
+    workbench.push([row.memberName,row.schoolName,row.callId,row.title,row.agency,row.deadline?.toISOString(),row.responsibility.responsibilityType,
+      row.responsibility.queue,row.responsibility.actionClass,row.visibilityReasons.join(' | '),row.matchedFaculty,
+      action?.title,action?.owner_name,action?.waiting_with,action?.due_at ? new Date(action.due_at).toISOString() : '',action?.blocker,
+      row.lastAction?.by,row.lastAction?.at?.toISOString(),row.responsibility.daysSinceActivity,row.isExpired,row.retainedBecauseLiveWork])
+  }
   const summaries:unknown[][]=[['Level','ID','Name','Schools','Relevant call-school opportunities','Distinct calls','Acted-on calls','Untouched calls','Matched but unallocated','Upcoming within 21 days','Missed without allocation or submission','Allocations','Independent applications','Pending','Pending without next action','Submitted','Verified','Followed-up allocations','Overdue','Unallocated calls']]
   const t=report.totals
   summaries.push(['Department','','',t.schools,t.callSchoolOpportunities,t.distinctCalls,t.actedOn,t.untouched,t.matchedUnallocated,t.upcoming21,t.missedUnallocatedNoSubmission,t.allocated,t.independent,t.pending,t.noNextAction,t.submitted,t.verified,t.followedUp,t.overdue,t.unallocated])
@@ -21,11 +29,11 @@ export function exportTables(report:ManagementReport) {
   for(const p of report.performance)performance.push([p.name,p.workload.callSchoolOpportunities,p.opportunityActionCoverage.numerator,p.workload.untouched,p.opportunityActionCoverage.percent,p.workload.outstanding,p.submissionConversion.numerator,p.submissionConversion.denominator,p.submissionConversion.percent,p.facultyContactCoverage.numerator,p.facultyContactCoverage.denominator,p.facultyContactCoverage.percent,p.timelyActions.numerator,p.timelyActions.denominator,p.timelyActions.percent,p.fundingSuccess.numerator,p.fundingSuccess.denominator,p.fundingSuccess.percent,p.undecided,p.independentSubmissions,p.periodSubmissions,p.previousPeriodSubmissions,p.performedAllocations,p.performedContacts,p.performedSubmissions])
   const weekly:unknown[][]=[['Member','Opening','New','Reopened','Transfers in','Resolved','Transfers out','Closing','Reconciled']]
   for(const row of report.weekly.members)weekly.push([row.name,row.opening,row.newWork,row.reopened,row.transfersIn,row.resolved,row.transfersOut,row.closing,row.reconciled])
-  const coverage:unknown[][]=[['Faculty','Recorded suitable opportunities','Approached','Never approached','Formal allocations','Active applications','Submitted applications','School IDs','Completeness note']]
-  for(const row of report.faculty)coverage.push([row.name,row.suitableOpportunities,row.approached,row.neverApproached,row.allocations,row.active,row.submitted,row.schoolIds.join(' | '),row.completeness])
-  const actions:unknown[][]=[['Action ID','School ID','Call ID','Application ID','Action','Owner','Waiting with','Status','Next action','Due','Deadline type','Blocker','Completed','Version']]
-  for(const row of report.actions)actions.push([row.id,row.school_id,row.call_id,row.application_id,row.title,row.owner_name,row.waiting_with,row.status,row.is_next,row.due_at?.toISOString(),row.deadline_type,row.blocker,row.completed_at?.toISOString(),row.version])
-  return [{name:'Definitions',rows:metadata},{name:'Summary',rows:summaries},{name:'Opportunity gaps',rows:opportunityGaps},{name:'Matching evidence',rows:matching},{name:'Applications',rows:records},{name:'Actions',rows:actions},{name:'Performance',rows:performance},{name:'Weekly movement',rows:weekly},{name:'Faculty coverage',rows:coverage}]
+  const coverage:unknown[][]=[['Faculty','Current suitable opportunities','Approached','Suitable but never approached','Formal allocations','Active applications','Submitted applications','Engagement','Profile ready','Last engagement','School IDs','Completeness note']]
+  for(const row of report.faculty)coverage.push([row.name,row.suitableOpportunities,row.approached,row.neverApproached,row.allocations,row.active,row.submitted,row.engagement,row.profileReady,row.lastEngagementAt?.toISOString(),row.schoolIds.join(' | '),row.completeness])
+  const actions:unknown[][]=[['Action ID','School ID','Call ID','Application ID','Action','Owner','Waiting with','Status','Next action','Due','Deadline type','Blocker','Acknowledged','Acknowledged by','Completed or cancelled','Resolution note','Version']]
+  for(const row of report.actions)actions.push([row.id,row.school_id,row.call_id,row.application_id,row.title,row.owner_name,row.waiting_with,row.status,row.is_next,row.due_at?.toISOString(),row.deadline_type,row.blocker,row.acknowledged_at?.toISOString(),row.acknowledged_by_user_id,row.completed_at?.toISOString(),row.resolution_note,row.version])
+  return [{name:'Definitions',rows:metadata},{name:'Workbench',rows:workbench},{name:'Summary',rows:summaries},{name:'Opportunity gaps',rows:opportunityGaps},{name:'Matching evidence',rows:matching},{name:'Applications',rows:records},{name:'Actions',rows:actions},{name:'Performance',rows:performance},{name:'Weekly movement',rows:weekly},{name:'Faculty coverage',rows:coverage}]
 }
 function xml(value:unknown){return String(value??'').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function column(index:number){let n=index+1,s='';while(n){n--;s=String.fromCharCode(65+n%26)+s;n=Math.floor(n/26)}return s}

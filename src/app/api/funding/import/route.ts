@@ -26,6 +26,7 @@ const importSchema = z.object({
   sourceText: z.string().optional(),
   rawText: z.string().optional(),
   operatorNotes: z.string().max(1000).optional(),
+  originSchoolId: z.string().trim().min(1).optional(),
 })
 
 async function parseImportRequest(request: NextRequest) {
@@ -42,11 +43,13 @@ async function parseImportRequest(request: NextRequest) {
     try {
       const sourceFile = await stagePdfUpload(file)
       const operatorNotes = formData.get('operatorNotes')
+      const originSchoolId = formData.get('originSchoolId')
 
       return {
         inputType: 'pdf' as const,
         sourceFile,
         operatorNotes: typeof operatorNotes === 'string' ? operatorNotes : undefined,
+        originSchoolId: typeof originSchoolId === 'string' ? originSchoolId : undefined,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to stage PDF upload'
@@ -61,6 +64,7 @@ async function parseImportRequest(request: NextRequest) {
     sourceUrl: parsed.sourceUrl,
     sourceText: parsed.sourceText ?? parsed.rawText,
     operatorNotes: parsed.operatorNotes,
+    originSchoolId: parsed.originSchoolId,
   }
 }
 
@@ -88,6 +92,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const parsed = await parseImportRequest(request)
+    let originSchool: { id:string; name:string } | null = null
+    if (auth.operator.tenantId) {
+      if (!parsed.originSchoolId) {
+        return NextResponse.json({ message: 'Select the school responsible for reviewing this incoming call.' }, { status: 400 })
+      }
+      originSchool = await prisma.tenantOrgUnit.findFirst({
+        where: { id: parsed.originSchoolId, tenant_id: auth.operator.tenantId, depth: 0, is_active: true },
+        select: { id: true, name: true },
+      })
+      if (!originSchool) return NextResponse.json({ message: 'Origin school not found.' }, { status: 400 })
+    }
 
     if (parsed.inputType === 'url' && parsed.sourceUrl) {
       const submittedUrl = parsed.sourceUrl.trim()
@@ -143,6 +158,9 @@ export async function POST(request: NextRequest) {
       sourceText: parsed.sourceText,
       sourceFile: parsed.inputType === 'pdf' ? parsed.sourceFile : undefined,
       operatorNotes: parsed.operatorNotes,
+      originSchoolId: originSchool?.id,
+      originSchoolName: originSchool?.name,
+      originSchoolSource: originSchool ? 'SELECTED_AT_INGEST' : undefined,
     })
     const details = await fundingIntakeService.getJobDetails(job.id, auth.operator)
 

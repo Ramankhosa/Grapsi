@@ -588,6 +588,9 @@ async function createFundingCallFromFacts(params: {
   facts: NormalizedFundingFacts
   jobId: string
   metadata?: Prisma.InputJsonValue
+  originSchoolId?: string | null
+  originSchoolName?: string | null
+  originSchoolSource?: string | null
 }) {
   const isGlobal = params.visibility === 'GLOBAL_PUBLISHED'
   const status = isGlobal ? 'READY_FOR_REVIEW' : 'PUBLISHED'
@@ -617,6 +620,9 @@ async function createFundingCallFromFacts(params: {
       } as Prisma.InputJsonValue,
       createdByUserId: params.actor.id,
       updatedByUserId: params.actor.id,
+      origin_school_id: params.originSchoolId || null,
+      origin_school_name: params.originSchoolName || null,
+      origin_school_source: params.originSchoolSource || null,
     },
   })
 
@@ -740,6 +746,9 @@ export async function createAndProcessFundingImport(actor: FundingActor, input: 
               },
       createdByUserId: actor.id,
       updatedByUserId: actor.id,
+      originSchoolId: input.originSchoolId || null,
+      originSchoolName: input.originSchoolName || null,
+      originSchoolSource: input.originSchoolSource || null,
     },
     include: {
       assets: true,
@@ -827,6 +836,9 @@ export async function processFundingImportJob(jobId: string, actor: FundingActor
         facts,
         jobId: job.id,
         metadata: importMetadata,
+        originSchoolId: job.originSchoolId,
+        originSchoolName: job.originSchoolName,
+        originSchoolSource: job.originSchoolSource,
       })
 
       await prisma.fundingImportJob.update({
@@ -933,6 +945,9 @@ export async function resolveFundingImportDuplicate(params: {
       facts,
       jobId: job.id,
       metadata: (job.importMetadata || {}) as Prisma.InputJsonValue,
+      originSchoolId: job.originSchoolId,
+      originSchoolName: job.originSchoolName,
+      originSchoolSource: job.originSchoolSource,
     })
 
     await prisma.fundingImportJob.update({

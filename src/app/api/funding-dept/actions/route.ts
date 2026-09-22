@@ -11,7 +11,8 @@ const body=z.object({schoolId:z.string().min(1),operation:z.enum(['action','veri
   title:z.string().trim().min(1).max(1000).optional(),ownerUserId:z.string().optional(),
   waitingWith:z.enum(['FACULTY','DSR','REVIEWER','APPROVER','AGENCY']).optional(),dueAt:z.string().datetime().nullable().optional(),
   blocker:z.string().max(2000).nullable().optional(),deadlineType:z.enum(['ACTION','AGENCY','INTERNAL_REVIEW','REVISION']).optional(),
-  isNext:z.boolean().optional(),status:z.enum(['OPEN','DONE']).optional(),version:z.number().int().positive().optional(),reason:z.string().trim().max(2000).optional(),
+  isNext:z.boolean().optional(),status:z.enum(['OPEN','ACKNOWLEDGED','DONE','CANCELLED']).optional(),version:z.number().int().positive().optional(),reason:z.string().trim().max(2000).optional(),
+  resolutionNote:z.string().trim().max(2000).nullable().optional(),
   disposition:z.enum(['NO_SUITABLE_FACULTY','DECLINED','CAPACITY','AWAITING_ACTION','RELEVANCE_UNRESOLVED','OTHER']).optional()})
 export async function POST(request:NextRequest){
   const access=await managementAccess(request);if('response' in access)return access.response

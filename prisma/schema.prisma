@@ -1232,6 +1232,9 @@ model FundingCall {
   previous_version_id         String?
   metadata                    Json?
   intake_job_id               String?
+  origin_school_id            String?
+  origin_school_name          String?
+  origin_school_source        String?
   active_template_id          String?
   active_guideline_id         String?
   createdByUserId             String
@@ -1756,6 +1759,9 @@ model FundingImportJob {
   completedAt             DateTime?
   createdByUserId         String
   updatedByUserId         String
+  originSchoolId          String?                @map("origin_school_id")
+  originSchoolName        String?                @map("origin_school_name")
+  originSchoolSource      String?                @map("origin_school_source")
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   tenant                  Tenant?                @relation(fields: [tenantId], references: [id], onDelete: SetNull)
@@ -1793,6 +1799,9 @@ model FundingIntakeJob {
   batch_id               String?
   submitted_by_user_id   String
   linked_funding_call_id String?
+  origin_school_id       String?
+  origin_school_name     String?
+  origin_school_source   String?
   input_type             FundingInputType
   source_url             String?
   source_text_hash       String?
@@ -3361,6 +3370,9 @@ model FundingOpportunityMatch {
   source          String
   source_version  String?
   inferred        Boolean  @default(false)
+  is_current      Boolean  @default(true)
+  match_run_id    String?
+  refreshed_at   DateTime @default(now())
   first_seen_at   DateTime @default(now())
   last_seen_at    DateTime @default(now())
   created_at      DateTime @default(now())

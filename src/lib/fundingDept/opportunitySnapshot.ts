@@ -40,16 +40,18 @@ export async function snapshotFundingOpportunity(input: {
     INSERT INTO funding_opportunity_matches (
       id, tenant_id, funding_call_id, user_id, org_unit_id, school_id,
       match_score, match_tier, match_reason, source, source_version,
-      inferred, first_seen_at, last_seen_at, created_at, updated_at
+      inferred, is_current, refreshed_at, first_seen_at, last_seen_at, created_at, updated_at
     ) VALUES (
       ${`fom_${randomUUID()}`}, ${input.tenantId}, ${input.fundingCallId},
       ${input.userId}, ${orgUnitId}, ${schoolId}, ${input.score ?? null},
       ${input.tier ?? null}, ${input.reason ?? null}, ${input.source},
-      ${input.sourceVersion ?? null}, false, ${seenAt}, ${seenAt}, now(), now()
+      ${input.sourceVersion ?? null}, false, true, ${seenAt}, ${seenAt}, ${seenAt}, now(), now()
     )
     ON CONFLICT (tenant_id, funding_call_id, user_id, school_id)
     DO UPDATE SET
       last_seen_at = GREATEST(funding_opportunity_matches.last_seen_at, EXCLUDED.last_seen_at),
+      is_current = true,
+      refreshed_at = EXCLUDED.refreshed_at,
       updated_at = now()
   `)
 }

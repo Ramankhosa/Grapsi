@@ -133,6 +133,9 @@ export interface IntakeSubmitInput {
     size: number;
   };
   operatorNotes?: string;
+  originSchoolId?: string;
+  originSchoolName?: string;
+  originSchoolSource?: 'SELECTED_AT_INGEST' | 'INFERRED_UPLOADER_PROFILE';
 }
 
 export interface IntakeSourceFile {
