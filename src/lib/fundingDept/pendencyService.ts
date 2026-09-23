@@ -31,7 +31,7 @@ import { Prisma } from '@/lib/prisma-generated'
 
 import type { ActivityWindow } from './accountabilityService'
 import { callEnteredAtSql, openCallSql, liveCallWorkSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
-import { refreshCurrentSchoolMatches } from './currentMatches'
+import { queueSchoolMatchRefresh } from './currentMatches'
 import { getCoverageForUnits } from './membershipService'
 import { queueStateSql, untouchedSql } from './queueState'
 import { getDeptSettings, type DeptSettings } from './settings'
@@ -123,7 +123,7 @@ async function backlogForSchool(
   const scopeIds = await subtreeUnitIds(tenantId, [school.id])
   const scopeArray = textArray(scopeIds)
 
-  await refreshCurrentSchoolMatches(tenantId,school.id)
+  queueSchoolMatchRefresh(tenantId,school.id)
   const profile = await loadUnitAreaProfile(tenantId, [school.id])
   // Pin included, so this list and the school's own queue tab agree about which
   // calls concern it — including one the school itself declared relevant against

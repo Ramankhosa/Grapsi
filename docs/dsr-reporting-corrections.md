@@ -11,10 +11,12 @@ migration. Do not use schema push as a substitute: these migrations include view
 audit-support tables and inferred historical origin attribution.
 
 The correction migration invalidates old operational match flags, but preserves
-their historical evidence. A school's first report read rebuilds its complete
-person-call projection. Later reads reuse that projection only while its input
-fingerprint remains unchanged. Expect the first load to take longer for large
-schools; no external AI calls are made by this refresh.
+their historical evidence. Report reads return immediately from a recent match
+projection and label missing or stale matching as incomplete. A background queue
+rebuilds one school and one researcher at a time, with pauses between researchers
+so regular application traffic remains responsive. The page refreshes while a
+rebuild is pending. Recent projections are checked again after five minutes;
+no external AI calls are made by this refresh.
 
 ## Reporting rules
 

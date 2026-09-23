@@ -13,7 +13,7 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { actionableSchoolCallWhereSql } from '@/lib/funding/callUnitRelevance'
 import { openCallSql,liveCallWorkSql } from '@/lib/fundingDept/callSql'
-import { refreshCurrentSchoolMatches } from '@/lib/fundingDept/currentMatches'
+import { queueSchoolMatchRefresh } from '@/lib/fundingDept/currentMatches'
 
 export const dynamic = 'force-dynamic'
 
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
 
   const profile = await loadUnitAreaProfile(context.tenantId, [school.id])
   const now = new Date()
-  await refreshCurrentSchoolMatches(context.tenantId,school.id)
+  queueSchoolMatchRefresh(context.tenantId,school.id)
   const filters: Prisma.Sql[] = [
     visibleSql(context.tenantId),
     // Expired discovery is hidden; existing obligations remain actionable.

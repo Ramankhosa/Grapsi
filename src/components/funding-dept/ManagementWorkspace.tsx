@@ -29,7 +29,13 @@ const deadlineCopy=(c:Call)=>c.daysToDeadline===null?'Deadline not recorded':c.d
 
 function useReport(path:string, revision=0) {
   const { authFetch }=useAuth();const [data,setData]=useState<Payload|null>(null);const [error,setError]=useState('');const [loading,setLoading]=useState(true);const [loadedPath,setLoadedPath]=useState('')
-  useEffect(()=>{let current=true;setLoading(true);setError('');authFetch(path).then(async r=>{const json=await r.json();if(!r.ok)throw Error(json.error||'Unable to load report');if(current){setData(json);setLoadedPath(path)}}).catch(e=>{if(current)setError(e.message)}).finally(()=>{if(current)setLoading(false)});return()=>{current=false}},[path,revision,authFetch])
+  useEffect(()=>{let current=true;setLoading(true);setError('');authFetch(path).then(async r=>{
+    const isJson=(r.headers.get('content-type')||'').includes('application/json')
+    const json=isJson?await r.json():null
+    if(!r.ok)throw Error(json?.error||`Report request failed (${r.status}). ${r.status===504?'The server timed out. Try Refresh shortly.':'Please refresh or contact the administrator.'}`)
+    if(!json)throw Error('The report service returned an unexpected response. Please refresh.')
+    if(current){setData(json);setLoadedPath(path)}
+  }).catch(e=>{if(current)setError(e.message)}).finally(()=>{if(current)setLoading(false)});return()=>{current=false}},[path,revision,authFetch])
   return {data,error,loading,loadedPath}
 }
 function Pager({page,total=0,onChange}:{page:number;total?:number;onChange:(n:number)=>void}) {return <div className="flex items-center justify-end gap-3 p-3 text-sm"><span>{total} records · Page {page} of {Math.max(1,Math.ceil(total/20))}</span><HelpButton help={page<=1?'You are already on the first page.':'Show the previous 20 filtered records.'} className="nk-btn-secondary nk-btn-xs" disabled={page<=1} onClick={()=>onChange(page-1)}>Previous</HelpButton><HelpButton help={page*20>=total?'You are already on the last page.':'Show the next 20 filtered records.'} className="nk-btn-secondary nk-btn-xs" disabled={page*20>=total} onClick={()=>onChange(page+1)}>Next</HelpButton></div>}
@@ -55,6 +61,9 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
   const snapshotCache=useRef(new Map<string,string>());const identity=`${view}?${base}@${revision}`;const cached=snapshotCache.current.get(identity);if(cached)query.set('snapshot',cached)
   const reportUrl=`/api/funding-dept/reports/${view}?${query}`
   const {data,error,loading,loadedPath}=useReport(reportUrl,revision)
+  const matchingPolls=useRef(0)
+  useEffect(()=>{matchingPolls.current=0},[view,base])
+  useEffect(()=>{if(!data?.quality?.matchingRefreshPending||loadedPath!==reportUrl||matchingPolls.current>=4)return;const timer=setTimeout(()=>{matchingPolls.current++;setRevision(value=>value+1)},30000);return()=>clearTimeout(timer)},[data?.quality?.matchingRefreshPending,loadedPath,reportUrl])
   if(data?.snapshot && loadedPath===reportUrl)snapshotCache.current.set(identity,data.snapshot)
   const detailQuery=`${base}&snapshot=${data?.snapshot||''}`
   const catalog=useRef<Payload['options']|null>(null)

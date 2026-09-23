@@ -6,6 +6,48 @@ import { findCallsInMyAreas } from '@/lib/funding/myAreasService'
 // Coalesce simultaneous readers. Persisted projections are reused only while the
 // profile, membership, publication and call input fingerprint is unchanged.
 const running = new Map<string, Promise<{complete:boolean; unprofiled:string[]}>>()
+const queued = new Set<string>()
+const retryAfter = new Map<string,number>()
+const refreshQueue:Array<{tenantId:string;schoolId:string}>=[]
+let queueActive=false
+const REPORT_FRESH_MS=5*60*1000
+
+/** Report reads never wait for a full school census. One background worker
+ * refreshes stale schools, keeping the department's database load bounded. */
+export async function reportSchoolMatchStates(tenantId:string,schoolIds:string[]) {
+  const state=new Map<string,{fresh:boolean;complete:boolean;unprofiled:string[]}>()
+  if(!schoolIds.length)return state
+  const rows=await prisma.$queryRaw<Array<{school_id:string;complete:boolean;unprofiled:string[];refreshed_at:Date}>>(Prisma.sql`
+    SELECT school_id,complete,unprofiled,refreshed_at FROM dsr_match_projection_state
+    WHERE tenant_id=${tenantId} AND school_id IN (${Prisma.join(schoolIds)})`)
+  const stored=new Map(rows.map(row=>[row.school_id,row]))
+  for(const schoolId of schoolIds){
+    const row=stored.get(schoolId)
+    const fresh=Boolean(row&&Date.now()-row.refreshed_at.getTime()<REPORT_FRESH_MS)
+    state.set(schoolId,{fresh,complete:fresh&&Boolean(row?.complete),unprofiled:fresh?row?.unprofiled||[]:[]})
+    if(!fresh)queueSchoolMatchRefresh(tenantId,schoolId)
+  }
+  return state
+}
+
+export function queueSchoolMatchRefresh(tenantId:string,schoolId:string) {
+  const key=`${tenantId}:${schoolId}`
+  if(queued.has(key)||running.has(key)||(retryAfter.get(key)||0)>Date.now())return
+  queued.add(key)
+  refreshQueue.push({tenantId,schoolId})
+  // Let the requesting report finish before this worker starts expensive scans.
+  if(!queueActive){queueActive=true;setTimeout(()=>{void drainRefreshQueue()},5000)}
+}
+
+async function drainRefreshQueue(){
+  while(refreshQueue.length){
+    const item=refreshQueue.shift()!,key=`${item.tenantId}:${item.schoolId}`
+    try{await refreshCurrentSchoolMatches(item.tenantId,item.schoolId)}
+    catch(error){retryAfter.set(key,Date.now()+60_000);console.error('DSR background matching refresh failed',{schoolId:item.schoolId,error})}
+    finally{queued.delete(key)}
+  }
+  queueActive=false
+}
 export function refreshCurrentSchoolMatches(tenantId:string, schoolId:string) {
   const key=`${tenantId}:${schoolId}`
   const prior=running.get(key)
@@ -29,13 +71,17 @@ async function inputFingerprint(tenantId:string,schoolId:string){
 async function refresh(tenantId:string,schoolId:string) {
   const fingerprint=await inputFingerprint(tenantId,schoolId)
   const cached=await prisma.$queryRaw<Array<{complete:boolean;unprofiled:string[]}>>(Prisma.sql`SELECT complete,unprofiled FROM dsr_match_projection_state WHERE tenant_id=${tenantId} AND school_id=${schoolId} AND fingerprint=${fingerprint}`)
-  if(cached[0])return cached[0]
+  if(cached[0]){
+    await prisma.$executeRaw(Prisma.sql`UPDATE dsr_match_projection_state SET refreshed_at=now() WHERE tenant_id=${tenantId} AND school_id=${schoolId} AND fingerprint=${fingerprint}`)
+    return cached[0]
+  }
   const profiles=await prisma.researcherProfile.findMany({where:{user:{tenantId,status:'ACTIVE'},org_unit:{tenant_id:tenantId,is_active:true,path:{has:schoolId}}},select:{user_id:true,org_unit_id:true}})
   const results:Array<{profile:typeof profiles[number]; result:Awaited<ReturnType<typeof findCallsInMyAreas>>}>=[]
-  let cursor=0
-  await Promise.all(Array.from({length:Math.min(3,profiles.length)},async()=>{
-    while(cursor<profiles.length){const profile=profiles[cursor++];results.push({profile,result:await findCallsInMyAreas(profile.user_id,tenantId,{status:'all',complete:true})})}
-  }))
+  for(const profile of profiles){
+    results.push({profile,result:await findCallsInMyAreas(profile.user_id,tenantId,{status:'all',complete:true})})
+    // Share the database with live application traffic on the production VM.
+    await new Promise(resolve=>setTimeout(resolve,125))
+  }
   const unprofiled=results.filter(r=>r.result.readiness.isUnprofiled).map(r=>r.profile.user_id)
   const at=new Date(), runId=randomUUID()
   const rows=results.flatMap(({profile,result})=>result.calls.map(call=>({id:randomUUID(),userId:profile.user_id,unitId:profile.org_unit_id,callId:call.id,score:call.score,tier:call.tier,reason:`${call.source}${call.matchedOn?`: ${call.matchedOn}`:''}`})))
@@ -48,10 +94,6 @@ async function refresh(tenantId:string,schoolId:string) {
       SELECT r.id,${tenantId},r."callId",r."userId",r."unitId",${schoolId},r.score,r.tier,r.reason,'matching','person-call-census-v1',false,true,${runId},${at},${at},${at},${at},${at}
       FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(id text,"callId" text,"userId" text,"unitId" text,score double precision,tier text,reason text)
       ON CONFLICT(tenant_id,funding_call_id,user_id,school_id) DO UPDATE SET org_unit_id=EXCLUDED.org_unit_id,match_score=EXCLUDED.match_score,match_tier=EXCLUDED.match_tier,match_reason=EXCLUDED.match_reason,source=EXCLUDED.source,source_version=EXCLUDED.source_version,inferred=false,is_current=true,match_run_id=EXCLUDED.match_run_id,refreshed_at=EXCLUDED.refreshed_at,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`)
-    await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_matching_runs(id,tenant_id,call_id,scope,version,completeness,result_count,candidate_count,results,completed_at)
-      SELECT gen_random_uuid()::text,${tenantId},fc.id,${JSON.stringify({schoolIds:[schoolId],method:'complete-person-call-census',unprofiled})}::jsonb,'person-call-census-v1',${unprofiled.length?'PARTIAL':'COMPLETE'},
-      (SELECT count(*) FROM funding_opportunity_matches m WHERE m.tenant_id=${tenantId} AND m.school_id=${schoolId} AND m.funding_call_id=fc.id AND m.is_current),${profiles.length},'[]'::jsonb,${at}
-      FROM funding_calls fc WHERE fc."tenantId"=${tenantId} OR (fc."tenantId" IS NULL AND fc.visibility='GLOBAL_PUBLISHED' AND fc.status='PUBLISHED')`)
     await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_match_projection_state(tenant_id,school_id,fingerprint,complete,unprofiled) VALUES(${tenantId},${schoolId},${fingerprint},${unprofiled.length===0},${JSON.stringify(unprofiled)}::jsonb) ON CONFLICT(tenant_id,school_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,complete=EXCLUDED.complete,unprofiled=EXCLUDED.unprofiled,refreshed_at=now()`)
   },{timeout:60000})
   return {complete:unprofiled.length===0,unprofiled}

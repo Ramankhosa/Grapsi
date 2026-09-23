@@ -76,5 +76,9 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     return NextResponse.json({snapshot,asOf:report.asOf,mode:report.mode,period:report.period,windowLabel:window.label,timezone:window.timezone,
       portfolio:access.deputy?'deputy':'primary',lens:access.department?'department':'member',totals:report.totals,activity:report.activity,
       attentionCounts:report.attentionCounts,quality:report.quality,options:report.options,...payload as object},{headers:{'Cache-Control':'private, no-store'}})
-  }catch(error){console.error('DSR management report failed',error);return NextResponse.json({error:error instanceof Error?error.message:'Report unavailable.'},{status:error instanceof ManagementError?error.status:500})}
+  }catch(error){
+    console.error('DSR management report failed',error)
+    const missingSchema=(error as {meta?:{code?:string}})?.meta?.code==='42P01'
+    return NextResponse.json({error:missingSchema?'The DSR report database update is pending. Ask the administrator to apply the reporting migration.':error instanceof Error?error.message:'Report unavailable.'},{status:missingSchema?503:error instanceof ManagementError?error.status:500})
+  }
 }

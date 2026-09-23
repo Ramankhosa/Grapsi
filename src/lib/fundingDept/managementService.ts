@@ -5,7 +5,7 @@ import { textArray, visibleCallSql } from './callSql'
 import { applicationState, day, evidenceFingerprint, hasSubmissionEvidence, inPeriod, median, opportunityActionState, opportunityDeadlineAttention, overdueAt, ratio, type ApplicationRow, type AttentionFilter, type ReportMode } from './managementRules'
 import { resolveActivityWindow } from './accountabilityService'
 import { closesOpportunity, isExpiredInIndia, resolveResponsibility } from './responsibility'
-import { refreshCurrentSchoolMatches } from './currentMatches'
+import { reportSchoolMatchStates } from './currentMatches'
 import { getDeptSettings } from './settings'
 import { isMemberAway } from './shared'
 import { getIncomingReport } from './incomingReport'
@@ -73,8 +73,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     prisma.$queryRaw<Array<{school_id:string;call_id:string;owner_user_id:string}>>(Prisma.sql`SELECT t.* FROM dsr_responsibility_transfers t JOIN funding_dept_members m ON m.user_id=t.owner_user_id AND m.tenant_id=t.tenant_id AND m.is_active WHERE t.tenant_id=${tenantId} AND t.school_id=ANY(${textArray(ids)}) AND EXISTS(SELECT 1 FROM funding_dept_school_assignments s WHERE s.member_id=m.id AND s.org_unit_id=t.school_id)`),
     prisma.$queryRaw<Array<{id:string;school_id:string;call_id:string;title:string;owner_user_id:string;owner_name:string;due_at:Date;updated_at:Date}>>(Prisma.sql`SELECT f.id,u.path[1] school_id,f.funding_call_id call_id,f.note title,f.created_by_user_id owner_user_id,COALESCE(person.name,person.email) owner_name,f.remind_at due_at,f.updated_at FROM assignment_follow_ups f JOIN tenant_org_units u ON u.id=f.org_unit_id JOIN users person ON person.id=f.created_by_user_id WHERE f.tenant_id=${tenantId} AND u.path[1]=ANY(${textArray(ids)}) AND f.remind_at IS NOT NULL`),
   ])
-  const projection=new Map<string,Awaited<ReturnType<typeof refreshCurrentSchoolMatches>>>()
-  for(const id of ids)projection.set(id,await refreshCurrentSchoolMatches(tenantId,id))
+  const projection=await reportSchoolMatchStates(tenantId,ids)
   const deputies=(schoolId:string)=>members.filter(m=>m.is_active&&m.school_assignments.some(a=>a.org_unit_id===schoolId&&a.is_deputy))
   const coverage=(schoolId:string)=>{
     const primary=owners.get(schoolId), away=primary?isMemberAway(primary,at):false
@@ -100,7 +99,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       WHERE f.tenant_id=${tenantId} AND f.assignment_id IS NULL AND u.path[1]=ANY(${textArray(ids)}) AND f.happened_at<=${at}`),
     prisma.$queryRaw<ActionRow[]>(Prisma.sql`SELECT a.*,COALESCE(u.name,u.email) owner_name FROM dsr_actions a JOIN users u ON u.id=a.owner_user_id
       WHERE a.tenant_id=${tenantId} AND a.school_id=ANY(${textArray(ids)}) AND a.created_at<=${at} ORDER BY a.is_next DESC,a.due_at NULLS LAST,a.id`),
-    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids},is_current:true}}),
+    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids.filter(id=>projection.get(id)?.fresh)},is_current:true}}),
     prisma.$queryRaw<Array<{ school_id:string;call_id:string;first_seen_at:Date;inferred:boolean }>>(Prisma.sql`SELECT * FROM dsr_opportunity_observations WHERE tenant_id=${tenantId} AND school_id=ANY(${textArray(ids)}) AND first_seen_at<=${at}`),
     prisma.$queryRaw<Array<{ application_id:string;evidence_fingerprint:string;reviewer_user_id:string;verified_at:Date }>>(Prisma.sql`SELECT * FROM dsr_submission_verifications WHERE tenant_id=${tenantId} AND verified_at<=${at}`),
     prisma.$queryRaw<Array<{application_id:string;id:string}>>(Prisma.sql`SELECT 'assignment:'||assignment_id application_id,id FROM assignment_documents WHERE tenant_id=${tenantId} AND kind='PROPOSAL'
@@ -419,7 +418,8 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     coverageProblems:schoolRows.filter(s=>s.effectivelyUncovered||s.isUnmapped).map(s=>({schoolId:s.id,schoolName:s.name,isAway:s.isAway,uncovered:s.effectivelyUncovered,isUnmapped:s.isUnmapped,owner:s.owner,deputies:s.deputies})),
     unmappedFaculty:filters.schoolIds?[]:people.filter(p=>p.researcher_profile&&!personSchool.get(p.id)).map(p=>({id:p.id,name:p.name||p.email})),
     quality:{unknownFirstSeen:scopedApps.filter(a=>!a.firstSeen).length,inferredMatches:matches.filter(m=>m.inferred).length,
-      unknownStageDates:scopedApps.filter(a=>!a.stageEnteredAt).length,matchingComplete:schoolRows.every(s=>s.calls.every(c=>c.matchCompleteness==='COMPLETE')),
+      unknownStageDates:scopedApps.filter(a=>!a.stageEnteredAt).length,matchingComplete:ids.every(id=>projection.get(id)?.complete),
+      matchingRefreshPending:ids.some(id=>!projection.get(id)?.fresh),
       incompleteMatchingOpportunities:includedCalls.filter(c=>c.quality==='confirmed'&&c.matchCompleteness!=='COMPLETE').length,
       historySince:events.find(e=>e.kind==='BASELINE')?.occurred_at || null},
     options:{members:members.filter(m=>m.is_active&&(!filters.schoolIds||m.school_assignments.some(s=>ids.includes(s.org_unit_id)))).map(m=>({id:m.id,name:m.user.name||m.user.email,userId:m.user_id})),schools:schoolCatalog.filter(s=>s.is_active&&(!filters.schoolIds||filters.schoolIds.includes(s.id))).map(s=>({id:s.id,name:s.name})),people:[...peopleMap.values()].filter(p=>!filters.schoolIds||ids.includes(personSchool.get(p.id)||'')||members.some(m=>m.user_id===p.id&&(m.is_head||m.school_assignments.some(s=>ids.includes(s.org_unit_id)))))}}

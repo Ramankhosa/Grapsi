@@ -860,8 +860,8 @@ export async function getSchoolCallLedger(
   const scopeIds = subtree.length > 0 ? subtree.map((row) => row.id) : [schoolId]
   const scopeArray = textArray(scopeIds)
 
-  const { refreshCurrentSchoolMatches } = await import('./currentMatches')
-  await refreshCurrentSchoolMatches(tenantId,schoolId)
+  const { queueSchoolMatchRefresh } = await import('./currentMatches')
+  queueSchoolMatchRefresh(tenantId,schoolId)
   const profile = await loadUnitAreaProfile(tenantId, [schoolId])
   const relevant = actionableSchoolCallWhereSql(tenantId, schoolId, 'fc')
 

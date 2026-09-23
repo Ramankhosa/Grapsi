@@ -230,6 +230,8 @@ export function actionableSchoolCallWhereSql(
     ${originSchool}=${schoolId}
     OR EXISTS(SELECT 1 FROM dsr_origin_responsibilities intake WHERE intake.tenant_id=${tenantId} AND intake.school_id=${schoolId} AND intake.call_id=${callId})
     OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
+      JOIN dsr_match_projection_state state ON state.tenant_id=match.tenant_id AND state.school_id=match.school_id
+        AND state.refreshed_at>now()-interval '5 minutes'
       JOIN users person ON person.id=match.user_id AND person.status='ACTIVE' AND person."tenantId"=${tenantId}
       JOIN researcher_profiles profile ON profile.user_id=person.id
       JOIN tenant_org_units unit ON unit.id=profile.org_unit_id AND unit.is_active AND unit.path[1]=${schoolId}

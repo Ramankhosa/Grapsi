@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { callEnteredAtSql, textArray, visibleCallSql, openCallSql, liveCallWorkSql } from './callSql'
-import { refreshCurrentSchoolMatches } from './currentMatches'
+import { queueSchoolMatchRefresh } from './currentMatches'
 import { queueStateSql, untouchedSql } from './queueState'
 import { getDeptSettings, type DeptSettings } from './settings'
 
@@ -76,7 +76,7 @@ async function funnelForSchool(
   school: { id: string; name: string; code: string | null },
   settings: DeptSettings
 ): Promise<SchoolFunnelRow> {
-  await refreshCurrentSchoolMatches(tenantId,school.id)
+  queueSchoolMatchRefresh(tenantId,school.id)
   const subtree = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM tenant_org_units
      WHERE tenant_id = ${tenantId} AND is_active = true AND path && ${textArray([school.id])}
