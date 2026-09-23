@@ -860,6 +860,8 @@ export async function getSchoolCallLedger(
   const scopeIds = subtree.length > 0 ? subtree.map((row) => row.id) : [schoolId]
   const scopeArray = textArray(scopeIds)
 
+  const { refreshCurrentSchoolMatches } = await import('./currentMatches')
+  await refreshCurrentSchoolMatches(tenantId,schoolId)
   const profile = await loadUnitAreaProfile(tenantId, [schoolId])
   const relevant = actionableSchoolCallWhereSql(tenantId, schoolId, 'fc')
 
@@ -918,7 +920,7 @@ export async function getSchoolCallLedger(
              -- Open and relevant to this school…
              (
                (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-                OR COALESCE(fc.close_date, fc."deadlineAt") >= now())
+                OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
                AND ${relevant}
              )
              -- …or closed, but this school still has work on it.

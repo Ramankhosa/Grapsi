@@ -3,7 +3,8 @@ import { actionableSchoolCallWhereSql, loadUnitAreaProfile } from '@/lib/funding
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { callEnteredAtSql, textArray, visibleCallSql } from './callSql'
+import { callEnteredAtSql, textArray, visibleCallSql, openCallSql, liveCallWorkSql } from './callSql'
+import { refreshCurrentSchoolMatches } from './currentMatches'
 import { queueStateSql, untouchedSql } from './queueState'
 import { getDeptSettings, type DeptSettings } from './settings'
 
@@ -75,6 +76,7 @@ async function funnelForSchool(
   school: { id: string; name: string; code: string | null },
   settings: DeptSettings
 ): Promise<SchoolFunnelRow> {
+  await refreshCurrentSchoolMatches(tenantId,school.id)
   const subtree = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM tenant_org_units
      WHERE tenant_id = ${tenantId} AND is_active = true AND path && ${textArray([school.id])}
@@ -133,8 +135,7 @@ async function funnelForSchool(
         LEFT JOIN call_school_triage tri
                ON tri.funding_call_id = fc.id AND tri.org_unit_id = ${school.id}
        WHERE ${visibleSql(tenantId)}
-         AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR COALESCE(fc.close_date, fc."deadlineAt") >= now())
+         AND (${openCallSql()} OR ${liveCallWorkSql(tenantId,school.id)})
          AND ${relevant}
     `),
     prisma.$queryRaw<
@@ -291,13 +292,13 @@ export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRo
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
          AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR COALESCE(fc.close_date, fc."deadlineAt") >= now())
+              OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
     `),
     prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
          AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR COALESCE(fc.close_date, fc."deadlineAt") >= now())
+              OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
          AND NOT EXISTS (
            SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id
          )

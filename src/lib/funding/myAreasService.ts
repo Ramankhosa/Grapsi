@@ -191,10 +191,10 @@ function visibleCallSql(tenantId: string | null): Prisma.Sql {
 function statusSql(status: MyAreasStatus): Prisma.Sql {
   const closesAt = Prisma.sql`COALESCE(fc.close_date, fc."deadlineAt")`
   if (status === 'active') {
-    return Prisma.sql`(${closesAt} IS NULL OR ${closesAt} >= now())`
+    return Prisma.sql`(${closesAt} IS NULL OR (${closesAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)`
   }
   if (status === 'expired') {
-    return Prisma.sql`(${closesAt} IS NOT NULL AND ${closesAt} < now())`
+    return Prisma.sql`(${closesAt} IS NOT NULL AND (${closesAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date < (now() AT TIME ZONE 'Asia/Kolkata')::date)`
   }
   return Prisma.sql`TRUE`
 }
@@ -272,11 +272,13 @@ function termsQuery(terms: string[]): string {
 export async function findCallsInMyAreas(
   userId: string,
   tenantId: string | null,
-  options: { status?: MyAreasStatus; limit?: number; now?: Date } = {}
+  options: { status?: MyAreasStatus; limit?: number; now?: Date; complete?: boolean } = {}
 ): Promise<MyAreasResult> {
   const status = options.status ?? 'active'
   const limit = Math.min(Math.max(options.limit ?? MY_AREAS_DEFAULT_LIMIT, 1), MY_AREAS_MAX_LIMIT)
   const now = options.now ?? new Date()
+  // Internal census mode evaluates every qualifying call. UI searches remain bounded.
+  const sourceLimit = options.complete ? Prisma.sql`` : Prisma.sql`LIMIT ${PER_SOURCE_LIMIT}`
 
   const profileColumn = Prisma.raw(profileEmbeddingColumn())
   const callColumn = Prisma.raw(callEmbeddingColumn())
@@ -347,7 +349,7 @@ export async function findCallsInMyAreas(
            AND ${visible}
            AND ${statusSql(status)}
          ORDER BY fc.${callColumn} <=> rp.${profileColumn} ASC
-         LIMIT ${PER_SOURCE_LIMIT}
+         ${sourceLimit}
       `)
     )
   }
@@ -370,7 +372,7 @@ export async function findCallsInMyAreas(
            AND ${visible}
            AND ${statusSql(status)}
          ORDER BY fc.id, fc.${callColumn} <=> area.${profileColumn} ASC
-         LIMIT ${PER_SOURCE_LIMIT}
+         ${sourceLimit}
       `)
     )
   }
@@ -394,7 +396,7 @@ export async function findCallsInMyAreas(
            AND ${visible}
            AND ${statusSql(status)}
          ORDER BY fc.id, fc.${callColumn} <=> ref.${publicationColumn} ASC
-         LIMIT ${PER_SOURCE_LIMIT}
+         ${sourceLimit}
       `)
     )
   }
@@ -409,14 +411,14 @@ export async function findCallsInMyAreas(
         SELECT ${candidateColumns(
           'terms',
           Prisma.sql`ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query}))`,
-          Prisma.sql`NULL::text`
+          Prisma.sql`(SELECT string_agg(term, ', ' ORDER BY term) FROM unnest(ARRAY[${Prisma.join(terms)}]::text[]) term WHERE fc.ts_document @@ websearch_to_tsquery('english', '"' || term || '"'))`
         )}
           FROM funding_calls fc
          WHERE fc.ts_document @@ websearch_to_tsquery('english', ${query})
            AND ${visible}
            AND ${statusSql(status)}
          ORDER BY ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query})) DESC
-         LIMIT ${PER_SOURCE_LIMIT}
+         ${sourceLimit}
       `)
     )
   }
@@ -455,7 +457,7 @@ export async function findCallsInMyAreas(
     0
   )
 
-  const calls: MyAreasCall[] = ordered.slice(0, limit).map((row) => {
+  const calls: MyAreasCall[] = (options.complete ? ordered : ordered.slice(0, limit)).map((row) => {
     const closesAt = row.closes_at ? new Date(row.closes_at) : null
     const daysToClose = closesAt ? Math.ceil((closesAt.getTime() - now.getTime()) / 86400000) : null
     const basis: MyAreasBasis = row.source === 'terms' ? 'terms' : 'vector'
@@ -482,7 +484,7 @@ export async function findCallsInMyAreas(
       closesAt,
       publishedAt: row.published_at ? new Date(row.published_at) : null,
       daysToClose,
-      isExpired: Boolean(closesAt && closesAt < now),
+      isExpired: Boolean(closesAt && new Date(closesAt.getTime()+330*60000).toISOString().slice(0,10) < new Date(now.getTime()+330*60000).toISOString().slice(0,10)),
       score: Number(row.score.toFixed(4)),
       tier,
       basis,
@@ -574,11 +576,11 @@ async function countBothSides(
       SELECT
         COUNT(*) FILTER (
           WHERE COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-             OR COALESCE(fc.close_date, fc."deadlineAt") >= now()
+             OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date
         )::int AS active,
         COUNT(*) FILTER (
           WHERE COALESCE(fc.close_date, fc."deadlineAt") IS NOT NULL
-            AND COALESCE(fc.close_date, fc."deadlineAt") < now()
+            AND (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date < (now() AT TIME ZONE 'Asia/Kolkata')::date
         )::int AS expired,
         COUNT(*)::int AS total
       FROM funding_calls fc

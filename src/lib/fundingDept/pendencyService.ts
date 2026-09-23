@@ -30,7 +30,8 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import type { ActivityWindow } from './accountabilityService'
-import { callEnteredAtSql, openCallSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
+import { callEnteredAtSql, openCallSql, liveCallWorkSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
+import { refreshCurrentSchoolMatches } from './currentMatches'
 import { getCoverageForUnits } from './membershipService'
 import { queueStateSql, untouchedSql } from './queueState'
 import { getDeptSettings, type DeptSettings } from './settings'
@@ -122,6 +123,7 @@ async function backlogForSchool(
   const scopeIds = await subtreeUnitIds(tenantId, [school.id])
   const scopeArray = textArray(scopeIds)
 
+  await refreshCurrentSchoolMatches(tenantId,school.id)
   const profile = await loadUnitAreaProfile(tenantId, [school.id])
   // Pin included, so this list and the school's own queue tab agree about which
   // calls concern it — including one the school itself declared relevant against
@@ -167,7 +169,7 @@ async function backlogForSchool(
       LEFT JOIN call_school_triage tri
              ON tri.funding_call_id = fc.id AND tri.org_unit_id = ${school.id}
      WHERE ${visibleCallSql(tenantId, 'fc')}
-       AND ${options.includeClosed ? Prisma.sql`TRUE` : openCallSql('fc')}
+       AND ${options.includeClosed ? Prisma.sql`TRUE` : Prisma.sql`(${openCallSql()} OR ${liveCallWorkSql(tenantId,school.id)})`}
        AND ${relevant}
        AND ${untouched}
      ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST

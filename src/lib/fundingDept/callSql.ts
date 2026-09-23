@@ -37,7 +37,20 @@ export function openCallSql(alias = 'fc'): Prisma.Sql {
   const a = Prisma.raw(alias)
   return Prisma.sql`(
     COALESCE(${a}.close_date, ${a}."deadlineAt") IS NULL
-    OR COALESCE(${a}.close_date, ${a}."deadlineAt") >= now()
+    OR (COALESCE(${a}.close_date, ${a}."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date
+  )`
+}
+
+/** Live obligations survive call expiry, scoped to this school's work. */
+export function liveCallWorkSql(tenantId:string,schoolId:string,alias='fc'):Prisma.Sql {
+  const id=Prisma.raw(`${alias}.id`)
+  return Prisma.sql`(
+    EXISTS(SELECT 1 FROM dsr_actions a WHERE a.tenant_id=${tenantId} AND a.school_id=${schoolId} AND a.call_id=${id} AND a.status IN ('OPEN','ACKNOWLEDGED'))
+    OR EXISTS(SELECT 1 FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.school_id=${schoolId} AND a.call_id=${id}
+      AND COALESCE(a.assignment_status,'') NOT IN ('DECLINED','CANCELLED','LAPSED')
+      AND COALESCE(a.proposal_status,'') NOT IN ('WITHDRAWN','CLOSED','REJECTED','SANCTIONED')
+      AND COALESCE(a.outcome,'') NOT IN ('AWARDED','REJECTED','WITHDRAWN'))
+    OR EXISTS(SELECT 1 FROM assignment_follow_ups f JOIN tenant_org_units u ON u.id=f.org_unit_id WHERE f.tenant_id=${tenantId} AND u.path[1]=${schoolId} AND f.funding_call_id=${id} AND f.remind_at IS NOT NULL)
   )`
 }
 

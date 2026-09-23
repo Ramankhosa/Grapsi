@@ -228,7 +228,11 @@ export function actionableSchoolCallWhereSql(
   const originSchool = Prisma.raw(`${alias}.origin_school_id`)
   return Prisma.sql`(
     ${originSchool}=${schoolId}
+    OR EXISTS(SELECT 1 FROM dsr_origin_responsibilities intake WHERE intake.tenant_id=${tenantId} AND intake.school_id=${schoolId} AND intake.call_id=${callId})
     OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
+      JOIN users person ON person.id=match.user_id AND person.status='ACTIVE' AND person."tenantId"=${tenantId}
+      JOIN researcher_profiles profile ON profile.user_id=person.id
+      JOIN tenant_org_units unit ON unit.id=profile.org_unit_id AND unit.is_active AND unit.path[1]=${schoolId}
       WHERE match.tenant_id=${tenantId} AND match.school_id=${schoolId}
         AND match.funding_call_id=${callId} AND match.is_current)
     OR EXISTS(SELECT 1 FROM call_school_triage triage
@@ -242,7 +246,11 @@ export function actionableSchoolCallWhereSql(
         AND action.call_id=${callId})
     OR EXISTS(SELECT 1 FROM dsr_opportunity_dispositions disposition
       WHERE disposition.tenant_id=${tenantId} AND disposition.school_id=${schoolId}
-        AND disposition.call_id=${callId})
+         AND disposition.call_id=${callId})
+    OR EXISTS(SELECT 1 FROM assignment_follow_ups f JOIN tenant_org_units u ON u.id=f.org_unit_id
+      WHERE f.tenant_id=${tenantId} AND u.path[1]=${schoolId} AND f.funding_call_id=${callId})
+    OR EXISTS(SELECT 1 FROM call_candidates c JOIN researcher_profiles p ON p.user_id=c.user_id JOIN tenant_org_units u ON u.id=p.org_unit_id
+      WHERE c.tenant_id=${tenantId} AND u.path[1]=${schoolId} AND c.funding_call_id=${callId})
   )`
 }
 

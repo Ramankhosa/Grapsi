@@ -21,7 +21,7 @@ export function validateActionChange(before: Pick<ActionRow,'owner_user_id'|'due
   const extended=after.dueAt!==undefined && before.due_at && (!after.dueAt || new Date(after.dueAt)>new Date(before.due_at))
   if((reassigned||extended)&&!after.reason?.trim())throw new ManagementError('Explain the reassignment or deadline extension.')
 }
-export async function saveAction(tenantId:string,schoolId:string,actorId:string,input:{id?:string;applicationId?:string|null;callId?:string|null;title?:string;ownerUserId?:string;waitingWith?:string;dueAt?:string|null;blocker?:string|null;deadlineType?:string;isNext?:boolean;status?:string;version?:number;reason?:string;resolutionNote?:string|null}) {
+export async function saveAction(tenantId:string,schoolId:string,actorId:string,input:{id?:string;applicationId?:string|null;callId?:string|null;title?:string;ownerUserId?:string;waitingWith?:string;dueAt?:string|null;blocker?:string|null;deadlineType?:string;isNext?:boolean;status?:string;version?:number;reason?:string;resolutionNote?:string|null;category?:string;failureType?:string|null}) {
   return prisma.$transaction(async tx=>{
     // One lock per school prevents two concurrent requests from creating two next actions.
     await tx.$queryRaw(Prisma.sql`SELECT id FROM tenant_org_units WHERE id=${schoolId} AND tenant_id=${tenantId} FOR UPDATE`)
@@ -38,8 +38,12 @@ export async function saveAction(tenantId:string,schoolId:string,actorId:string,
     const status=input.status || before?.status || 'OPEN';const isOpen=['OPEN','ACKNOWLEDGED'].includes(status);const isNext=isOpen&&(input.isNext ?? before?.is_next ?? true)
     if(['DONE','CANCELLED'].includes(status)&&!input.resolutionNote?.trim()&&!before?.resolution_note)throw new ManagementError('Record a resolution note before closing or cancelling an action.')
     const due=input.dueAt===undefined?before?.due_at || null:input.dueAt?new Date(input.dueAt):null
+    if(isOpen&&!due)throw new ManagementError('An open action needs a due date so it can be followed up.')
     if(due&&!Number.isFinite(due.getTime()))throw new ManagementError('Invalid action due date.')
     const id=before?.id || randomUUID()
+    const category=input.category||before?.category||'ROUTINE'
+    const failureType=input.failureType??before?.failure_type??null
+    if(category==='CORRECTIVE'&&!failureType)throw new ManagementError('Choose the failure type for the corrective action.')
     if(isNext){
       const displaced=await tx.$queryRaw<ActionRow[]>(Prisma.sql`SELECT * FROM dsr_actions WHERE tenant_id=${tenantId} AND school_id=${schoolId}
         AND application_id IS NOT DISTINCT FROM ${target.applicationId} AND call_id IS NOT DISTINCT FROM ${target.callId} AND is_next AND status IN ('OPEN','ACKNOWLEDGED') AND id<>${id}`)
@@ -50,13 +54,15 @@ export async function saveAction(tenantId:string,schoolId:string,actorId:string,
       }
     }
     const rows=await tx.$queryRaw<ActionRow[]>(Prisma.sql`INSERT INTO dsr_actions(id,tenant_id,school_id,call_id,application_id,title,owner_user_id,waiting_with,due_at,blocker,deadline_type,is_next,status,created_by_user_id,completed_at,acknowledged_at,acknowledged_by_user_id,resolution_note)
-      VALUES(${id},${tenantId},${schoolId},${target.callId},${target.applicationId},${title.trim()},${owner},${waiting},${due},${input.blocker ?? before?.blocker ?? null},${input.deadlineType || before?.deadline_type || 'ACTION'},${isNext},${status},${actorId},${['DONE','CANCELLED'].includes(status)?new Date():null},${status==='ACKNOWLEDGED'?new Date():before?.acknowledged_at||null},${status==='ACKNOWLEDGED'?actorId:before?.acknowledged_by_user_id||null},${input.resolutionNote ?? before?.resolution_note ?? null})
+      VALUES(${id},${tenantId},${schoolId},${target.callId},${target.applicationId},${title.trim()},${owner},${waiting},${due},${input.blocker ?? before?.blocker ?? null},${input.deadlineType || before?.deadline_type || 'ACTION'},${isNext},${status},${actorId},${['DONE','CANCELLED'].includes(status)?new Date():null},${status==='ACKNOWLEDGED'?new Date():before?.acknowledged_at||null},${status==='ACKNOWLEDGED'?actorId:before?.acknowledged_by_user_id||null},${isOpen?null:input.resolutionNote ?? before?.resolution_note ?? null})
       ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,owner_user_id=EXCLUDED.owner_user_id,waiting_with=EXCLUDED.waiting_with,
       due_at=EXCLUDED.due_at,blocker=EXCLUDED.blocker,deadline_type=EXCLUDED.deadline_type,is_next=EXCLUDED.is_next,status=EXCLUDED.status,
       completed_at=CASE WHEN EXCLUDED.status IN ('DONE','CANCELLED') THEN COALESCE(dsr_actions.completed_at,now()) ELSE NULL END,
       acknowledged_at=CASE WHEN EXCLUDED.status='ACKNOWLEDGED' THEN COALESCE(dsr_actions.acknowledged_at,now()) WHEN EXCLUDED.status='OPEN' THEN NULL ELSE dsr_actions.acknowledged_at END,
       acknowledged_by_user_id=CASE WHEN EXCLUDED.status='ACKNOWLEDGED' THEN COALESCE(dsr_actions.acknowledged_by_user_id,EXCLUDED.acknowledged_by_user_id) WHEN EXCLUDED.status='OPEN' THEN NULL ELSE dsr_actions.acknowledged_by_user_id END,
       resolution_note=EXCLUDED.resolution_note,updated_at=now(),version=dsr_actions.version+1 RETURNING *`)
+    await tx.$executeRaw(Prisma.sql`UPDATE dsr_actions SET category=${category},failure_type=${failureType} WHERE id=${id}`)
+    rows[0].category=category;rows[0].failure_type=failureType
     const kind=!before?'CREATED':before.status!==status?(status==='DONE'?'COMPLETED':status==='CANCELLED'?'CANCELLED':status==='ACKNOWLEDGED'?'ACKNOWLEDGED':'REOPENED'):before.owner_user_id!==owner?'REASSIGNED':'UPDATED'
     await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
       VALUES(${tenantId},${schoolId},'ACTION',${id},${actorId},${kind},${before?JSON.stringify(before):null}::jsonb,${JSON.stringify(rows[0])}::jsonb,${input.reason || null})`)

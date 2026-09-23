@@ -10,7 +10,7 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
   try {
     const params=new URL(request.url).searchParams
     const window=await managementWindow(access.context.tenantId,params)
-    const mode=params.get('mode') || (['pending','deadline-risk','opportunity-gaps','coverage'].includes(view)?'pending':'cohort')
+    const mode=params.get('mode') || (['workbench','pending','deadline-risk','opportunity-gaps'].includes(view)?'pending':'portfolio')
     if(!['pending','activity','cohort','portfolio'].includes(mode))return NextResponse.json({error:'Unknown report mode.'},{status:400})
     const requested=params.get('memberId')
     const attention=params.get('attention')
@@ -26,6 +26,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
       attention:attention as 'upcoming-21'|'missed-unallocated-no-submission'|null,
       includeExpired:params.get('includeExpired')==='true',actionClass:params.get('actionClass'),
       responsibilityType:params.get('responsibilityType'),ageDays:Number(params.get('ageDays'))>0?Number(params.get('ageDays')):null,
+      includeCompleted:params.get('includeCompleted')==='true',queue:params.get('queue'),reportView:view,
+      signal:params.get('signal'),actionStatus:params.get('actionStatus'),
     })
     if(!snapshot)snapshot=await writeReportSnapshot(access.context.tenantId,access.context.user.id,scopeKey,filterKey,report)
     const format=params.get('format')
@@ -44,12 +46,14 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     if(level==='calls')payload=slice(calls.map(c=>({...c,applications:undefined,matches:undefined})))
     else if(level==='applications')payload=slice(items)
     else if(level==='matches')payload=slice(calls.flatMap(c=>c.matches))
-    else if(view==='workbench')payload={rows:report.workbench,headSummary:report.headSummary}
+    else if(view==='workbench')payload={rows:report.workbench,headSummary:report.headSummary,coverageProblems:report.coverageProblems}
+    else if(view==='incoming')payload={...slice(report.incoming),incomingCounts:{total:report.incoming.length,action:report.incoming.filter(r=>r.actionClass==='DSR_ACTION_REQUIRED'||r.actionClass==='DATA_GAP').length,processing:report.incoming.filter(r=>r.actionClass==='SYSTEM_PROCESSING').length}}
+    else if(view==='corrective-actions')payload={rows:report.correctiveActions,headSummary:report.headSummary}
     else if(view==='performance')payload={rows:report.performance,weekly:report.weekly}
     else if(view==='weekly-review')payload={...report.weekly,urgentActions:nextActions.filter(a=>a.blocker || a.due_at && a.due_at<=window.asOf),
       urgentOpportunities:contexts.filter(({call})=>call.quality==='confirmed'&&call.gaps.some(g=>['UNTOUCHED','MATCHED_UNALLOCATED','APPROACHED_UNALLOCATED'].includes(g))&&
         (!call.deadline || call.deadline.getTime()<=window.asOf.getTime()+30*86400000)).map(({member,school,call})=>({...call,memberName:member.name,schoolName:school.name,applications:undefined,matches:undefined}))}
-    else if(view==='coverage')payload=slice(report.faculty)
+    else if(view==='coverage')payload={...slice(report.faculty),unmappedFaculty:report.unmappedFaculty}
     else if(view==='opportunity-gaps') {
       const rows=contexts.filter(({call})=>call.quality==='confirmed'&&call.gaps.length>0).map(({member,school,call})=>({...call,memberId:member.id,memberName:member.name,schoolName:school.name,applications:undefined,matches:undefined}))
       rows.sort((a,b)=>Number(b.gaps.includes('UNTOUCHED'))-Number(a.gaps.includes('UNTOUCHED')) || Number(b.matchedUnallocated)-Number(a.matchedUnallocated) ||
@@ -62,8 +66,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
         Math.min(...[b.agency_deadline,b.nextAction?.due_at].filter(Boolean).map(d=>new Date(d!).getTime()),Infinity) || a.id.localeCompare(b.id))
       payload={...slice(list),unallocated:calls.filter(c=>c.unallocated).map(c=>({...c,matches:undefined})),actions:nextActions}
     }else payload={members:report.members.map(m=>({...m,schools:m.schools.map(s=>({...s,calls:undefined,totals:{
-      relevant:s.calls.filter(c=>c.quality==='confirmed').length,matches:s.calls.reduce((n,c)=>n+c.matchedFaculty,0),
-      actedOn:s.calls.filter(c=>c.quality==='confirmed'&&c.actedOn).length,untouched:s.calls.filter(c=>c.quality==='confirmed'&&!c.actedOn).length,
+      relevant:s.calls.length,matches:s.calls.reduce((n,c)=>n+c.matchedFaculty,0),
+      actedOn:s.calls.filter(c=>c.actedOn).length,untouched:s.calls.filter(c=>!c.actedOn).length,
       matchedUnallocated:s.calls.filter(c=>c.matchedUnallocated).length,
       allocated:s.calls.reduce((n,c)=>n+c.allocated,0),independent:s.calls.reduce((n,c)=>n+c.independent,0),
       followedUp:s.calls.reduce((n,c)=>n+c.followedUp,0),submitted:s.calls.reduce((n,c)=>n+c.submitted,0),verified:s.calls.reduce((n,c)=>n+c.verified,0),

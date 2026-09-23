@@ -45,13 +45,11 @@ export async function snapshotFundingOpportunity(input: {
       ${`fom_${randomUUID()}`}, ${input.tenantId}, ${input.fundingCallId},
       ${input.userId}, ${orgUnitId}, ${schoolId}, ${input.score ?? null},
       ${input.tier ?? null}, ${input.reason ?? null}, ${input.source},
-      ${input.sourceVersion ?? null}, false, true, ${seenAt}, ${seenAt}, ${seenAt}, now(), now()
+      ${input.sourceVersion ?? null}, false, false, ${seenAt}, ${seenAt}, ${seenAt}, now(), now()
     )
     ON CONFLICT (tenant_id, funding_call_id, user_id, school_id)
     DO UPDATE SET
       last_seen_at = GREATEST(funding_opportunity_matches.last_seen_at, EXCLUDED.last_seen_at),
-      is_current = true,
-      refreshed_at = EXCLUDED.refreshed_at,
       updated_at = now()
   `)
 }

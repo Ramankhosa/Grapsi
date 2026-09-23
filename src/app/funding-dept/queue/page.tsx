@@ -117,6 +117,7 @@ export default function FundingDeptQueuePage() {
       : 'pending'
   })
   const [showAll, setShowAll] = useState(false)
+  const [includeExpired,setIncludeExpired]=useState(false)
 
   const load = useCallback(
     async (nextSchoolId: string, nextState: string, nextShowAll: boolean) => {
@@ -125,6 +126,7 @@ export default function FundingDeptQueuePage() {
         const params = new URLSearchParams({
           state: nextState,
           relevance: nextShowAll ? 'all' : 'relevant',
+          includeExpired:String(includeExpired),
         })
         if (nextSchoolId) params.set('orgUnitId', nextSchoolId)
 
@@ -145,7 +147,7 @@ export default function FundingDeptQueuePage() {
         setLoading(false)
       }
     },
-    [authFetch]
+    [authFetch,includeExpired]
   )
 
   useEffect(() => {
@@ -156,7 +158,7 @@ export default function FundingDeptQueuePage() {
     }
     void load(schoolId, state, showAll)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, meLoading, me.isMember, me.canAdminister, schoolId, state, showAll])
+  }, [authLoading, meLoading, me.isMember, me.canAdminister, schoolId, state, showAll,includeExpired])
 
   const setTriage = async (callId: string, status: string) => {
     if (!data?.school) return
@@ -256,25 +258,25 @@ export default function FundingDeptQueuePage() {
                 ))}
               </select>
 
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExpired} onChange={e=>setIncludeExpired(e.target.checked)}/> Include expired calls</label>
               <label className="ml-auto flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   checked={showAll}
                   onChange={event => setShowAll(event.target.checked)}
                 />
-                <span className="nk-sub">Show every open call, not just this school&rsquo;s</span>
+                <span className="nk-sub">Browse all calls (outside school worklist)</span>
               </label>
             </div>
 
             {data.isUnmapped && !showAll && (
               <div className="nk-panel nk-panel-quiet mt-4 p-4">
                 <p className="text-sm text-gray-800 dark:text-gray-200">
-                  <strong>{data.school?.name}</strong> has no research areas mapped yet, so this is
-                  the whole open catalog rather than a filtered list.{' '}
+                  <strong>{data.school?.name}</strong> needs discipline mapping. Calls below are still limited to current researcher matches, origin duties and recorded work.{' '}
                   <Link href="/tenant-admin/faculty" className="underline">
                     Map its disciplines
                   </Link>{' '}
-                  to narrow it.
+                  to improve matching explanations.
                 </p>
               </div>
             )}

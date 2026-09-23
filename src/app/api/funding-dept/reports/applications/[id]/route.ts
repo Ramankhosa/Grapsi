@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   const row = (await prisma.$queryRaw<ApplicationRow[]>(Prisma.sql`SELECT * FROM dsr_applications WHERE tenant_id=${tenantId} AND id=${params.id}`))[0]
   if (!row?.school_id || !await schoolIsAccessible(access, row.school_id)) return NextResponse.json({ error: 'Application not found.' }, { status: 404 })
   const window = await managementWindow(tenantId, new URLSearchParams('window=30d'))
-  const report = await getManagementReport(tenantId, { ...window, mode: 'pending', schoolIds: [row.school_id] })
+  const report = await getManagementReport(tenantId, { ...window, mode: 'portfolio', includeExpired:true, includeCompleted:true, schoolIds: [row.school_id] })
   const [proposal, assignmentDocuments, events] = await Promise.all([
     row.proposal_id ? prisma.grantProposal.findFirst({ where: { id: row.proposal_id, tenant_id: tenantId }, select: {
       id:true,status:true,requested_amount:true,sanctioned_amount:true,currency:true,

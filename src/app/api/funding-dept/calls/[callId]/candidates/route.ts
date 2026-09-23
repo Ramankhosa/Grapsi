@@ -34,7 +34,7 @@ async function authorize(request: NextRequest, callId: string) {
   if (isAccessError(context)) return context
 
   const { scope } = context
-  if (!scope.isTenantWide && !scope.canAssign && !scope.canViewReports) {
+  if (!scope.isTenantWide && !scope.canAssign && !scope.canViewReports && !scope.fundingDept.isMember) {
     return {
       error: 'Shortlists are available to funding-department members and administrators.',
       status: 403,
@@ -66,7 +66,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   }
 
   const rows = await prisma.callCandidate.findMany({
-    where: { tenant_id: auth.tenantId, funding_call_id: params.callId },
+    where: { tenant_id: auth.tenantId, funding_call_id: params.callId,
+      ...(!auth.scope.isTenantWide&&!auth.scope.fundingDept.isHead?{user:{researcher_profile:{org_unit_id:{in:auth.scope.managedUnitIds}}}}:{}) },
     select: {
       id: true,
       status: true,
@@ -121,7 +122,7 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
   if (isAccessError(auth)) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
-  if (!auth.scope.canAssign) {
+  if (!auth.scope.canAssign && !auth.scope.fundingDept.isMember) {
     return NextResponse.json(
       { error: 'You do not have permission to build a shortlist for this call.' },
       { status: 403 }
@@ -138,9 +139,12 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
     )
   }
 
-  // The same fence as assignment: you may only shortlist someone you could
-  // actually hand the call to, so discovery never outruns responsibility.
-  const permission = await canAssignToUser(auth.scope, payload.userId)
+  // Reviewing/contacting faculty is allowed within a member's coverage even
+  // when formal assignment requires head approval. Assignment itself stays gated.
+  if(payload.status==='ASSIGNED'&&!auth.scope.canAssign)return NextResponse.json({error:'Assignment requires an authorized assigner.'},{status:403})
+  const target=await prisma.user.findFirst({where:{id:payload.userId,tenantId:auth.tenantId,status:'ACTIVE'},select:{researcher_profile:{select:{org_unit_id:true}}}})
+  const covered=Boolean(target&&(auth.scope.isTenantWide||auth.scope.fundingDept.isHead||auth.scope.managedUnitIds.includes(target.researcher_profile?.org_unit_id||'')))
+  const permission = auth.scope.canAssign?await canAssignToUser(auth.scope, payload.userId):{allowed:covered,reason:'That person is outside your assigned school coverage.'}
   if (!permission.allowed) {
     return NextResponse.json(
       { error: permission.reason || 'That person is not in a department you manage.' },
@@ -202,6 +206,9 @@ export async function DELETE(request: NextRequest, { params }: { params: { callI
   if (!userId) {
     return NextResponse.json({ error: 'userId is required' }, { status: 400 })
   }
+
+  const permission=await canAssignToUser(auth.scope,userId)
+  if(!permission.allowed)return NextResponse.json({error:permission.reason||'Researcher outside your access.'},{status:403})
 
   await prisma.callCandidate.deleteMany({
     where: { tenant_id: auth.tenantId, funding_call_id: params.callId, user_id: userId },

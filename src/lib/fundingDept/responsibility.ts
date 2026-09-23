@@ -1,4 +1,7 @@
-import { day } from './managementRules'
+import { day, deadlineAttention } from './managementRules'
+
+export const CLOSING_DISPOSITIONS = ['NO_SUITABLE_FACULTY', 'DECLINED', 'CAPACITY', 'OTHER']
+export const closesOpportunity = (reason?: string | null) => Boolean(reason && CLOSING_DISPOSITIONS.includes(reason))
 
 export const RESPONSIBILITY_TYPES = ['ORIGIN_REVIEW', 'MATCHED_FOLLOW_UP'] as const
 export type ResponsibilityType = (typeof RESPONSIBILITY_TYPES)[number]
@@ -26,6 +29,8 @@ export const WORK_QUEUES = [
 export type WorkQueue = (typeof WORK_QUEUES)[number]
 
 export type ResponsibilityAction = {
+  id?: string
+  is_next?: boolean
   title: string
   owner_user_id: string
   owner_name?: string | null
@@ -56,6 +61,12 @@ export type ResponsibilityInput = {
   actions?: ResponsibilityAction[]
   lastActivityAt?: Date | string | null
   internalDeadlineOverdue?: boolean
+  waitingWith?: string | null
+  waitingSince?: Date | string | null
+  ownerUserId?: string | null
+  ownerName?: string | null
+  firstTouchAt?: Date | string | null
+  thresholds?: { firstTouchTargetDays: number; untouchedDays: number; silentDays: number; unansweredDays: number }
 }
 
 function asDate(value: Date | string | null | undefined) {
@@ -81,49 +92,72 @@ export function isExpiredInIndia(value: Date | string | null | undefined, asOf =
 export function resolveResponsibility(input: ResponsibilityInput) {
   const actions = input.actions ?? []
   const openActions = actions.filter(action => ['OPEN', 'ACKNOWLEDGED'].includes(action.status))
-  const nextAction = openActions.find(action => action.status === 'ACKNOWLEDGED') ?? openActions[0] ?? null
+  const orderedActions = [...openActions].sort((a,b) => (asDate(a.due_at)?.getTime() ?? Infinity) - (asDate(b.due_at)?.getTime() ?? Infinity))
+  const designated = orderedActions.find(action => action.is_next) ?? orderedActions[0] ?? null
+  const overdueObligation = orderedActions.find(action => Boolean(asDate(action.due_at) && asDate(action.due_at)! < input.asOf)) ?? null
   const overdueAction = openActions.some(action => {
     const due = asDate(action.due_at)
     return Boolean(due && due < input.asOf)
   })
   const deadline = asDate(input.deadline)
-  const daysToDeadline = deadline
-    ? Math.ceil((deadline.getTime() - input.asOf.getTime()) / day)
-    : null
+  const daysToDeadline = deadlineAttention(deadline,input.asOf).daysToDeadline
   const expired = isExpiredInIndia(deadline, input.asOf)
   const activeApplications = input.activeApplications ?? 0
-  const liveWork = activeApplications > 0 || openActions.length > 0
   const originComplete = Boolean(
     input.triageDecisionRecorded || input.assignments || input.dispositionRecorded
   )
-  const matchedComplete = Boolean(
-    input.candidatesReviewed || input.contacts || input.assignments || input.applications ||
-      input.dispositionRecorded || openActions.length
-  )
+  const matchedComplete = Boolean(input.dispositionRecorded || input.assignments || input.applications ||
+    ((input.matchedPeople ?? 0) > 0 && (input.candidatesReviewed ?? 0) >= (input.matchedPeople ?? 0)))
   const complete = input.responsibilityType === 'ORIGIN_REVIEW' ? originComplete : matchedComplete
+  // Intake triage is a separate duty from ongoing application/follow-up work.
+  const liveWork = input.responsibilityType==='ORIGIN_REVIEW'&&originComplete ? false : activeApplications > 0 || openActions.length > 0
   const missingData = Boolean(
     input.originSchoolMissing || input.schoolUnmapped || input.ownerMissing ||
       (input.responsibilityType === 'MATCHED_FOLLOW_UP' && input.matchingComplete === false)
   )
 
+  const dataWarnings = [input.originSchoolMissing?'Origin school missing':null,input.schoolUnmapped?'School disciplines unmapped':null,
+    input.ownerMissing?'No available DSR cover':null,input.matchingComplete===false?'Matching incomplete':null].filter(Boolean) as string[]
+  const thresholds=input.thresholds ?? {firstTouchTargetDays:3,untouchedDays:7,silentDays:14,unansweredDays:3}
+  const firstSeen=asDate(input.firstSeenAt)
+  const lastActivity=asDate(input.lastActivityAt) ?? firstSeen
+  const daysSinceActivity=lastActivity?Math.max(0,Math.floor((input.asOf.getTime()-lastActivity.getTime())/day)):null
+  const ageDays=firstSeen?Math.max(0,Math.floor((input.asOf.getTime()-firstSeen.getTime())/day)):null
+  const waitingWith=designated?.waiting_with || input.waitingWith || null
+  const waitingSince=asDate(input.waitingSince) ?? lastActivity
+  const firstReviewOverdue=!input.firstTouchAt&&!complete&&Boolean(firstSeen&&input.asOf.getTime()-firstSeen.getTime()>=thresholds.firstTouchTargetDays*day)
+  const untouchedOverdue=!input.firstTouchAt&&!complete&&(ageDays??0)>=thresholds.untouchedDays
+  const silentLiveWork=activeApplications>0&&(daysSinceActivity??0)>=thresholds.silentDays
+  const facultyChaseDue=waitingWith==='FACULTY'&&Boolean(waitingSince&&input.asOf.getTime()-waitingSince.getTime()>=thresholds.unansweredDays*day)
+  const fallbackDue=waitingWith==='FACULTY'&&waitingSince?new Date(waitingSince.getTime()+thresholds.unansweredDays*day):!complete&&firstSeen?new Date(firstSeen.getTime()+thresholds.firstTouchTargetDays*day):null
+  const nextAction: ResponsibilityAction | null = complete&&!liveWork?null:designated ?? ({
+    title:facultyChaseDue?'Chase faculty response':silentLiveWork?'Confirm progress and record the next step':waitingWith==='FACULTY'?'Follow up for faculty response':input.responsibilityType==='ORIGIN_REVIEW'?'Review intake relevance':'Review matching researchers and confirm next step',
+    owner_user_id:input.ownerUserId||'',owner_name:input.ownerName||'Unassigned',waiting_with:waitingWith||'DSR',status:'OPEN',due_at:fallbackDue,
+  })
   let actionClass: ActionClass
   let queue: WorkQueue
-  if (input.intakeReady === false) {
-    actionClass = 'SYSTEM_PROCESSING'
-    queue = 'DATA_ROUTING'
-  } else if (missingData) {
-    actionClass = 'DATA_GAP'
-    queue = 'DATA_ROUTING'
-  } else if (complete && !liveWork) {
+  if (complete && !liveWork) {
     actionClass = 'COMPLETED'
     queue = 'COMPLETED'
-  } else if (nextAction?.waiting_with === 'FACULTY') {
+  } else if (overdueAction || input.internalDeadlineOverdue || ((firstReviewOverdue||untouchedOverdue||silentLiveWork||facultyChaseDue)&&!input.ownerMissing)) {
+    actionClass = waitingWith==='FACULTY'?'WAITING_ON_FACULTY':['REVIEWER','APPROVER'].includes(waitingWith||'')?'WAITING_ON_REVIEWER_APPROVER':waitingWith==='AGENCY'?'WAITING_ON_AGENCY':'DSR_ACTION_REQUIRED'
+    queue = 'ACTION_OVERDUE'
+  } else if (!expired && daysToDeadline !== null && daysToDeadline <= 7 && !complete) {
+    actionClass = 'DSR_ACTION_REQUIRED'
+    queue = 'CLOSING_SOON'
+  } else if (input.intakeReady === false) {
+    actionClass = 'SYSTEM_PROCESSING'
+    queue = 'DATA_ROUTING'
+  } else if (missingData && !liveWork && !(input.matchedPeople && !input.ownerMissing)) {
+    actionClass = 'DATA_GAP'
+    queue = 'DATA_ROUTING'
+  } else if (waitingWith === 'FACULTY') {
     actionClass = 'WAITING_ON_FACULTY'
     queue = overdueAction ? 'ACTION_OVERDUE' : 'WAITING_ON_OTHERS'
-  } else if (['REVIEWER', 'APPROVER'].includes(nextAction?.waiting_with || '')) {
+  } else if (['REVIEWER', 'APPROVER'].includes(waitingWith || '')) {
     actionClass = 'WAITING_ON_REVIEWER_APPROVER'
     queue = overdueAction ? 'ACTION_OVERDUE' : 'WAITING_ON_OTHERS'
-  } else if (nextAction?.waiting_with === 'AGENCY') {
+  } else if (waitingWith === 'AGENCY') {
     actionClass = 'WAITING_ON_AGENCY'
     queue = overdueAction ? 'ACTION_OVERDUE' : 'WAITING_ON_OTHERS'
   } else if (overdueAction || input.internalDeadlineOverdue) {
@@ -132,7 +166,7 @@ export function resolveResponsibility(input: ResponsibilityInput) {
   } else if (!expired && daysToDeadline !== null && daysToDeadline <= 7 && !complete) {
     actionClass = 'DSR_ACTION_REQUIRED'
     queue = 'CLOSING_SOON'
-  } else if (activeApplications > 0 || input.assignments) {
+  } else if (activeApplications > 0 || input.assignments || openActions.length > 0) {
     actionClass = 'DSR_ACTION_REQUIRED'
     queue = 'IN_PROGRESS'
   } else {
@@ -140,20 +174,20 @@ export function resolveResponsibility(input: ResponsibilityInput) {
     queue = 'NEW_TO_REVIEW'
   }
 
-  const lastActivity = asDate(input.lastActivityAt) ?? asDate(input.firstSeenAt)
   return {
     responsibilityType: input.responsibilityType,
     actionClass,
     queue,
     priority: WORK_QUEUES.indexOf(queue),
     nextAction,
+    overdueObligation, waitingWith, dataWarnings, lastActivityAt:lastActivity, ageDays,
+    firstReviewOverdue, untouchedOverdue, silentLiveWork, facultyChaseDue,
+    completionReason:complete ? input.dispositionRecorded?'Structured closure':input.responsibilityType==='ORIGIN_REVIEW'?'Intake reviewed or assigned':'Researcher follow-up recorded' : null,
     expired,
     retainedBecauseLiveWork: expired && liveWork,
     liveWork,
     complete,
     daysToDeadline,
-    daysSinceActivity: lastActivity
-      ? Math.max(0, Math.floor((input.asOf.getTime() - lastActivity.getTime()) / day))
-      : null,
+    daysSinceActivity,
   }
 }

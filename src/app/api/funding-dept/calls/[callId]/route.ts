@@ -171,16 +171,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { callId
   try {
     const input = originSchoolSchema.parse(await request.json())
     const [call, school] = await Promise.all([
-      prisma.fundingCall.findFirst({where:{id:params.callId,tenantId:context.tenantId},select:{id:true,origin_school_id:true,origin_school_name:true,origin_school_source:true}}),
+      prisma.fundingCall.findFirst({where:{id:params.callId,OR:[{tenantId:context.tenantId},{tenantId:null,visibility:'GLOBAL_PUBLISHED',status:'PUBLISHED'}]},select:{id:true,tenantId:true,origin_school_id:true,origin_school_name:true,origin_school_source:true}}),
       prisma.tenantOrgUnit.findFirst({where:{id:input.originSchoolId,tenant_id:context.tenantId,depth:0,is_active:true},select:{id:true,name:true}}),
     ])
     if (!call) return NextResponse.json({ error: 'Funding call not found.' }, { status: 404 })
     if (!school) return NextResponse.json({ error: 'Origin school not found.' }, { status: 400 })
     const after={origin_school_id:school.id,origin_school_name:school.name,origin_school_source:'CORRECTED_BY_DSR_HEAD'}
     await prisma.$transaction(async tx=>{
-      await tx.fundingCall.update({where:{id:call.id},data:after})
+      const priorJobs=await tx.$queryRaw(Prisma.sql`SELECT * FROM dsr_origin_responsibilities WHERE tenant_id=${context.tenantId} AND call_id=${call.id}`)
+      if(call.tenantId===context.tenantId)await tx.fundingCall.update({where:{id:call.id},data:after})
+      await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_origin_overrides(tenant_id,call_id,school_id) VALUES(${context.tenantId},${call.id},${school.id}) ON CONFLICT(tenant_id,call_id) DO UPDATE SET school_id=EXCLUDED.school_id,updated_at=now()`)
+      await tx.fundingImportJob.updateMany({where:{tenantId:context.tenantId,fundingCallId:call.id,OR:[{originSchoolId:call.origin_school_id},{originSchoolId:null}]},data:{originSchoolId:school.id,originSchoolName:school.name,originSchoolSource:after.origin_school_source}})
+      await tx.$executeRaw(Prisma.sql`UPDATE funding_intake_jobs j SET origin_school_id=${school.id},origin_school_name=${school.name},origin_school_source=${after.origin_school_source}
+        FROM users u WHERE u.id=j.submitted_by_user_id AND u."tenantId"=${context.tenantId} AND j.linked_funding_call_id=${call.id} AND (j.origin_school_id IS NOT DISTINCT FROM ${call.origin_school_id} OR j.origin_school_id IS NULL)`)
       await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
-        VALUES(${context.tenantId},${school.id},'ORIGIN_ATTRIBUTION',${call.id},${context.user.id},'CORRECTED',${JSON.stringify(call)}::jsonb,${JSON.stringify(after)}::jsonb,${input.reason})`)
+        VALUES(${context.tenantId},${school.id},'ORIGIN_ATTRIBUTION',${call.id},${context.user.id},'CORRECTED',${JSON.stringify({call,intakeEvidence:priorJobs})}::jsonb,${JSON.stringify(after)}::jsonb,${input.reason})`)
     })
     return NextResponse.json({ saved:true, originSchool:school })
   } catch (error) {

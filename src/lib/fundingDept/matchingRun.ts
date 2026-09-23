@@ -16,12 +16,6 @@ export async function persistMatchingRun(input:{tenantId:string;callId:string;ac
   await prisma.$transaction(async tx=>{
     await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_matching_runs(id,tenant_id,call_id,actor_user_id,scope,version,completeness,result_count,candidate_count,results,completed_at)
       VALUES(${runId},${input.tenantId},${input.callId},${input.actorId||null},${JSON.stringify({schoolIds:schools,filters:input.filters,method:'bounded-top-k'})}::jsonb,${version},'PARTIAL',${observed.length},${input.candidateCount},${JSON.stringify(observed)}::jsonb,${at})`)
-    if(schools.length)await tx.$executeRaw(Prisma.sql`UPDATE funding_opportunity_matches SET is_current=false,refreshed_at=${at}
-      WHERE tenant_id=${input.tenantId} AND funding_call_id=${input.callId} AND school_id IN (${Prisma.join(schools)})`)
-    for(const r of observed)await tx.$executeRaw(Prisma.sql`INSERT INTO funding_opportunity_matches(id,tenant_id,funding_call_id,user_id,org_unit_id,school_id,match_score,match_tier,match_reason,source,source_version,inferred,is_current,match_run_id,refreshed_at,first_seen_at,last_seen_at,created_at,updated_at)
-      VALUES(${randomUUID()},${input.tenantId},${input.callId},${r.userId},${r.orgUnitId},${r.schoolId},${r.score},${r.matchTier},${r.matchReason},'matching',${version},false,true,${runId},${at},${at},${at},${at},${at})
-      ON CONFLICT(tenant_id,funding_call_id,user_id,school_id) DO UPDATE SET match_score=EXCLUDED.match_score,match_tier=EXCLUDED.match_tier,
-      match_reason=EXCLUDED.match_reason,source_version=EXCLUDED.source_version,is_current=true,match_run_id=EXCLUDED.match_run_id,
-      refreshed_at=EXCLUDED.refreshed_at,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`)
+    // Bounded/filtered searches are audit evidence only. They cannot replace a census.
   },{timeout:20000})
 }

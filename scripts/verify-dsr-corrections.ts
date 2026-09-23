@@ -1,0 +1,96 @@
+/** Clones schema only into a disposable local database. Never copies or changes production data. */
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import dotenv from 'dotenv'
+import { PrismaClient } from '@prisma/client'
+
+async function main() {
+  let source=process.env.DATABASE_URL||''
+  for(const file of ['.env','.env.local'])if(existsSync(file))source=dotenv.parse(readFileSync(file)).DATABASE_URL||source
+  const url=new URL(source)
+  assert(['localhost','127.0.0.1','[::1]'].includes(url.hostname),'Only local PostgreSQL is allowed.')
+  const database=`grapsi_dsr_verify_${Date.now()}`
+  const bin=process.env.PG_BIN||'C:\\Program Files\\PostgreSQL\\17\\bin'
+  const env={...process.env,PGHOST:url.hostname,PGPORT:url.port||'5432',PGUSER:decodeURIComponent(url.username),PGPASSWORD:decodeURIComponent(url.password)}
+  const psql=(db:string,args:string[],input?:Buffer|string)=>execFileSync(path.join(bin,'psql.exe'),['-X','-v','ON_ERROR_STOP=1','-d',db,...args],{env,input,maxBuffer:30*1024*1024,stdio:['pipe','pipe','pipe']})
+  const schema=execFileSync(path.join(bin,'pg_dump.exe'),['--schema-only','--no-owner','--no-acl','-d',url.pathname.slice(1)],{env,maxBuffer:30*1024*1024})
+  psql('postgres',['-c',`CREATE DATABASE "${database}"`])
+  url.pathname=`/${database}`
+  const db=new PrismaClient({datasources:{db:{url:url.toString()}}})
+  try {
+    psql(database,[],schema)
+    for(const migration of ['20260922120000_dsr_role_workbench','20260922150000_dsr_reporting_corrections'])psql(database,['-f',path.resolve('prisma/migrations',migration,'migration.sql')])
+    assert.equal((await db.$queryRawUnsafe<Array<{name:string}>>('SELECT current_database() name'))[0].name,database)
+    ;(globalThis as any).prisma=db
+    const { getManagementReport }=await import('../src/lib/fundingDept/managementService')
+    const { saveAction }=await import('../src/lib/fundingDept/managementActions')
+    const { writeReportSnapshot,readReportSnapshot }=await import('../src/lib/fundingDept/reportSnapshot')
+    const { managementExport }=await import('../src/lib/fundingDept/managementExport')
+    const tenant=await db.tenant.create({data:{name:'Disposable DSR checks',atiId:database}})
+    const tenantId=tenant.id
+    const [owner,faculty]=await Promise.all(['owner','faculty'].map(name=>db.user.create({data:{tenantId,email:`${name}@example.invalid`,name,status:'ACTIVE',roles:['MANAGER']}})))
+    const [school,other]=await Promise.all(['School A','School B'].map(name=>db.tenantOrgUnit.create({data:{tenant_id:tenantId,name,kind:'SCHOOL'}})))
+    const member=await db.fundingDeptMember.create({data:{tenant_id:tenantId,user_id:owner.id}})
+    await db.fundingDeptSchoolAssignment.create({data:{tenant_id:tenantId,member_id:member.id,org_unit_id:school.id,assigned_by_user_id:owner.id}})
+    await db.researcherProfile.create({data:{user_id:faculty.id,org_unit_id:school.id,display_name:'Faculty',research_areas:['quantum computing']}})
+    const createCall=(title:string,deadlineAt:Date|null,origin:string|null=null)=>db.fundingCall.create({data:{tenantId,createdByUserId:owner.id,updatedByUserId:owner.id,title,scheme_title:title,visibility:'TENANT_PRIVATE',status:'PUBLISHED',deadlineAt,origin_school_id:origin}})
+    const future=new Date(Date.now()+10*86400000),past=new Date(Date.now()-2*86400000)
+    const matched=await createCall('quantum computing',future)
+    const unrelated=await createCall('marine archaeology',future)
+    const expired=await createCall('quantum computing expired',past)
+    const origin=await createCall('origin intake without person match',future,school.id)
+    await db.$executeRawUnsafe("UPDATE funding_calls SET ts_document=to_tsvector('english',title)")
+    let checks=0
+    const ok=(value:unknown,label:string)=>{assert(value,label);checks++;console.log(`PASS ${label}`)}
+    const run=(extra:Record<string,unknown>={})=>getManagementReport(tenantId,{start:new Date(Date.now()-90*86400000),end:new Date(Date.now()+1),asOf:new Date(),mode:'portfolio',...extra})
+    const callRows=(r:Awaited<ReturnType<typeof run>>)=>r.members.flatMap(m=>m.schools.flatMap(s=>s.calls))
+    let report=await run()
+    ok(callRows(report).some(c=>c.id===matched.id),'A current person match routes to its school')
+    ok(!callRows(report).some(c=>c.id===unrelated.id),'Unmatched call does not fan out to schools')
+    ok(callRows(report).some(c=>c.id===origin.id),'Origin intake remains visible without researcher matches')
+    ok(!callRows(report).some(c=>c.id===expired.id),'Expired untouched call is hidden')
+    ok(callRows(await run({includeExpired:true})).some(c=>c.id===expired.id),'Include expired restores the same matching call')
+    ok(report.faculty.some(p=>p.id===faculty.id),'Full school roster includes never-assigned faculty')
+    const action=await saveAction(tenantId,school.id,owner.id,{callId:expired.id,title:'Resolve outstanding contact',ownerUserId:owner.id,waitingWith:'FACULTY',dueAt:past.toISOString(),category:'CORRECTIVE',failureType:'FOLLOW_UP'})
+    report=await run()
+    ok(report.workbench.some(w=>w.callId===expired.id&&w.responsibility.retainedBecauseLiveWork&&w.responsibility.queue==='ACTION_OVERDUE'),'Expired live work survives and overdue beats data gaps')
+    ok(report.correctiveActions.length===1,'Corrective actions are separate from routine activity')
+    const acknowledged=await saveAction(tenantId,school.id,owner.id,{id:action.id,version:action.version,status:'ACKNOWLEDGED'})
+    const done=await saveAction(tenantId,school.id,owner.id,{id:action.id,version:acknowledged.version,status:'DONE',resolutionNote:'Faculty confirmed closure'})
+    const reopened=await saveAction(tenantId,school.id,owner.id,{id:action.id,version:done.version,status:'OPEN',reason:'Further follow-up required'})
+    ok(reopened.resolution_note===null&&reopened.completed_at===null,'Reopening clears stale resolution and completion')
+    await assert.rejects(()=>saveAction(tenantId,school.id,owner.id,{id:action.id,version:reopened.version,status:'DONE'}),/resolution note/)
+    report=await run()
+    const snapshot=await writeReportSnapshot(tenantId,owner.id,'scope','filters',report)
+    const frozen=await readReportSnapshot(snapshot,tenantId,owner.id,'scope','filters')
+    ok(managementExport(frozen,'xlsx').length>0&&managementExport(frozen,'csv').length>0,'Frozen report exports survive date revival')
+    const memberReport=await run({schoolIds:[school.id]})
+    ok(memberReport.workbench.length===report.workbench.filter(w=>w.schoolId===school.id).length,'Head and member duty counts reconcile')
+    ok((await run({reportView:'incoming',includeExpired:true})).incoming.length===4,'Incoming ledger includes all unlinked tenant calls')
+    await db.callAssignment.create({data:{tenant_id:tenantId,funding_call_id:unrelated.id,assignee_user_id:faculty.id,assigned_by_user_id:owner.id,assignee_org_unit_id:school.id,status:'DECLINED'}})
+    await db.researcherProfile.update({where:{user_id:faculty.id},data:{org_unit_id:other.id}})
+    report=await run()
+    ok(!report.members.flatMap(m=>m.schools.filter(s=>s.id===school.id).flatMap(s=>s.calls)).some(c=>c.id===matched.id),'Moving a researcher invalidates the old-school match')
+    ok(callRows(await run({schoolId:other.id})).some(c=>c.id===matched.id),'New school receives the current person match')
+    ok((await run({schoolIds:[other.id],callId:matched.id})).faculty.find(p=>p.id===faculty.id)?.everAssigned,'Never-assigned uses lifetime history even after school transfer and call filtering')
+    await db.fundingCall.createMany({data:Array.from({length:260},(_,i)=>({id:`bulk-call-${i}`,tenantId,createdByUserId:owner.id,updatedByUserId:owner.id,title:`Quantum computing ${i}`,scheme_title:`Quantum computing ${i}`,visibility:'TENANT_PRIVATE' as const,status:'PUBLISHED' as const,deadlineAt:future}))})
+    report=await run({schoolId:other.id})
+    ok(report.faculty.find(p=>p.id===faculty.id)?.suitableOpportunities===261,'Current projection is a census, not a top-200 display page')
+    const {persistMatchingRun}=await import('../src/lib/fundingDept/matchingRun')
+    const before=await db.fundingOpportunityMatch.count({where:{tenant_id:tenantId,is_current:true}})
+    await persistMatchingRun({tenantId,callId:matched.id,orgUnitIds:[other.id],filters:{search:'no results'},candidateCount:0,results:[]})
+    ok(await db.fundingOpportunityMatch.count({where:{tenant_id:tenantId,is_current:true}})===before,'A filtered empty search cannot erase current matches')
+    await db.researcherProfile.update({where:{user_id:faculty.id},data:{research_areas:['unrelated biology']}})
+    report=await run({schoolId:other.id})
+    ok(!callRows(report).some(c=>c.id===matched.id),'Changed research profile deactivates obsolete discovery matches')
+    console.log(`Verified ${checks} isolated DSR reporting assertions.`)
+  } finally {
+    await db.$disconnect()
+    assert(/^grapsi_dsr_verify_\d+$/.test(database))
+    psql('postgres',['-c',`DROP DATABASE "${database}" WITH (FORCE)`])
+    console.log('Removed the disposable verification database; working data was not changed.')
+  }
+}
+main().catch(error=>{console.error(error);process.exitCode=1})

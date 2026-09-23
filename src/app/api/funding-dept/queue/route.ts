@@ -11,6 +11,9 @@ import { queueStateSql, type QueueState as LadderState } from '@/lib/fundingDept
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { actionableSchoolCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { openCallSql,liveCallWorkSql } from '@/lib/fundingDept/callSql'
+import { refreshCurrentSchoolMatches } from '@/lib/fundingDept/currentMatches'
 
 export const dynamic = 'force-dynamic'
 
@@ -113,33 +116,13 @@ export async function GET(request: NextRequest) {
   )}]::text[]`
 
   const profile = await loadUnitAreaProfile(context.tenantId, [school.id])
-  const relevantSql =
-    relevanceMode === 'all'
-      ? Prisma.sql`TRUE`
-      : Prisma.sql`(
-          fc.origin_school_id=${school.id}
-          OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
-            WHERE match.tenant_id=${context.tenantId} AND match.school_id=${school.id}
-              AND match.funding_call_id=fc.id AND match.is_current)
-          OR EXISTS(SELECT 1 FROM call_school_triage decided
-            WHERE decided.tenant_id=${context.tenantId} AND decided.org_unit_id=${school.id}
-              AND decided.funding_call_id=fc.id AND decided.decided_at IS NOT NULL)
-          OR EXISTS(SELECT 1 FROM call_assignments ca
-            WHERE ca.tenant_id=${context.tenantId} AND ca.funding_call_id=fc.id
-              AND ca.assignee_org_unit_id=ANY(${scopeArray}))
-          OR EXISTS(SELECT 1 FROM dsr_actions action
-            WHERE action.tenant_id=${context.tenantId} AND action.school_id=${school.id} AND action.call_id=fc.id)
-          OR EXISTS(SELECT 1 FROM dsr_opportunity_dispositions disposition
-            WHERE disposition.tenant_id=${context.tenantId} AND disposition.school_id=${school.id} AND disposition.call_id=fc.id)
-        )`
-
   const now = new Date()
+  await refreshCurrentSchoolMatches(context.tenantId,school.id)
   const filters: Prisma.Sql[] = [
     visibleSql(context.tenantId),
-    // Closed calls are not work; they are history. The `all` state still hides
-    // them, because a queue is a list of things that can still be done.
-    Prisma.sql`(COALESCE(fc.close_date, fc."deadlineAt") IS NULL OR COALESCE(fc.close_date, fc."deadlineAt") >= ${now})`,
-    relevantSql,
+    // Expired discovery is hidden; existing obligations remain actionable.
+    new URL(request.url).searchParams.get('includeExpired')==='true'?Prisma.sql`TRUE`:Prisma.sql`(${openCallSql()} OR ${liveCallWorkSql(context.tenantId,school.id)})`,
+    relevanceMode==='all'?Prisma.sql`TRUE`:actionableSchoolCallWhereSql(context.tenantId,school.id),
   ]
 
   if (q) {
@@ -151,7 +134,7 @@ export async function GET(request: NextRequest) {
   if (closingInDays > 0) {
     const until = new Date(now.getTime() + closingInDays * 86400000)
     filters.push(
-      Prisma.sql`COALESCE(fc.close_date, fc."deadlineAt") BETWEEN ${now} AND ${until}`
+      Prisma.sql`(COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date BETWEEN (${now}::timestamptz AT TIME ZONE 'Asia/Kolkata')::date AND (${until}::timestamptz AT TIME ZONE 'Asia/Kolkata')::date`
     )
   }
 
