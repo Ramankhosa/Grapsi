@@ -229,12 +229,15 @@ export async function getFacultyEngagement(
                  WHERE ca.created_at BETWEEN ${options.window.start} AND ${options.window.end}
                )::int AS assigned_in_window,
                COUNT(*) FILTER (WHERE ca.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS'))::int AS live,
+               -- A linked proposal's submission counts too (reportDefinitions);
+               -- only a dated submission can fall inside a window.
                COUNT(*) FILTER (
-                 WHERE ca.submitted_at BETWEEN ${options.window.start} AND ${options.window.end}
+                 WHERE COALESCE(gp.submitted_at, ca.submitted_at) BETWEEN ${options.window.start} AND ${options.window.end}
                )::int AS submitted_in_window,
                COUNT(*) FILTER (WHERE ca.status = 'DECLINED')::int AS declined_ever,
                MAX(ca.created_at) AS last_assigned_at
           FROM call_assignments ca
+          LEFT JOIN grant_proposals gp ON gp.assignment_id = ca.id AND gp.tenant_id = ca.tenant_id
          WHERE ca.assignee_user_id = u.id AND ca.tenant_id = ${tenantId}
       ) a ON TRUE
      WHERE u."tenantId" = ${tenantId}

@@ -50,6 +50,20 @@ export interface DeptSettings {
    * and nothing else in the system would notice.
    */
   dismissalRateWarnPct: number
+
+  // --- Call-to-school mapping ---------------------------------------------
+  /**
+   * Route calls to a school's coordinator from the stored call-to-school
+   * mapping, not only from faculty matches and recorded work. Off until the
+   * department head has reviewed the backfill dry run, so no school wakes up
+   * to a sudden backlog.
+   */
+  callMappingRoutingEnabled: boolean
+  /**
+   * Also map calls that share only a broad discipline group with a school.
+   * Off by default: a broad match floods queues with calls nobody will take.
+   */
+  mapBroadTier: boolean
 }
 
 export const DEFAULT_DEPT_SETTINGS: DeptSettings = {
@@ -64,6 +78,8 @@ export const DEFAULT_DEPT_SETTINGS: DeptSettings = {
   escalateToAdminAfterDays: 7,
   weeklySnapshotsEnabled: true,
   dismissalRateWarnPct: 40,
+  callMappingRoutingEnabled: false,
+  mapBroadTier: false,
 }
 
 /** The booleans a tenant admin can flip, for the settings screen and the API. */
@@ -71,6 +87,8 @@ export const DEPT_TOGGLES = [
   'pendencyEscalationEnabled',
   'escalateToAdmin',
   'weeklySnapshotsEnabled',
+  'callMappingRoutingEnabled',
+  'mapBroadTier',
 ] as const
 export type DeptToggle = (typeof DEPT_TOGGLES)[number]
 
@@ -138,6 +156,14 @@ export const DEPT_SETTING_COPY: Record<DeptToggle | DeptNumber, { label: string;
   weeklySnapshotsEnabled: {
     label: 'Keep weekly history',
     help: 'Records each school’s numbers once a week so reports can show whether a backlog is growing or clearing. Turn this off to keep live figures only.',
+  },
+  callMappingRoutingEnabled: {
+    label: 'Route calls by school relevance',
+    help: 'Put every call mapped to a school into its coordinator’s queue as soon as it is classified, even before any researcher is matched. Review the mapping register with the head before turning this on.',
+  },
+  mapBroadTier: {
+    label: 'Also map broad discipline matches',
+    help: 'Map calls that share only a broad discipline group with a school. Leave off unless schools say they are missing calls; it widens every queue.',
   },
   dismissalRateWarnPct: {
     label: 'Dismissal rate that gets flagged (%)',

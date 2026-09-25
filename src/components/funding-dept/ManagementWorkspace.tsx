@@ -7,6 +7,7 @@ import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import AssignDialog from '@/components/funding-dept/AssignDialog'
 import FollowUpPanel from '@/components/funding-dept/FollowUpPanel'
 import type { ManagementReport } from '@/lib/fundingDept/managementService'
+import { AuditView, MappingView, OverviewView, RegisterView, type RegisterFilterState } from '@/components/funding-dept/RegisterViews'
 
 type Wire<T> = T extends Date ? string : T extends Array<infer U> ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T
 type Report = Wire<ManagementReport>
@@ -15,7 +16,25 @@ type Call = Report['members'][number]['schools'][number]['calls'][number]
 type Action = Report['actions'][number]
 type Person = { id:string; name:string | null }
 type Payload = { snapshot?:string; members?:Report['members']; rows?:any[]; total?:number; totals:Report['totals']; attentionCounts:{upcoming21:number;missedUnallocatedNoSubmission:number}; quality:Report['quality']; options:Report['options']; activity:Report['activity']; asOf:string; windowLabel:string; lens:string; portfolio:string; membersMovement?:any[]; complete?:boolean; note?:string; definition?:string; urgentActions?:Action[]; urgentOpportunities?:any[]; unallocated?:Call[]; actions?:Action[]; headSummary?:any;coverageProblems?:any[];unmappedFaculty?:any[];incomingCounts?:any }
-const views = [['workbench','My school desk'],['incoming','Incoming calls'],['corrective-actions','Corrective actions'],['member-funnel','Member → school → call'],['school-coverage','School call coverage'],['opportunity-gaps','Opportunity action gaps'],['pending','Pending work'],['deadline-risk','Deadline risk'],['coverage','Faculty coverage'],['outcomes','Submissions & outcomes'],['performance','Member performance'],['weekly-review','Weekly review']]
+/** Three main views; everything else is a filter on them or lives under More reports. */
+const mainViews = [['overview','Overview'],['register','Call Register'],['workbench','My Actions']]
+const mainHelp:Record<string,string> = {
+  overview:"Department totals for the period, what needs attention now, and each school's coordinator.",
+  register:'One row per call: its schools, reviews, allocations, submissions and deadline.',
+  workbench:'Your outstanding work, most urgent first: overdue, closing soon, new to review, allocation pending, follow-ups.',
+}
+const moreViews = [['mapping','Mapping register'],['audit','Audit trail'],['corrective-actions','Corrective actions'],['coverage','Faculty coverage'],['performance','Member performance'],['weekly-review','Weekly review']]
+/** Kept for one release while people move to the three main views. */
+const retiringViews = [['incoming','Incoming calls'],['member-funnel','Member → school → call'],['school-coverage','School call coverage'],['pending','Pending work'],['deadline-risk','Deadline risk'],['outcomes','Submissions & outcomes'],['opportunity-gaps','Opportunity action gaps']]
+const views = [...mainViews,...moreViews,...retiringViews]
+/** Old view names in links land on the filtered view that replaced them. */
+const legacyRedirects:Record<string,{view:string;register?:RegisterFilterState}>={
+  'incoming':{view:'register',register:{window:'all',source:'ORIGIN'}},'member-funnel':{view:'overview'},'school-coverage':{view:'overview'},
+  'pending':{view:'workbench'},'deadline-risk':{view:'register',register:{window:'all',deadlineState:'CLOSING_SOON'}},
+  'outcomes':{view:'register',register:{submission:'ALL_SUBMITTED'}},'opportunity-gaps':{view:'register',register:{reviewState:'REVIEWED_ALLOCATION_PENDING'}},
+}
+const retiringNote=(view:string)=>legacyRedirects[view]?.view==='register'?'The Call Register shows the same calls with a filter.':legacyRedirects[view]?.view==='overview'?'The Overview coordinator table replaces it.':'My Actions replaces it.'
+const registerViews=['overview','register','mapping','audit']
 const label = (s:string) => s.toLowerCase().replace(/_/g,' ').replace(/^./,c=>c.toUpperCase())
 const date = (s?:string|null) => s ? new Date(s).toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric'}) : 'Not recorded'
 const field = 'rounded border border-nickel-300 bg-white px-2 py-1.5 text-sm'
@@ -27,9 +46,9 @@ function HelpButton({help,children,...props}:React.ButtonHTMLAttributes<HTMLButt
 }
 const deadlineCopy=(c:Call)=>c.daysToDeadline===null?'Deadline not recorded':c.daysToDeadline<0?`${Math.abs(c.daysToDeadline)} day${Math.abs(c.daysToDeadline)===1?'':'s'} missed`:c.daysToDeadline===0?'Due today':`${c.daysToDeadline} day${c.daysToDeadline===1?'':'s'} remaining`
 
-function useReport(path:string, revision=0) {
+function useReport(path:string|null, revision=0) {
   const { authFetch }=useAuth();const [data,setData]=useState<Payload|null>(null);const [error,setError]=useState('');const [loading,setLoading]=useState(true);const [loadedPath,setLoadedPath]=useState('')
-  useEffect(()=>{let current=true;setLoading(true);setError('');authFetch(path).then(async r=>{
+  useEffect(()=>{if(!path){setData(null);setLoading(false);return}let current=true;setLoading(true);setError('');authFetch(path).then(async r=>{
     const isJson=(r.headers.get('content-type')||'').includes('application/json')
     const json=isJson?await r.json():null
     if(!r.ok)throw Error(json?.error||`Report request failed (${r.status}). ${r.status===504?'The server timed out. Try Refresh shortly.':'Please refresh or contact the administrator.'}`)
@@ -54,12 +73,18 @@ function AppTable({apps,onOpen}:{apps:App[];onOpen:(id:string)=>void}) {return <
   </Table>}
 
 export default function ManagementWorkspace({initialWindow='reporting'}:{initialWindow?:string}) {
-  const {authFetch}=useAuth();const [view,setView]=useState('workbench');const [filters,setFilters]=useState<Record<string,string>>({window:initialWindow,mode:'pending'});const [page,setPage]=useState(1);const [expanded,setExpanded]=useState<Record<string,boolean>>({});const [detail,setDetail]=useState<string|null>(null);const [personDetail,setPersonDetail]=useState<{id:string;name:string}|null>(null);const [revision,setRevision]=useState(0);const [exportError,setExportError]=useState('')
-  const specialized=['incoming','corrective-actions'].includes(view)
+  const {authFetch}=useAuth();const {me,loading:meLoading}=useFundingDeptMe();const [view,setView]=useState('');const [registerFilters,setRegisterFilters]=useState<RegisterFilterState>({});const [mappingTab,setMappingTab]=useState('mapped');const [auditCallId,setAuditCallId]=useState('');const [filters,setFilters]=useState<Record<string,string>>({window:initialWindow,mode:'pending'});const [page,setPage]=useState(1);const [expanded,setExpanded]=useState<Record<string,boolean>>({});const [detail,setDetail]=useState<string|null>(null);const [personDetail,setPersonDetail]=useState<{id:string;name:string}|null>(null);const [revision,setRevision]=useState(0);const [exportError,setExportError]=useState('')
+  // The head lands on Overview, coordinators on My Actions; a ?view= link wins,
+  // and an old view name redirects to the filtered view that replaced it.
+  useEffect(()=>{if(view||meLoading)return;const requested=new URLSearchParams(window.location.search).get('view')||''
+    const legacy=legacyRedirects[requested];if(legacy){setRegisterFilters(legacy.register||{});setView(legacy.view);return}
+    setView(views.some(([id])=>id===requested)?requested:(me.isHead||me.capabilities.isTenantWide)?'overview':'workbench')},[view,meLoading,me])
+  const isRegisterView=registerViews.includes(view)
+  const specialized=['incoming','corrective-actions'].includes(view)||isRegisterView
   const switchView=(next:string)=>{setView(next);setFilters(f=>({window:f.window,from:f.from||'',to:f.to||'',schoolId:f.schoolId||'',memberId:f.memberId||'',portfolio:f.portfolio||'',includeExpired:f.includeExpired||'',mode:['workbench','pending','deadline-risk','opportunity-gaps'].includes(next)?'pending':'portfolio'}));setPage(1)}
   const query=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));const base=query.toString();query.set('page',String(page))
   const snapshotCache=useRef(new Map<string,string>());const identity=`${view}?${base}@${revision}`;const cached=snapshotCache.current.get(identity);if(cached)query.set('snapshot',cached)
-  const reportUrl=`/api/funding-dept/reports/${view}?${query}`
+  const reportUrl=view&&!isRegisterView?`/api/funding-dept/reports/${view}?${query}`:null
   const {data,error,loading,loadedPath}=useReport(reportUrl,revision)
   const matchingPolls=useRef(0)
   useEffect(()=>{matchingPolls.current=0},[view,base])
@@ -79,10 +104,23 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
   const refresh=()=>setRevision(r=>r+1)
   const closeDetail=useCallback(()=>setDetail(null),[])
   const select=(key:string,title:string,options:Array<[string,string]>)=><label className="flex flex-col gap-1 text-xs">{title}<select className={field} value={filters[key]||''} onChange={e=>update(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
-  const exportReport=async(format:string)=>{setExportError('');try{const response=await authFetch(`/api/funding-dept/reports/${view}?${detailQuery}&format=${format}`);if(!response.ok)throw Error((await response.json()).error);const url=URL.createObjectURL(await response.blob());const a=document.createElement('a');a.href=url;a.download=`dsr-${view}.${format}`;a.click();URL.revokeObjectURL(url)}catch(e){setExportError((e as Error).message)}}
+  const exportReport=async(format:string,complete=false)=>{setExportError('');try{const response=await authFetch(`/api/funding-dept/reports/${view}?${detailQuery}&format=${format}${complete?'&workbook=complete':''}`);if(!response.ok)throw Error((await response.json()).error);const url=URL.createObjectURL(await response.blob());const a=document.createElement('a');a.href=url;a.download=`dsr-${view}${complete?'-complete':''}.${format}`;a.click();URL.revokeObjectURL(url)}catch(e){setExportError((e as Error).message)}}
+  const periodQuery=new URLSearchParams(Object.entries({window:filters.window,from:filters.from||'',to:filters.to||''}).filter(([,v])=>v)).toString()
+  const openRegister=(f:RegisterFilterState)=>{setRegisterFilters(f);setView('register');setPage(1)}
+  const schoolOptions=(catalog.current?.schools||me.reachSchools).map(s=>({id:s.id,name:s.name||'Unnamed school'}))
+  if(!view)return <p className="nk-sub">Loading…</p>
   return <div className="space-y-5">
-    <nav className="flex flex-wrap gap-2 border-b border-nickel-200 pb-3" aria-label="Management reports">{views.map(([id,name])=><HelpButton key={id} help={`Open the ${name} report using the current portfolio filters.`} className={view===id?'nk-btn-primary nk-btn-sm':'nk-btn-secondary nk-btn-sm'} onClick={()=>switchView(id)}>{name}</HelpButton>)}</nav>
-    <div className="nk-panel p-4 space-y-3"><div className="flex flex-wrap items-end gap-3">
+    <nav className="flex flex-wrap items-center gap-2 border-b border-nickel-200 pb-3" aria-label="Management reports">{mainViews.map(([id,name])=><HelpButton key={id} help={mainHelp[id]} className={view===id?'nk-btn-primary nk-btn-sm':'nk-btn-secondary nk-btn-sm'} onClick={()=>switchView(id)}>{name}</HelpButton>)}
+      <label className="ml-2 text-xs">More reports <select aria-label="More reports" className={field} value={mainViews.some(([id])=>id===view)?'':view} onChange={e=>{if(e.target.value)switchView(e.target.value)}}><option value="">Choose…</option>{moreViews.map(([id,name])=><option key={id} value={id}>{name}</option>)}<optgroup label="Previous views (retiring)">{retiringViews.map(([id,name])=><option key={id} value={id}>{name}</option>)}</optgroup></select></label>
+      {retiringViews.some(([id])=>id===view)&&<span className="nk-sub text-xs">This view is retiring. {retiringNote(view)}</span>}</nav>
+    {isRegisterView&&<div className="nk-panel flex flex-wrap items-end gap-3 p-4"><label className="flex flex-col gap-1 text-xs">Reporting period<select className={field} value={filters.window} onChange={e=>update('window',e.target.value)}><option value="reporting">Department reporting period</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="custom">Custom dates</option></select></label>
+      {filters.window==='custom'&&<><label className="text-xs">From <input aria-label="From date" type="date" className={field} value={filters.from||''} onChange={e=>update('from',e.target.value)}/></label><label className="text-xs">To <input aria-label="To date" type="date" className={field} value={filters.to||''} onChange={e=>update('to',e.target.value)}/></label></>}
+      <p className="nk-sub text-xs">India time. Period totals count calls that entered in the period; “needs attention” and missed calls ignore it.</p><HelpButton help="Recalculate from the latest saved activity." className="nk-btn-secondary nk-btn-xs ml-auto" onClick={refresh}>Refresh</HelpButton></div>}
+    {view==='overview'&&<OverviewView periodQuery={periodQuery} revision={revision} openRegister={openRegister} openActions={queue=>{switchView('workbench');if(queue)setFilters(f=>({...f,queue}))}} openMapping={tab=>{setMappingTab(tab);switchView('mapping')}}/>}
+    {view==='register'&&<RegisterView periodQuery={periodQuery} filters={registerFilters} setFilters={setRegisterFilters} schools={schoolOptions} revision={revision} onAudit={id=>{setAuditCallId(id);switchView('audit')}}/>}
+    {view==='mapping'&&<MappingView tab={mappingTab} setTab={setMappingTab} schools={schoolOptions} isHead={me.isHead||me.capabilities.isTenantWide} revision={revision} refresh={refresh}/>}
+    {view==='audit'&&<AuditView periodQuery={periodQuery} callId={auditCallId} setCallId={setAuditCallId} schools={schoolOptions} revision={revision}/>}
+    {!isRegisterView&&<><div className="nk-panel p-4 space-y-3"><div className="flex flex-wrap items-end gap-3">
       {!specialized&&<><label className="flex flex-col gap-1 text-xs">Report view<select className={field} value={filters.mode} disabled={view==='school-coverage'} onChange={e=>update('mode',e.target.value)}><option value="pending">Pending now · all ages</option><option value="portfolio">All mapped opportunities</option><option value="cohort">Opportunity cohort</option><option value="activity">Period activity</option></select></label>
       <label className="flex flex-col gap-1 text-xs">Period<select className={field} value={filters.window} onChange={e=>update('window',e.target.value)}><option value="reporting">Department reporting period</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="custom">Custom dates</option></select></label>
       {filters.window==='custom'&&<><label className="text-xs">From <input aria-label="From date" type="date" className={field} value={filters.from||''} onChange={e=>update('from',e.target.value)}/></label><label className="text-xs">To <input aria-label="To date" type="date" className={field} value={filters.to||''} onChange={e=>update('to',e.target.value)}/></label></>}
@@ -101,15 +139,15 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
     </div>}{!specialized&&<details><summary className="cursor-pointer text-sm">Status, quality and exception filters</summary><div className="flex flex-wrap gap-3 pt-3">
       {select('workState','Work state',[['PENDING','Pending'],['SUBMITTED','Submitted'],['CLOSED_WITHOUT_SUBMISSION','Closed without submission']])}
       {select('stage','Detailed stage',stages.map(s=>[s,label(s)]))}
-      {select('relevance','Relevance',[['confirmed','Matched or marked relevant'],['origin','Origin intake'],['historical-work','Recorded historical work'],['dismissed','Manually not relevant'],['ad-hoc','Ad-hoc']])}
+      {select('relevance','Relevance',[['confirmed','Matched or marked relevant'],['mapped','Mapped to the school'],['origin','Origin intake'],['historical-work','Recorded historical work'],['dismissed','Manually not relevant'],['ad-hoc','Ad-hoc']])}
       {select('exception','Exceptions',[['matched-unallocated','Matched researchers but no allocation'],['untouched','Relevant call untouched'],['approached-unallocated','Researchers approached but no allocation'],['unallocated-no-matches','Matching completed with no suitable researcher'],['no-next-action','Pending application without next action'],['overdue','Overdue'],['no-follow-up','No faculty follow-up'],['missing-submission-proof','Missing submission evidence'],['missing-deadline','Missing agency deadline']])}
       {select('horizon','Deadline window',[['7','Within 7 days / overdue'],['14','Within 14 days / overdue'],['21','Within 21 days / overdue'],['30','Within 30 days / overdue']])}
       {select('waitingWith','Waiting with',['FACULTY','DSR','REVIEWER','APPROVER','AGENCY'].map(s=>[s,label(s)]))}
-      {select('responsibilityType','Responsibility',[['ORIGIN_REVIEW','Origin-school intake review'],['MATCHED_FOLLOW_UP','Matched-school follow-up']])}
+      {select('responsibilityType','Responsibility',[['ORIGIN_REVIEW','Origin-school intake review'],['MAPPED_REVIEW','Mapped-school review'],['MATCHED_FOLLOW_UP','Matched-school follow-up']])}
       {select('actionClass','Action class',[['DSR_ACTION_REQUIRED','DSR action required'],['WAITING_ON_FACULTY','Waiting on faculty'],['WAITING_ON_REVIEWER_APPROVER','Waiting on reviewer / approver'],['WAITING_ON_AGENCY','Waiting on agency'],['SYSTEM_PROCESSING','System processing'],['COMPLETED','Completed'],['DATA_GAP','Data gap']])}
       {select('ageDays','Age',[['3','3+ days since activity'],['7','7+ days since activity'],['14','14+ days since activity'],['30','30+ days since activity']])}
     </div></details>}{view==='incoming'&&select('actionClass','Intake action',[['DSR_ACTION_REQUIRED','DSR action required'],['SYSTEM_PROCESSING','System processing'],['COMPLETED','Completed'],['DATA_GAP','Data gap']])}<p className="nk-sub">{specialized?'Current intake events or corrective actions; period filters do not apply. ':''}{!specialized&&(filters.mode==='pending'?'Outstanding applications and open unallocated opportunities, including older work.':filters.mode==='portfolio'?'Every currently mapped call–school opportunity as of the report date. The selected period does not hide older or resolved calls.':filters.mode==='cohort'?'Opportunities first evidenced in the selected period, followed to their latest outcome. Unknown first-seen dates are excluded, not guessed.':'Applications with allocations, external faculty contacts, submissions or action completions in the selected period. Activity totals below count events within that period.')}</p></div>
-    <div className="flex justify-between gap-3 text-xs"><span>{data?`${data.windowLabel} · India time · Report as of ${new Date(data.asOf).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}`:''}</span><div className="flex gap-2"><HelpButton help="Recalculate this report from the latest saved activity while keeping your filters." className="nk-btn-secondary nk-btn-xs" onClick={refresh}>Refresh</HelpButton><HelpButton help="Download every filtered record and summary as CSV, not only the visible page." className="nk-btn-secondary nk-btn-xs" onClick={()=>exportReport('csv')}>Export all CSV</HelpButton><HelpButton help="Download every filtered record and summary as a multi-sheet Excel workbook." className="nk-btn-secondary nk-btn-xs" onClick={()=>exportReport('xlsx')}>Export all XLSX</HelpButton></div></div>
+    <div className="flex justify-between gap-3 text-xs"><span>{data?`${data.windowLabel} · India time · Report as of ${new Date(data.asOf).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}`:''}</span><div className="flex gap-2"><HelpButton help="Recalculate this report from the latest saved activity while keeping your filters." className="nk-btn-secondary nk-btn-xs" onClick={refresh}>Refresh</HelpButton><HelpButton help="Download this report as shown, every page, with its filters and a Definitions sheet." className="nk-btn-secondary nk-btn-xs" onClick={()=>exportReport('csv')}>Export CSV</HelpButton><HelpButton help="Download this report as shown, every page, as Excel with a Definitions sheet." className="nk-btn-secondary nk-btn-xs" onClick={()=>exportReport('xlsx')}>Export XLSX</HelpButton><HelpButton help="Download the complete multi-sheet workbook: workbench, summary, gaps, matching evidence, applications, actions, performance, weekly movement and faculty coverage." className="nk-btn-secondary nk-btn-xs" onClick={()=>exportReport('xlsx',true)}>Complete workbook</HelpButton></div></div>
     {(error||exportError)&&<p role="alert" className="text-red-700">{error||exportError}</p>}
     {loading&&<p role="status" className="nk-sub">Loading report…</p>}
     {data&&!error&&<>
@@ -143,6 +181,7 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
         {(data.members||[]).map((m:any)=><tr key={m.id}>{[m.name,m.opening,m.newWork,m.reopened,m.transfersIn,m.resolved,m.transfersOut,m.closing,m.reconciled===null?'Incomplete':m.reconciled?'Yes':'Check required'].map((v,i)=><Cell key={i}>{v}</Cell>)}</tr>)}
       </Table><h3 className="font-medium mt-4">Urgent decisions and blockers</h3>{data.urgentActions?.map(a=><p key={a.id} className="mt-2"><button title={a.application_id?'Open the application and resolve this urgent action.':'This call-level action has no application detail panel.'} className="text-cobalt-700" disabled={!a.application_id} onClick={()=>setDetail(a.application_id)}>{a.title}</button> · {a.owner_name} · {date(a.due_at)} · {a.blocker||'Overdue action'}</p>)}<h3 className="font-medium mt-4">Urgent untouched or unallocated opportunities</h3>{data.urgentOpportunities?.map(c=><p key={`${c.schoolId}:${c.id}`} className="mt-2">{c.memberName} · {c.schoolName} · {c.title} · {c.matchedFaculty} matches · {c.gaps.map((g:string)=>label(g)).join(', ')} · deadline {date(c.deadline)}</p>)}{!data.urgentOpportunities?.length&&<p className="nk-sub">No urgent opportunity-action gaps in this view.</p>}</section>}
     </>}
+    </>}
     {detail&&<ApplicationPanel id={detail} query={detailQuery} onClose={closeDetail} onSaved={refresh}/>}
     {personDetail&&<PersonCallsPanel person={personDetail} query={detailQuery} onSaved={refresh} onClose={()=>setPersonDetail(null)}/>}
   </div>
@@ -151,13 +190,13 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
 function Workbench({rows,headSummary,lens,query,people,schools,coverageProblems,revision,refresh,onOpen,onView,onFocus}:{rows:Report['workbench'];headSummary:any;lens:string;query:string;people:Person[];schools:Array<{id:string;name:string}>;coverageProblems:any[];revision:number;refresh:()=>void;onOpen:(id:string)=>void;onView:(view:string)=>void;onFocus:(focus:string)=>void}) {
   const [open,setOpen]=useState<Record<string,boolean>>({})
   const focus=new URLSearchParams(query).get('queue')||new URLSearchParams(query).get('signal')||'';const setFocus=onFocus
-  const queues=[['ACTION_OVERDUE','Action overdue'],['CLOSING_SOON','Closing soon'],['NEW_TO_REVIEW','New review'],['WAITING_ON_OTHERS','Waiting'],['IN_PROGRESS','In progress'],['DATA_ROUTING','Data problems'],['COMPLETED','Completed']]
+  const queues=[['ACTION_OVERDUE','Action overdue'],['CLOSING_SOON','Closing soon'],['NEW_TO_REVIEW','New to review'],['ALLOCATION_PENDING','Allocation pending'],['WAITING_ON_OTHERS','Waiting'],['IN_PROGRESS','In progress'],['DATA_ROUTING','Data problems'],['COMPLETED','Completed']]
   const shown=rows.filter(row=>!focus||row.responsibility.queue===focus||Boolean((row.responsibility as any)[focus]))
   const groups=new Map<string,typeof rows>()
   for(const row of shown){const key=row.schoolId+':'+row.callId;groups.set(key,[...(groups.get(key)||[]),row])}
   return <div className="space-y-4">
-    <section className="nk-panel p-4"><h2 className="font-semibold">{lens==='department'?'Department control room':'My school desk'}</h2>
-      <p className="nk-sub">Counts below are duties. Each call is shown once per school, with its separate duties. Primary ownership and current cover are shown separately.</p>
+    <section className="nk-panel p-4"><h2 className="font-semibold">{lens==='department'?'My Actions · department':'My Actions'}</h2>
+      <p className="nk-sub">All outstanding work whatever its entry date, most urgent first: overdue, closing soon, new to review, allocation pending, then waiting and follow-ups. Counts are duties; each call shows once per school.</p>
       <div className="mt-3 flex flex-wrap gap-2"><button className="nk-btn-secondary nk-btn-sm" onClick={()=>setFocus('')}>{focus?'Clear duty filter':`All duties (${rows.length})`}</button>{queues.filter(([q])=>rows.some(r=>r.responsibility.queue===q)).map(([q,title])=><button key={q} aria-pressed={focus===q} className={focus===q?'nk-btn-primary nk-btn-sm':'nk-btn-secondary nk-btn-sm'} onClick={()=>setFocus(q)}>{title} ({rows.filter(r=>r.responsibility.queue===q).length})</button>)}</div>
       {lens==='department'&&<div className="mt-3 flex flex-wrap gap-2">{[['firstReviewOverdue','Late first review'],['untouchedOverdue','Untouched'],['silentLiveWork','Silent live work'],['facultyChaseDue','Faculty chase due']].map(([key,title])=><button className="nk-btn-secondary nk-btn-sm" key={key} onClick={()=>setFocus(key)}>{title} ({headSummary?.[key]??0})</button>)}<button className="nk-btn-secondary nk-btn-sm" onClick={()=>onView('corrective-actions')}>Corrective actions ({headSummary?.correctiveActions?.overdue??0} overdue)</button><button className="nk-btn-secondary nk-btn-sm" onClick={()=>onView('coverage')}>Faculty coverage</button><button className="nk-btn-secondary nk-btn-sm" onClick={()=>onView('incoming')}>Incoming and unrouted calls</button></div>}
     </section>
@@ -168,7 +207,7 @@ function Workbench({rows,headSummary,lens,query,people,schools,coverageProblems,
       <p className="text-sm">Primary: {row.memberName}{row.coverage.isAway?' (on leave)':''} · Responsible now: {row.coverage.responsible?.name||row.coverage.responsible?.email||'Unassigned'}{row.coverage.transferred?' (transferred)':''} · Cover: {row.coverage.covering?.name||row.coverage.covering?.email||'No active handover'}{row.coverage.uncovered?' · Head action required':''}</p>
       {row.isExpired&&<p className="text-sm text-amber-800">Expired{row.retainedBecauseLiveWork?' — outstanding work retained':''}</p>}
       {duties.map(d=><div className="mt-3 border-l-2 border-cobalt-200 pl-3 text-sm" key={d.workItemId}>
-        <p className="font-medium">{d.responsibility.responsibilityType==='ORIGIN_REVIEW'?'Origin intake review':'Researcher follow-up'} · {label(d.responsibility.queue)}</p>
+        <p className="font-medium">{d.responsibility.responsibilityType==='ORIGIN_REVIEW'?'Origin intake review':d.responsibility.responsibilityType==='MAPPED_REVIEW'?'School review':'Researcher follow-up'} · {label(d.responsibility.queue)}</p>
         <p>{d.responsibility.nextAction?.title||d.responsibility.completionReason} · {d.responsibility.nextAction?.owner_name||d.memberName} · due {date(d.responsibility.nextAction?.due_at as string)}</p>
         <p className="nk-sub">Waiting with: {label(d.responsibility.waitingWith||'DSR')} · Blocker: {d.responsibility.nextAction?.blocker||'None recorded'} · {d.responsibility.daysSinceActivity??'Unknown'} days since activity</p>
         {d.responsibility.overdueObligation&&<p className="text-red-700">Overdue obligation: {d.responsibility.overdueObligation.title} · {date(d.responsibility.overdueObligation.due_at as string)}</p>}
@@ -201,8 +240,8 @@ function ResponsibilityControl({schoolId,callId,onSaved}:{schoolId:string;callId
 function CoverageCorrection(props:{schoolId:string;onSaved:()=>void}){return <ResponsibilityControl {...props}/>}
 function TransferControl(props:{schoolId:string;callId:string;onSaved:()=>void}){return <ResponsibilityControl {...props}/>}
 function IncomingRows({data,page,setPage,refresh}:{data:Payload;page:number;setPage:(page:number)=>void;refresh:()=>void}){
-  return <section className="nk-panel"><p className="p-3 nk-sub">One row per intake event. {data.incomingCounts?.total??0} arrivals · {data.incomingCounts?.action??0} need action · {data.incomingCounts?.processing??0} processing. Duplicate submissions retain their origin-school duty.</p><Table head={['Incoming call','Origin / owner','State','Required action']}>
-    {(data.rows||[]).map(r=><tr key={r.id}><Cell>{r.callId?<Link className="text-cobalt-700" href={`/funding-dept/calls/${r.callId}?school=${r.schoolId||''}`}>{r.title}</Link>:r.title}<p className="nk-sub">Arrived {date(r.enteredAt)} · deadline {date(r.deadline)}</p>{r.duplicate&&<span className="nk-badge">Duplicate linked</span>}</Cell><Cell>{r.schoolName||'Origin missing'}<p>{r.ownerName||'No owner'}</p><p className="nk-sub">{r.source?label(r.source):'Attribution missing'}</p></Cell><Cell>{label(r.actionClass)}<p className="nk-sub">{label(r.status)}</p></Cell><Cell>{r.nextAction}{r.error&&<p className="text-red-700">{r.error}</p>}{data.lens==='department'&&r.callId&&<OriginCorrection callId={r.callId} schools={data.options.schools} onSaved={refresh}/>}<Link href="/funding/imports" className="block text-cobalt-700 underline">Open intake workspace</Link></Cell></tr>)}
+  return <section className="nk-panel"><p className="p-3 nk-sub">One row per intake event in the period. {data.incomingCounts?.intakeEvents??0} intake events · {data.incomingCounts?.uniqueCalls??0} unique calls · {data.incomingCounts?.duplicates??0} duplicates · {data.incomingCounts?.action??0} need action · {data.incomingCounts?.processing??0} processing · {data.incomingCounts?.reviewedAllocationPending??0} reviewed, allocation pending.</p><Table head={['Incoming call','Origin / owner','State','Required action']}>
+    {(data.rows||[]).map(r=><tr key={r.id}><Cell>{r.callId?<Link className="text-cobalt-700" href={`/funding-dept/calls/${r.callId}?school=${r.schoolId||''}`}>{r.title}</Link>:r.title}<p className="nk-sub">Arrived {date(r.enteredAt)} · deadline {date(r.deadline)}</p>{(r.duplicate||r.repeatArrival)&&<span className="nk-badge">Duplicate arrival</span>}</Cell><Cell>{r.schoolName||'Origin missing'}<p>{r.ownerName||'No owner'}</p><p className="nk-sub">{r.source?label(r.source):'Attribution missing'}</p></Cell><Cell>{label(r.actionClass)}<p className="nk-sub">{r.reviewLabel||label(r.status)}</p></Cell><Cell>{r.nextAction}{r.error&&<p className="text-red-700">{r.error}</p>}{data.lens==='department'&&r.callId&&<OriginCorrection callId={r.callId} schools={data.options.schools} onSaved={refresh}/>}<Link href="/funding/imports" className="block text-cobalt-700 underline">Open intake workspace</Link></Cell></tr>)}
   </Table><Pager page={page} total={data.total} onChange={setPage}/></section>
 }
 function CorrectiveRows({rows,people,query,refresh,onStatus}:{rows:any[];people:Person[];query:string;refresh:()=>void;onStatus:(status:string)=>void}){

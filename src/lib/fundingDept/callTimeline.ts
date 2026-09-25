@@ -32,6 +32,7 @@ export type TimelineKind =
   | 'MILESTONE'
   | 'NUDGE'
   | 'PROPOSAL'
+  | 'DEPARTMENT'
 
 export interface TimelineEvent {
   /** ISO timestamp. */
@@ -136,6 +137,21 @@ export interface TimelineSources {
     created_at: Date | string
     actor: Person | null
     proposal: { id: string; title: string; assignment_id: string | null; pi: Person | null }
+  }>
+  /**
+   * The department's own audit trail for this call (dsr_events): which school
+   * it was mapped to and why, ownership transfers, closure reasons, named
+   * actions, origin corrections. Optional so existing callers need not change.
+   */
+  departmentEvents?: Array<{
+    id: string
+    entity_type: string
+    kind: string
+    reason: string | null
+    occurred_at: Date | string
+    actor: Person | null
+    school_name: string | null
+    after_data: any
   }>
 }
 
@@ -479,6 +495,7 @@ function fromNotifications(rows: TimelineSources['notifications']): TimelineEven
 
 /** Deterministic order for events sharing a timestamp: cause before effect. */
 const KIND_ORDER: TimelineKind[] = [
+  'DEPARTMENT',
   'TRIAGE',
   'SHORTLISTED',
   'APPROACHED',
@@ -559,6 +576,33 @@ function fromProposalEvents(rows: TimelineSources['proposalEvents']): TimelineEv
   return events
 }
 
+/** One line per department audit event; REVIEW duplicates the TRIAGE follow-up row, so it is left to that. */
+export function departmentEventTitle(row: { entity_type: string; kind: string; school_name: string | null; after_data: any }): string | null {
+  const school = row.school_name || 'a school'
+  const after = row.after_data || {}
+  switch (`${row.entity_type}:${row.kind}`) {
+    case 'MAPPING:MAPPED': return after.source === 'ORIGIN' ? `Mapped to ${school} as its origin school` : `Mapped to ${school}${after.reason ? ` — ${after.reason}` : ''}`
+    case 'MAPPING:ADDED_BY_HEAD': return `DSR head added ${school}`
+    case 'MAPPING:REINSTATED': return `DSR head reinstated ${school}`
+    case 'MAPPING:ENDED': return `DSR head ended ${school}'s responsibility`
+    case 'RESPONSIBILITY:TRANSFER': return `Responsibility in ${school} transferred`
+    case 'DISPOSITION:UPDATED': return `${school} recorded no uptake: ${String(after.disposition || '').toLowerCase().replace(/_/g, ' ')}`
+    case 'ORIGIN_ATTRIBUTION:CORRECTED': return `Origin school corrected to ${after.origin_school_name || school}`
+    case 'ACTION:CREATED': return `Action set in ${school}: ${after.title || ''}`
+    case 'ACTION:COMPLETED': return `Action completed in ${school}: ${after.title || ''}`
+    case 'ACTION:CANCELLED': return `Action cancelled in ${school}: ${after.title || ''}`
+    case 'ACTION:REASSIGNED': return `Action reassigned in ${school}: ${after.title || ''}`
+    default: return null
+  }
+}
+
+function fromDepartmentEvents(rows: NonNullable<TimelineSources['departmentEvents']>): TimelineEvent[] {
+  return rows.flatMap(row => {
+    const title = departmentEventTitle(row)
+    return title ? [{ at: iso(row.occurred_at), kind: 'DEPARTMENT' as const, title, detail: row.reason, actor: who(row.actor), assignmentId: null, refId: row.id }] : []
+  })
+}
+
 export function buildTimeline(sources: TimelineSources, caps: TimelineCaps = {}): Timeline {
   const perSource: Array<[keyof TimelineSources, TimelineEvent[]]> = [
     ['followUps', fromFollowUps(sources.followUps)],
@@ -568,6 +612,7 @@ export function buildTimeline(sources: TimelineSources, caps: TimelineCaps = {})
     ['milestones', fromMilestones(sources.milestones)],
     ['notifications', fromNotifications(sources.notifications)],
     ['proposalEvents', fromProposalEvents(sources.proposalEvents || [])],
+    ['departmentEvents', fromDepartmentEvents(sources.departmentEvents || [])],
   ]
 
   // The horizon: the newest "oldest row" among the sources that were cut off.

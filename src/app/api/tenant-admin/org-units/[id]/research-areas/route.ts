@@ -9,6 +9,7 @@ import {
   requireTenantRoles,
   requireTenantUser,
 } from '@/lib/auth/tenantAccess'
+import { remapSchoolOpenCallsQuietly } from '@/lib/fundingDept/callSchoolMapping'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -189,6 +190,10 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       data: { keywords },
     })
   })
+
+  // The school's still-open calls are re-mapped against its new profile.
+  // Add-only: narrowing a profile never takes a call away from a school.
+  remapSchoolOpenCallsQuietly(context.tenantId, [unit.id], context.user.id)
 
   try {
     await prisma.auditLog.create({

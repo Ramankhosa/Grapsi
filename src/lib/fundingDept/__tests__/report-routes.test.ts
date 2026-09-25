@@ -17,6 +17,17 @@ describe('role report routes',()=>{
     expect((await reportRoute(request,{params:{report}}))?.status).toBe(200)
     expect(mocks.handler).toHaveBeenCalledWith(request,report)
   })
+  it.each(['register','mapping','audit','overview','governance'])('refuses a coordinator asking %s for another school with 403',async report=>{
+    mocks.access.mockResolvedValue({context:{tenantId:'t1',user:{id:'member'}},schoolIds:['s1'],department:false})
+    const response=await reportRoute(new NextRequest(`http://localhost/api/funding-dept/reports/${report}?schoolId=s2`),{params:{report}})
+    expect(response?.status).toBe(403)
+    expect(mocks.handler).not.toHaveBeenCalled()
+  })
+  it('keeps the unclassified queue with the department head',async()=>{
+    mocks.access.mockResolvedValue({context:{tenantId:'t1',user:{id:'member'}},schoolIds:['s1'],department:false})
+    const response=await reportRoute(new NextRequest('http://localhost/api/funding-dept/reports/mapping?tab=unclassified'),{params:{report:'mapping'}})
+    expect(response?.status).toBe(403)
+  })
   it('denies an out-of-scope person before reading matching evidence',async()=>{
     mocks.access.mockResolvedValue({context:{tenantId:'t1',user:{id:'member'}},schoolIds:['s1']})
     mocks.person.mockResolvedValue({id:'person',researcher_profile:{org_unit:{path:['s2']}}})

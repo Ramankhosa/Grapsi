@@ -4,7 +4,9 @@ import { z } from 'zod'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { getMembership } from '@/lib/fundingDept/membershipService'
 import { canOpenSchoolWork } from '@/lib/fundingDept/shared'
+import { ensureAllocationAction } from '@/lib/fundingDept/managementActions'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@/lib/prisma-generated'
 
 export const dynamic = 'force-dynamic'
 
@@ -152,7 +154,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Every review decision is on the department audit trail, and a review must
+  // leave either a closure reason (NOT_RELEVANT requires a note above) or a next
+  // action. Rather than refuse a one-click "relevant", create the obvious next
+  // action when none is open: allocate someone, or close the call with a reason.
+  let nextAction: unknown = null
+  if (['RELEVANT', 'SHORTLISTED', 'NOT_RELEVANT'].includes(payload.status)) {
+    const schoolId = (await prisma.tenantOrgUnit.findUnique({ where: { id: unit.id }, select: { path: true } }))?.path[0] || unit.id
+    try {
+      await prisma.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
+        VALUES(${context.tenantId},${schoolId},'REVIEW',${call.id},${context.user.id},${payload.status},${JSON.stringify({ status: previous?.status || 'NEW' })}::jsonb,
+          ${JSON.stringify({ status: payload.status, orgUnitId: unit.id })}::jsonb,${payload.note || null})`)
+      if (payload.status !== 'NOT_RELEVANT') nextAction = await ensureAllocationAction(context.tenantId, schoolId, call.id, context.user.id)
+    } catch (error) {
+      console.warn('Call triage: review record failed', error)
+    }
+  }
+
   return NextResponse.json({
+    nextAction,
     triage: {
       id: triage.id,
       fundingCallId: triage.funding_call_id,
@@ -163,3 +183,4 @@ export async function POST(request: NextRequest) {
     },
   })
 }
+

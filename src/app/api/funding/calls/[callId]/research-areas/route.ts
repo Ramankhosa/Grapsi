@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
+import { mapCallToSchoolsQuietly } from '@/lib/fundingDept/callSchoolMapping'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -214,6 +215,9 @@ export async function PUT(request: NextRequest, { params }: { params: { callId: 
       })
     }
   })
+
+  // Add-only re-mapping: schools already responsible keep the call.
+  mapCallToSchoolsQuietly(call.id)
 
   return NextResponse.json({ ok: true, manualAreas: areas.length })
 }

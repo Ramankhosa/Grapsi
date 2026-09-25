@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { assignmentInclude, serializeAssignment } from '@/lib/assignments/shared'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
+import { mapCallToSchools } from '@/lib/fundingDept/callSchoolMapping'
 import { canReviewDept } from '@/lib/fundingDept/shared'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
@@ -187,6 +188,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { callId
       await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
         VALUES(${context.tenantId},${school.id},'ORIGIN_ATTRIBUTION',${call.id},${context.user.id},'CORRECTED',${JSON.stringify({call,intakeEvidence:priorJobs})}::jsonb,${JSON.stringify(after)}::jsonb,${input.reason})`)
     })
+    // The corrected origin school owns the call from now on. Add-only: the old
+    // origin's mapping stays until the head ends it with a reason.
+    await mapCallToSchools(call.id,{tenantIds:[context.tenantId],actorId:context.user.id}).catch(error=>console.warn('[DSR MAPPING] origin correction mapping failed',error))
     return NextResponse.json({ saved:true, originSchool:school })
   } catch (error) {
     return NextResponse.json({ error:error instanceof z.ZodError?'Choose a school and explain the correction.':error instanceof Error?error.message:'Could not correct origin school.' }, { status:400 })

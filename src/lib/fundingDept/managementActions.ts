@@ -3,6 +3,8 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { applicationState, evidenceFingerprint, hasSubmissionEvidence, type ApplicationRow } from './managementRules'
 import type { ActionRow } from './managementService'
+import { getDeptSettings } from './settings'
+import { isMemberAway } from './shared'
 
 export class ManagementError extends Error { constructor(message:string,public status=400){super(message)} }
 export async function resolveTarget(tenantId:string,schoolId:string,applicationId?:string|null,callId?:string|null) {
@@ -88,4 +90,25 @@ export async function verifySubmission(tenantId:string,schoolId:string,applicati
       VALUES(${tenantId},${schoolId},'VERIFICATION',${applicationId},${actorId},'VERIFIED',${note},${JSON.stringify({fingerprint})}::jsonb)`)
     return {verified:true}
   })
+}
+
+/**
+ * The default next action a "relevant" review leaves behind, owned by whoever
+ * is responsible for the school now (the actor when nobody covers it), due by
+ * the department's untouched threshold or the call deadline, whichever is first.
+ */
+export async function ensureAllocationAction(tenantId: string, schoolId: string, callId: string, actorId: string) {
+  const open = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM dsr_actions
+    WHERE tenant_id=${tenantId} AND school_id=${schoolId} AND call_id=${callId} AND application_id IS NULL AND status IN ('OPEN','ACKNOWLEDGED') LIMIT 1`)
+  if (open.length) return null
+  const [settings, call, cover] = await Promise.all([
+    getDeptSettings(tenantId),
+    prisma.fundingCall.findUnique({ where: { id: callId }, select: { close_date: true, deadlineAt: true } }),
+    prisma.fundingDeptSchoolAssignment.findFirst({ where: { tenant_id: tenantId, org_unit_id: schoolId, is_deputy: false, member: { is_active: true } }, include: { member: true } }),
+  ])
+  const owner = cover && !isMemberAway(cover.member) ? cover.member.user_id : actorId
+  const byThreshold = Date.now() + settings.untouchedDays * 86400000
+  const deadline = (call?.close_date || call?.deadlineAt)?.getTime()
+  const due = new Date(deadline && deadline > Date.now() ? Math.min(byThreshold, deadline) : byThreshold)
+  return saveAction(tenantId, schoolId, actorId, { callId, title: 'Allocate faculty, or close with a reason', ownerUserId: owner, waitingWith: 'DSR', dueAt: due.toISOString(), isNext: true })
 }

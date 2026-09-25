@@ -299,10 +299,18 @@ export async function classifyFundingCall(
  * `dispatchFundingAlertsQuietly`, which solves the same problem for alerts.
  */
 export function classifyFundingCallQuietly(fundingCallId: string): void {
-  void classifyFundingCall(fundingCallId).catch((error) => {
-    console.warn(
-      `[CLASSIFY] Could not classify call ${fundingCallId}:`,
-      error instanceof Error ? error.message : String(error)
-    )
-  })
+  void classifyFundingCall(fundingCallId)
+    .catch((error) => {
+      console.warn(
+        `[CLASSIFY] Could not classify call ${fundingCallId}:`,
+        error instanceof Error ? error.message : String(error)
+      )
+    })
+    // Map the call to its schools once classification has settled, whatever it
+    // concluded: an existing or manual classification returns early without
+    // writing, and the origin school is mapped even when nothing classified.
+    .finally(async () => {
+      const { mapCallToSchoolsQuietly } = await import('@/lib/fundingDept/callSchoolMapping')
+      mapCallToSchoolsQuietly(fundingCallId)
+    })
 }

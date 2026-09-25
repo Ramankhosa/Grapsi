@@ -81,4 +81,20 @@ describe('role workbench responsibility resolver', () => {
     expect(isExpiredInIndia('2026-09-21T23:00:00Z',new Date('2026-09-22T18:29:59Z'))).toBe(false)
     expect(isExpiredInIndia('2026-09-21T23:00:00Z',new Date('2026-09-22T18:30:00Z'))).toBe(true)
   })
+
+  it('keeps a reviewed-but-unallocated duty open in its own queue, not completed',()=>{
+    const reviewed=resolveResponsibility({responsibilityType:'ORIGIN_REVIEW',asOf,triageDecisionRecorded:true,reviewState:'REVIEWED_ALLOCATION_PENDING',firstSeenAt:'2026-09-21',firstTouchAt:'2026-09-21'})
+    expect(reviewed).toMatchObject({queue:'ALLOCATION_PENDING',complete:false})
+    expect(reviewed.nextAction?.title).toBe('Allocate faculty, or close with a reason')
+    expect(resolveResponsibility({responsibilityType:'ORIGIN_REVIEW',asOf,reviewState:'ALLOCATED',assignments:1}).queue).toBe('COMPLETED')
+    expect(resolveResponsibility({responsibilityType:'ORIGIN_REVIEW',asOf,reviewState:'CLOSED_NO_ALLOCATION',dispositionRecorded:true}).queue).toBe('COMPLETED')
+  })
+
+  it('treats a mapped school review like an origin review, without an origin data gap',()=>{
+    const mapped=resolveResponsibility({responsibilityType:'MAPPED_REVIEW',asOf,reviewState:'NOT_REVIEWED',firstSeenAt:'2026-09-24',matchingComplete:false})
+    expect(mapped).toMatchObject({queue:'NEW_TO_REVIEW',complete:false})
+    expect(mapped.nextAction?.title).toBe('Review relevance, then allocate or close with a reason')
+    const late=resolveResponsibility({responsibilityType:'MAPPED_REVIEW',asOf,reviewState:'NOT_REVIEWED',firstSeenAt:'2026-09-10'})
+    expect(late.queue).toBe('ACTION_OVERDUE')
+  })
 })

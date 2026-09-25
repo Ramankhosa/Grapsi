@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { actorHasPlatformReadAccess, requireFundingActor } from '@/lib/funding/access';
+import { mapCallToSchoolsQuietly } from '@/lib/fundingDept/callSchoolMapping';
 import { fundingCallResearchAreaTaxonomyService } from '@/lib/services/fundingCallResearchAreaTaxonomyService';
 
 export const runtime = 'nodejs';
@@ -50,6 +51,9 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       fundingCallId: params.id,
       taxonomyAreaIds: parsed.taxonomyAreaIds,
     });
+    // A corrected classification can make the call new schools' business.
+    // Add-only: schools already mapped keep their responsibility.
+    mapCallToSchoolsQuietly(params.id);
 
     return NextResponse.json({ success: true, mappings });
   } catch (error) {

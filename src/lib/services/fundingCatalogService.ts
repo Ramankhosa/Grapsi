@@ -853,6 +853,12 @@ export class FundingCatalogService {
       try {
         const { classifyFundingCall } = await import('@/lib/funding/disciplineClassifier');
         await classifyFundingCall(fundingCallId);
+        // Store which schools the call is now the business of before anyone is
+        // told about it, so the notice and the coordinator queue agree.
+        const { mapCallToSchools } = await import('@/lib/fundingDept/callSchoolMapping');
+        await mapCallToSchools(fundingCallId).catch((error) =>
+          console.warn(`[DSR MAPPING] Could not map call ${fundingCallId}:`, error instanceof Error ? error.message : String(error))
+        );
         const { notifyCoveringOfficers } = await import('@/lib/fundingDept/newCallNoticeService');
         await notifyCoveringOfficers(fundingCallId);
       } catch (error) {

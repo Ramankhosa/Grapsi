@@ -1,29 +1,9 @@
 /** Clones schema only into a disposable local database. Never copies or changes production data. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import path from 'node:path'
-import dotenv from 'dotenv'
-import { PrismaClient } from '@prisma/client'
+import { withDisposableDb } from './lib/disposableDb'
 
 async function main() {
-  let source=process.env.DATABASE_URL||''
-  for(const file of ['.env','.env.local'])if(existsSync(file))source=dotenv.parse(readFileSync(file)).DATABASE_URL||source
-  const url=new URL(source)
-  assert(['localhost','127.0.0.1','[::1]'].includes(url.hostname),'Only local PostgreSQL is allowed.')
-  const database=`grapsi_dsr_verify_${Date.now()}`
-  const bin=process.env.PG_BIN||'C:\\Program Files\\PostgreSQL\\17\\bin'
-  const env={...process.env,PGHOST:url.hostname,PGPORT:url.port||'5432',PGUSER:decodeURIComponent(url.username),PGPASSWORD:decodeURIComponent(url.password)}
-  const psql=(db:string,args:string[],input?:Buffer|string)=>execFileSync(path.join(bin,'psql.exe'),['-X','-v','ON_ERROR_STOP=1','-d',db,...args],{env,input,maxBuffer:30*1024*1024,stdio:['pipe','pipe','pipe']})
-  const schema=execFileSync(path.join(bin,'pg_dump.exe'),['--schema-only','--no-owner','--no-acl','-d',url.pathname.slice(1)],{env,maxBuffer:30*1024*1024})
-  psql('postgres',['-c',`CREATE DATABASE "${database}"`])
-  url.pathname=`/${database}`
-  const db=new PrismaClient({datasources:{db:{url:url.toString()}}})
-  try {
-    psql(database,[],schema)
-    for(const migration of ['20260922120000_dsr_role_workbench','20260922150000_dsr_reporting_corrections'])psql(database,['-f',path.resolve('prisma/migrations',migration,'migration.sql')])
-    assert.equal((await db.$queryRawUnsafe<Array<{name:string}>>('SELECT current_database() name'))[0].name,database)
-    ;(globalThis as any).prisma=db
+  await withDisposableDb(async ({ db, database }) => {
     const { getManagementReport }=await import('../src/lib/fundingDept/managementService')
     const { saveAction }=await import('../src/lib/fundingDept/managementActions')
     const { writeReportSnapshot,readReportSnapshot }=await import('../src/lib/fundingDept/reportSnapshot')
@@ -93,11 +73,6 @@ async function main() {
     report=await run({schoolId:other.id})
     ok(!callRows(report).some(c=>c.id===matched.id),'Changed research profile deactivates obsolete discovery matches')
     console.log(`Verified ${checks} isolated DSR reporting assertions.`)
-  } finally {
-    await db.$disconnect()
-    assert(/^grapsi_dsr_verify_\d+$/.test(database))
-    psql('postgres',['-c',`DROP DATABASE "${database}" WITH (FORCE)`])
-    console.log('Removed the disposable verification database; working data was not changed.')
-  }
+  })
 }
 main().catch(error=>{console.error(error);process.exitCode=1})

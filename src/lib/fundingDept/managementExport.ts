@@ -1,6 +1,29 @@
 import AdmZip from 'adm-zip'
 import type { ManagementReport } from './managementService'
 import { csvCell } from './managementRules'
+import { REPORT_DEFINITIONS, isRelevantQuality } from './reportDefinitions'
+
+export type ExportTable = { name: string; rows: unknown[][] }
+export type ExportStamp = { report: string; snapshot?: string | null; periodLabel?: string | null; periodStart?: Date | null; periodEnd?: Date | null; filters?: Record<string, unknown>; generatedAt?: Date }
+
+const indiaTime = (value: Date) => value.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST'
+
+/**
+ * The first sheet of every export: what this file is, which snapshot and
+ * period it came from and when, so a printed number can be traced back — then
+ * the shared glossary, generated from reportDefinitions so the file and the
+ * on-screen tooltips define every term the same way.
+ */
+export function definitionsSheet(stamp: ExportStamp, extra: unknown[][] = []): ExportTable {
+  const generated = stamp.generatedAt ?? new Date()
+  return { name: 'Definitions', rows: [
+    ['Report', stamp.report], ['Snapshot ID', stamp.snapshot || 'Not recorded'],
+    ['Reporting period', stamp.periodLabel || 'All time'],
+    ['Period start (India time)', stamp.periodStart ? indiaTime(stamp.periodStart) : ''], ['Period end, exclusive (India time)', stamp.periodEnd ? indiaTime(stamp.periodEnd) : ''],
+    ['Generated (India time)', indiaTime(generated)], ['Active filters', JSON.stringify(stamp.filters || {})],
+    ...extra, [], ['Term', 'Definition'], ...REPORT_DEFINITIONS.map(d => [d.term, d.definition]),
+  ] }
+}
 export function exportTables(report:ManagementReport) {
   const workbench:unknown[][]=[['Member','School','Call ID','Call','Agency','Agency deadline','Responsibility','Priority queue','Action class','Why visible','Matched faculty','Next action','Action owner','Waiting with','Action due','Blocker','Last action by','Last activity','Days since activity','Expired','Retained because live work']]
   for(const row of report.workbench) {
@@ -18,7 +41,7 @@ export function exportTables(report:ManagementReport) {
   const matching:unknown[][]=[['Member','School','Call ID','Call','Faculty','Score','Tier','Reason','Source','Version','First seen','Inferred','Allocation status','Application work state']]
   for(const member of report.members){const s=member.totals;summaries.push(['Member',member.id,member.name,s.schools,s.callSchoolOpportunities,s.distinctCalls,s.actedOn,s.untouched,s.matchedUnallocated,s.upcoming21,s.missedUnallocatedNoSubmission,s.allocated,s.independent,s.pending,s.noNextAction,s.submitted,s.verified,s.followedUp,s.overdue,s.unallocated])
     for(const school of member.schools)for(const call of school.calls){
-      if(call.quality==='confirmed'&&(call.gaps.length||call.upcoming21))opportunityGaps.push([member.name,school.name,call.id,call.title,call.agency,call.deadline?.toISOString(),call.daysToDeadline,call.deadlineStatus,call.upcoming21,call.missedUnallocatedNoSubmission,call.missedExplanationStatus,call.hasAnySubmission,call.actionState,call.touchSignals.join(' | '),call.gaps.join(' | '),call.matchedFaculty,call.considered,call.approached,call.unallocated?'No':'Yes',call.matchCompleteness,call.disposition?.reason])
+      if(isRelevantQuality(call.quality)&&(call.gaps.length||call.upcoming21))opportunityGaps.push([member.name,school.name,call.id,call.title,call.agency,call.deadline?.toISOString(),call.daysToDeadline,call.deadlineStatus,call.upcoming21,call.missedUnallocatedNoSubmission,call.missedExplanationStatus,call.hasAnySubmission,call.actionState,call.touchSignals.join(' | '),call.gaps.join(' | '),call.matchedFaculty,call.considered,call.approached,call.unallocated?'No':'Yes',call.matchCompleteness,call.disposition?.reason])
       for(const match of call.matches)matching.push([member.name,school.name,call.id,call.title,match.faculty?.name,match.match_score,match.match_tier,match.match_reason,match.source,match.source_version,match.first_seen_at?.toISOString(),match.inferred,match.allocationStatus,match.applicationWorkState])
       if(!call.applications.length)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,'','','','','','','','','',0,call.actions.find(a=>a.is_next)?.title || '','', '', '',call.disposition?.explanation || '',call.deadline?.toISOString()])
       for(const a of call.applications)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,a.id,a.faculty?.name,a.independent?'Independent':'Allocation',a.stage,a.workState,a.submitted_at?.toISOString(),a.verification?.verified_at?.toISOString(),a.submission_reference,a.submissionRecorder?.name,a.contactEvents,a.nextAction?.title,a.nextAction?.waiting_with,a.nextAction?.owner_name,a.nextAction?.due_at?.toISOString(),a.nextAction?.blocker,a.agency_deadline?.toISOString(),a.review_deadline?.toISOString(),a.exceptions.includes('overdue'),a.currency,a.requested_amount,a.sanctioned_amount])
@@ -36,12 +59,34 @@ export function exportTables(report:ManagementReport) {
   for(const row of report.actions)actions.push([row.id,row.school_id,row.call_id,row.application_id,row.title,row.owner_name,row.waiting_with,row.status,row.is_next,row.due_at?.toISOString(),row.deadline_type,row.blocker,row.acknowledged_at?.toISOString(),row.acknowledged_by_user_id,row.completed_at?.toISOString(),row.resolution_note,row.version])
   const incoming:unknown[][]=[['Intake ID','Call ID','School','Call','Status','Action class','Next action','Owner','Arrived','Deadline','Attribution','Error'],...(report.incoming||[]).map(r=>[r.id,r.callId,r.schoolName,r.title,r.status,r.actionClass,r.nextAction,r.ownerName,r.enteredAt.toISOString(),r.deadline?.toISOString(),r.source,r.error])]
   const corrective:unknown[][]=[['Action ID','School ID','Call ID','Owner','Title','Failure type','Status','Due','Acknowledged','Resolution','Repeated in school'],...(report.correctiveActions||[]).map(r=>[r.id,r.school_id,r.call_id,r.owner_name,r.title,r.failure_type,r.status,r.due_at?.toISOString(),r.acknowledged_at?.toISOString(),r.resolution_note,r.repeatedCount])]
-  return [{name:'Definitions',rows:metadata},...(report.filters?.reportView==='incoming'?[{name:'Incoming calls',rows:incoming}]:report.filters?.reportView==='corrective-actions'?[{name:'Corrective actions',rows:corrective}]:[{name:'Workbench',rows:workbench},{name:'Summary',rows:summaries},{name:'Opportunity gaps',rows:opportunityGaps},{name:'Matching evidence',rows:matching},{name:'Applications',rows:records},{name:'Actions',rows:actions},{name:'Performance',rows:performance},{name:'Weekly movement',rows:weekly},{name:'Faculty coverage',rows:coverage}])]
+  return [{name:'Report notes',rows:metadata},{name:'Workbench',rows:workbench},{name:'Summary',rows:summaries},{name:'Opportunity gaps',rows:opportunityGaps},{name:'Matching evidence',rows:matching},{name:'Applications',rows:records},{name:'Actions',rows:actions},{name:'Performance',rows:performance},{name:'Weekly movement',rows:weekly},{name:'Faculty coverage',rows:coverage},
+    {name:'Incoming calls',rows:incoming},{name:'Corrective actions',rows:corrective}]
 }
+/**
+ * The export that matches the screen: the same rows the view shows (all pages),
+ * under the same filters. The headline count on screen, the drill-down rows and
+ * the rows in this file are therefore the same list.
+ */
+export function viewTables(view:string,report:ManagementReport,rows:any[]):ExportTable[] {
+  const all=exportTables(report)
+  const sheet=(name:string)=>all.filter(t=>t.name===name)
+  if(view==='opportunity-gaps')return [{name:'Opportunity gaps',rows:[['Member','School','Call ID','Call','Agency','Deadline','Deadline state','Review state','Days to deadline','Action state','Gap flags','Recorded matches','Researchers reviewed','Researchers approached','Formal allocations','No-uptake reason'],
+    ...rows.map(c=>[c.memberName,c.schoolName,c.id,c.title,c.agency,c.deadline?.toISOString(),c.deadlineState,c.reviewState,c.daysToDeadline,c.actionState,c.gaps.join(' | '),c.matchedFaculty,c.considered,c.approached,c.allocated,c.disposition?.reason])]}]
+  if(['pending','deadline-risk','outcomes'].includes(view))return [{name:view==='outcomes'?'Submissions':'Applications',rows:[['Application ID','School ID','Call ID','Call','Faculty','Allocation or independent','Allocated by','Stage','Submission state','Recorded submission','Verified at','Reference','Next action','Pending with','Owner','Due','Agency deadline','Overdue'],
+    ...rows.map(a=>[a.id,a.school_id,a.call_id,a.title,a.faculty?.name,a.independent?'Independent':'Allocation',a.allocatedBy?.name,a.stage,a.submitted?(a.verification?'Submitted, verified':'Submitted, unverified'):a.closed?'Closed without submission':'Not submitted',
+      a.submitted_at?.toISOString(),a.verification?.verified_at?.toISOString(),a.submission_reference,a.nextAction?.title,a.nextAction?.waiting_with,a.nextAction?.owner_name,a.nextAction?.due_at?.toISOString(),a.agency_deadline?.toISOString(),a.exceptions.includes('overdue')])]}]
+  const byView:Record<string,string[]>={workbench:['Workbench'],incoming:['Incoming calls'],'corrective-actions':['Corrective actions'],performance:['Performance'],
+    'weekly-review':['Weekly movement'],coverage:['Faculty coverage'],'member-funnel':['Summary'],'school-coverage':['Summary']}
+  return (byView[view]||['Summary']).flatMap(sheet)
+}
+
 function xml(value:unknown){return String(value??'').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function column(index:number){let n=index+1,s='';while(n){n--;s=String.fromCharCode(65+n%26)+s;n=Math.floor(n/26)}return s}
-export function managementExport(report:ManagementReport,format:'csv'|'xlsx') {
-  const tables=exportTables(report)
+/** The complete multi-sheet workbook, with its stamp. Optional: the default export matches the screen. */
+export function managementExport(report:ManagementReport,format:'csv'|'xlsx',stamp?:ExportStamp) {
+  return writeTables([definitionsSheet(stamp??{report:'Complete DSR workbook',periodStart:report.period.start,periodEnd:report.period.end,filters:report.filters as any}),...exportTables(report)],format)
+}
+export function writeTables(tables:ExportTable[],format:'csv'|'xlsx') {
   if(format==='csv')return tables.map(t=>[[t.name],...t.rows].map(row=>row.map(csvCell).join(',')).join('\r\n')).join('\r\n\r\n')
   const zip=new AdmZip();const add=(path:string,value:string)=>zip.addFile(path,Buffer.from(value))
   const ns='http://schemas.openxmlformats.org'

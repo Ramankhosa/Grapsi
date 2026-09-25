@@ -1,21 +1,20 @@
-/** Local-only, isolated tenant fixtures. No mailers, notifications or AI calls. */
+/** Isolated tenant fixtures in a disposable local database. No mailers, notifications or AI calls. */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import prisma from '../src/lib/prisma'
 import { Prisma } from '../src/lib/prisma-generated'
-import { getManagementReport } from '../src/lib/fundingDept/managementService'
-import { saveAction, verifySubmission } from '../src/lib/fundingDept/managementActions'
-import { exportTables, managementExport } from '../src/lib/fundingDept/managementExport'
-import { readReportSnapshot, writeReportSnapshot } from '../src/lib/fundingDept/reportSnapshot'
+import { withDisposableDb } from './lib/disposableDb'
 
 async function main(){
-  const host=new URL(process.env.DATABASE_URL!).hostname
-  assert(['localhost','127.0.0.1','[::1]'].includes(host),'Fixtures may run only on a local database.')
+  await withDisposableDb(async ({ db: prisma }) => {
+  const { getManagementReport } = await import('../src/lib/fundingDept/managementService')
+  const { saveAction, verifySubmission } = await import('../src/lib/fundingDept/managementActions')
+  const { exportTables, managementExport } = await import('../src/lib/fundingDept/managementExport')
+  const { readReportSnapshot, writeReportSnapshot } = await import('../src/lib/fundingDept/reportSnapshot')
   const id=`dsr-test-${randomUUID()}`;let checks=0
   const ok=(value:unknown,message:string)=>{assert(value,message);checks++;console.log(`PASS ${message}`)}
   await prisma.tenant.create({data:{id,name:'DSR isolated verification',atiId:id}})
   const now=new Date();const old=new Date(now.getTime()-60*86400000);const submitted=new Date(now.getTime()-86400000)
-  try {
+  {
     const users=await Promise.all(['primary','deputy','faculty'].map(name=>prisma.user.create({data:{tenantId:id,email:`${name}-${id}@example.invalid`,name,roles:['MANAGER']}})))
     const [primary,deputy,faculty]=users
     const [school,uncovered]=await Promise.all(['Covered','Uncovered'].map(name=>prisma.tenantOrgUnit.create({data:{tenant_id:id,name,kind:'SCHOOL'}})))
@@ -23,7 +22,7 @@ async function main(){
     const coverage=await prisma.fundingDeptSchoolAssignment.create({data:{tenant_id:id,member_id:member.id,org_unit_id:school.id,assigned_by_user_id:primary.id}})
     await prisma.fundingDeptSchoolAssignment.create({data:{tenant_id:id,member_id:backup.id,org_unit_id:school.id,is_deputy:true,assigned_by_user_id:primary.id}})
     const call=await prisma.fundingCall.create({data:{tenantId:id,createdByUserId:primary.id,updatedByUserId:primary.id,title:'Fixture funding opportunity',visibility:'TENANT_PRIVATE',status:'PUBLISHED',deadlineAt:new Date(now.getTime()-86400000),createdAt:old}})
-    for(const s of [school,uncovered])await prisma.callSchoolTriage.create({data:{tenant_id:id,org_unit_id:s.id,funding_call_id:call.id,status:'RELEVANT',created_at:old}})
+    for(const s of [school,uncovered])await prisma.callSchoolTriage.create({data:{tenant_id:id,org_unit_id:s.id,funding_call_id:call.id,status:'RELEVANT',created_at:old,decided_at:old}})
     const allocations:Array<{id:string}>=[]
     // Enough complete children to exceed a page. Unique faculty per formal allocation.
     for(let i=0;i<25;i++){
@@ -33,7 +32,7 @@ async function main(){
     const proposal=await prisma.grantProposal.create({data:{tenant_id:id,assignment_id:allocations[0].id,funding_call_id:call.id,pi_user_id:faculty.id,org_unit_id:school.id,title:'Linked submission',agency_name:'Fixture agency',created_by_user_id:deputy.id,status:'REJECTED',submitted_at:submitted,submission_reference:'ACK-001',created_at:old}})
     await prisma.grantProposal.create({data:{tenant_id:id,pi_user_id:faculty.id,org_unit_id:uncovered.id,title:'Ad-hoc independent',agency_name:'Independent agency',created_by_user_id:primary.id,status:'SUBMITTED',submitted_at:submitted,created_at:old}})
     for(const [kind,target] of [['CALL','FACULTY'],['EMAIL','FACULTY'],['NOTE','INTERNAL'],['CALL','AGENCY']])await prisma.assignmentFollowUp.create({data:{tenant_id:id,assignment_id:allocations[1].id,kind,contact_target:target,note:'Fixture contact',created_by_user_id:deputy.id,happened_at:submitted}})
-    const run=(extra:Record<string,unknown>={})=>getManagementReport(id,{start:new Date(now.getTime()-90*86400000),end:new Date(Date.now()+1),asOf:new Date(),mode:'cohort',...extra})
+    const run=(extra:Record<string,unknown>={})=>getManagementReport(id,{start:new Date(now.getTime()-90*86400000),end:new Date(Date.now()+1),asOf:new Date(),mode:'cohort',includeExpired:true,...extra})
     let report=await run()
     ok(report.totals.allocated===25 && report.totals.independent===1 && report.totals.applications===26,'Linked assignment and proposal count once; independent application remains separate')
     ok(report.totals.submitted===2 && report.totals.allocatedSubmissions===1,'Rejected after submission retains submission history')
@@ -53,6 +52,8 @@ async function main(){
     const gapCall=await prisma.fundingCall.create({data:{tenantId:id,createdByUserId:primary.id,updatedByUserId:primary.id,title:'Matched but unallocated',visibility:'TENANT_PRIVATE',status:'PUBLISHED',deadlineAt:new Date(now.getTime()+14*86400000),createdAt:now}})
     await prisma.callSchoolTriage.create({data:{tenant_id:id,org_unit_id:school.id,funding_call_id:gapCall.id,status:'RELEVANT',created_at:now}})
     await prisma.fundingOpportunityMatch.create({data:{tenant_id:id,funding_call_id:gapCall.id,user_id:faculty.id,org_unit_id:school.id,school_id:school.id,match_score:0.91,match_tier:'STRONG',match_reason:'Fixture research alignment',source:'fixture',source_version:'v1',first_seen_at:now,last_seen_at:now}})
+    // A match routes only while its school's projection is fresh (20260922 workbench change).
+    await prisma.$executeRaw(Prisma.sql`INSERT INTO dsr_match_projection_state(tenant_id,school_id,fingerprint,complete,unprofiled) VALUES(${id},${school.id},'fixture',true,'[]'::jsonb) ON CONFLICT(tenant_id,school_id) DO UPDATE SET refreshed_at=now()`)
     let coverageReport=await run({mode:'portfolio'})
     let gap=coverageReport.members.flatMap(m=>m.schools.flatMap(s=>s.calls)).find(c=>c.id===gapCall.id)!
     ok(gap.matchedUnallocated && gap.actionState==='UNTOUCHED' && gap.matches[0]?.allocationStatus==='PENDING_ALLOCATION','Automated match exposes pending researcher allocation without counting as human action')
@@ -63,7 +64,7 @@ async function main(){
     const action=await saveAction(id,school.id,primary.id,{applicationId:appId,title:'Prepare draft',ownerUserId:faculty.id,waitingWith:'FACULTY',dueAt:new Date(Date.now()+86400000).toISOString()})
     await assert.rejects(()=>saveAction(id,school.id,primary.id,{id:action.id,version:action.version,ownerUserId:primary.id}),/Explain/)
     const moved=await saveAction(id,school.id,primary.id,{id:action.id,version:action.version,ownerUserId:primary.id,reason:'Department coordinating review'})
-    const done=await saveAction(id,school.id,primary.id,{id:action.id,version:moved.version,status:'DONE'})
+    const done=await saveAction(id,school.id,primary.id,{id:action.id,version:moved.version,status:'DONE',resolutionNote:'Draft received'})
     await saveAction(id,school.id,primary.id,{id:action.id,version:done.version,status:'OPEN',reason:'Further changes requested'})
     ok((await prisma.$queryRaw<Array<{kind:string}>>(Prisma.sql`SELECT kind FROM dsr_events WHERE tenant_id=${id} AND entity_id=${action.id}`)).length===4,'Action creation, transfer, completion and reopening preserve history')
     const notesOnly=(await run()).applications.find(a=>a.independent)!
@@ -74,7 +75,9 @@ async function main(){
     ok((await run()).totals.verified===0,'Evidence correction invalidates stale verification')
     await prisma.callSchoolTriage.updateMany({where:{tenant_id:id,org_unit_id:school.id},data:{status:'NOT_RELEVANT'}})
     report=await run()
-    ok(report.totals.callSchoolOpportunities===1 && report.members[0].schools[0].calls[0].quality==='dismissed','Manual irrelevance agrees between summary and children without deleting applications')
+    const covered=report.members.flatMap(m=>m.schools).find(s=>s.id===school.id)!
+    const childRows=report.members.flatMap(m=>m.schools.flatMap(s=>s.calls)).filter(c=>!c.id.startsWith('adhoc:'))
+    ok(covered.calls.every(c=>c.quality==='dismissed') && report.totals.applications===26 && report.totals.callSchoolOpportunities===childRows.length,'Manual irrelevance agrees between summary and children without deleting applications')
     const snapshot=await writeReportSnapshot(id,primary.id,'scope','filters',report)
     const frozen=await readReportSnapshot(snapshot,id,primary.id,'scope','filters')
     await assert.rejects(()=>readReportSnapshot(snapshot,id,deputy.id,'scope','filters'),/expired or access/)
@@ -90,15 +93,7 @@ async function main(){
     report=await run()
     ok(!report.members.some(m=>m.id===member.id) && report.members.some(m=>m.id===backup.id),'Current primary ownership moves while deputy-authored activity remains recorded')
     console.log(`Verified ${checks} DSR integration assertions.`)
-  }finally{
-    // Only the exact tenant created above is removed; no existing tenant is touched.
-    await prisma.$executeRaw(Prisma.sql`DELETE FROM dsr_actions WHERE tenant_id=${id}`)
-    await prisma.grantProposal.deleteMany({where:{tenant_id:id}})
-    await prisma.callAssignment.deleteMany({where:{tenant_id:id}})
-    await prisma.fundingCall.deleteMany({where:{tenantId:id}})
-    await prisma.tenant.delete({where:{id}})
-    await prisma.user.deleteMany({where:{email:{endsWith:`${id}@example.invalid`}}})
-    await prisma.$disconnect()
   }
+  })
 }
 main().catch(error=>{console.error(error);process.exitCode=1})

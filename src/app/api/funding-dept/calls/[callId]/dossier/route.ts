@@ -4,6 +4,7 @@ import { assignmentInclude, isTakenUp, serializeAssignment } from '@/lib/assignm
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { loadUnitAreaProfile, relevanceForCalls } from '@/lib/funding/callUnitRelevance'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
+import { departmentEventsForCall } from '@/lib/fundingDept/auditTrail'
 import { buildTimeline, type TimelineCaps } from '@/lib/fundingDept/callTimeline'
 import { isNudgeTitle } from '@/lib/fundingDept/escalationService'
 import { getMembership } from '@/lib/fundingDept/membershipService'
@@ -462,8 +463,13 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     proposalEvents: proposalEvents.length >= SOURCE_CAP,
   }
 
+  // The department's audit trail for this call in this school: mapping,
+  // transfers, closure reasons, named actions, origin corrections.
+  const departmentEvents = await departmentEventsForCall(context.tenantId, call.id, [school.id]).catch(() => [])
+
   const timeline = buildTimeline(
     {
+      departmentEvents,
       proposalEvents,
       followUps,
       candidates: candidates.map((row) => ({

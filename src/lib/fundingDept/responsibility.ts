@@ -3,7 +3,12 @@ import { day, deadlineAttention } from './managementRules'
 export const CLOSING_DISPOSITIONS = ['NO_SUITABLE_FACULTY', 'DECLINED', 'CAPACITY', 'OTHER']
 export const closesOpportunity = (reason?: string | null) => Boolean(reason && CLOSING_DISPOSITIONS.includes(reason))
 
-export const RESPONSIBILITY_TYPES = ['ORIGIN_REVIEW', 'MATCHED_FOLLOW_UP'] as const
+/**
+ * ORIGIN_REVIEW      the school that entered the call reviews it
+ * MAPPED_REVIEW      a school the call was mapped to reviews it (callSchoolMapping)
+ * MATCHED_FOLLOW_UP  researchers were matched or work exists; follow it through
+ */
+export const RESPONSIBILITY_TYPES = ['ORIGIN_REVIEW', 'MAPPED_REVIEW', 'MATCHED_FOLLOW_UP'] as const
 export type ResponsibilityType = (typeof RESPONSIBILITY_TYPES)[number]
 
 export const ACTION_CLASSES = [
@@ -21,6 +26,8 @@ export const WORK_QUEUES = [
   'ACTION_OVERDUE',
   'CLOSING_SOON',
   'NEW_TO_REVIEW',
+  // Reviewed as relevant, nobody allocated yet: its own gap, never "completed".
+  'ALLOCATION_PENDING',
   'WAITING_ON_OTHERS',
   'IN_PROGRESS',
   'DATA_ROUTING',
@@ -58,6 +65,12 @@ export type ResponsibilityInput = {
   contacts?: number
   dispositionRecorded?: boolean
   triageDecisionRecorded?: boolean
+  /**
+   * The school's review state (reportDefinitions.reviewState). When given, a
+   * review duty is complete only once the call is allocated or closed with a
+   * reason — a "relevant" decision alone leaves the allocation still owed.
+   */
+  reviewState?: 'NOT_REVIEWED' | 'REVIEWED_ALLOCATION_PENDING' | 'ALLOCATED' | 'CLOSED_NO_ALLOCATION'
   actions?: ResponsibilityAction[]
   lastActivityAt?: Date | string | null
   internalDeadlineOverdue?: boolean
@@ -103,14 +116,17 @@ export function resolveResponsibility(input: ResponsibilityInput) {
   const daysToDeadline = deadlineAttention(deadline,input.asOf).daysToDeadline
   const expired = isExpiredInIndia(deadline, input.asOf)
   const activeApplications = input.activeApplications ?? 0
-  const originComplete = Boolean(
-    input.triageDecisionRecorded || input.assignments || input.dispositionRecorded
-  )
+  const originComplete = input.reviewState
+    ? input.reviewState === 'ALLOCATED' || input.reviewState === 'CLOSED_NO_ALLOCATION'
+    : Boolean(input.triageDecisionRecorded || input.assignments || input.dispositionRecorded)
+  const allocationOwed = input.reviewState === 'REVIEWED_ALLOCATION_PENDING'
   const matchedComplete = Boolean(input.dispositionRecorded || input.assignments || input.applications ||
     ((input.matchedPeople ?? 0) > 0 && (input.candidatesReviewed ?? 0) >= (input.matchedPeople ?? 0)))
-  const complete = input.responsibilityType === 'ORIGIN_REVIEW' ? originComplete : matchedComplete
+  // A review duty (origin or mapped school) closes on a recorded decision.
+  const reviewDuty = input.responsibilityType !== 'MATCHED_FOLLOW_UP'
+  const complete = reviewDuty ? originComplete : matchedComplete
   // Intake triage is a separate duty from ongoing application/follow-up work.
-  const liveWork = input.responsibilityType==='ORIGIN_REVIEW'&&originComplete ? false : activeApplications > 0 || openActions.length > 0
+  const liveWork = reviewDuty&&originComplete ? false : activeApplications > 0 || openActions.length > 0
   const missingData = Boolean(
     input.originSchoolMissing || input.schoolUnmapped || input.ownerMissing ||
       (input.responsibilityType === 'MATCHED_FOLLOW_UP' && input.matchingComplete === false)
@@ -131,7 +147,7 @@ export function resolveResponsibility(input: ResponsibilityInput) {
   const facultyChaseDue=waitingWith==='FACULTY'&&Boolean(waitingSince&&input.asOf.getTime()-waitingSince.getTime()>=thresholds.unansweredDays*day)
   const fallbackDue=waitingWith==='FACULTY'&&waitingSince?new Date(waitingSince.getTime()+thresholds.unansweredDays*day):!complete&&firstSeen?new Date(firstSeen.getTime()+thresholds.firstTouchTargetDays*day):null
   const nextAction: ResponsibilityAction | null = complete&&!liveWork?null:designated ?? ({
-    title:facultyChaseDue?'Chase faculty response':silentLiveWork?'Confirm progress and record the next step':waitingWith==='FACULTY'?'Follow up for faculty response':input.responsibilityType==='ORIGIN_REVIEW'?'Review intake relevance':'Review matching researchers and confirm next step',
+    title:facultyChaseDue?'Chase faculty response':allocationOwed?'Allocate faculty, or close with a reason':silentLiveWork?'Confirm progress and record the next step':waitingWith==='FACULTY'?'Follow up for faculty response':input.responsibilityType==='ORIGIN_REVIEW'?'Review intake relevance':input.responsibilityType==='MAPPED_REVIEW'?'Review relevance, then allocate or close with a reason':'Review matching researchers and confirm next step',
     owner_user_id:input.ownerUserId||'',owner_name:input.ownerName||'Unassigned',waiting_with:waitingWith||'DSR',status:'OPEN',due_at:fallbackDue,
   })
   let actionClass: ActionClass
@@ -148,6 +164,10 @@ export function resolveResponsibility(input: ResponsibilityInput) {
   } else if (input.intakeReady === false) {
     actionClass = 'SYSTEM_PROCESSING'
     queue = 'DATA_ROUTING'
+  } else if (allocationOwed && !liveWork && !input.ownerMissing) {
+    // Reviewed as relevant and nobody allocated: a DSR task, not a data gap.
+    actionClass = 'DSR_ACTION_REQUIRED'
+    queue = 'ALLOCATION_PENDING'
   } else if (missingData && !liveWork && !(input.matchedPeople && !input.ownerMissing)) {
     actionClass = 'DATA_GAP'
     queue = 'DATA_ROUTING'
@@ -182,7 +202,7 @@ export function resolveResponsibility(input: ResponsibilityInput) {
     nextAction,
     overdueObligation, waitingWith, dataWarnings, lastActivityAt:lastActivity, ageDays,
     firstReviewOverdue, untouchedOverdue, silentLiveWork, facultyChaseDue,
-    completionReason:complete ? input.dispositionRecorded?'Structured closure':input.responsibilityType==='ORIGIN_REVIEW'?'Intake reviewed or assigned':'Researcher follow-up recorded' : null,
+    completionReason:complete ? input.dispositionRecorded?'Structured closure':input.responsibilityType==='ORIGIN_REVIEW'?'Intake reviewed or assigned':reviewDuty?'School review recorded or assigned':'Researcher follow-up recorded' : null,
     expired,
     retainedBecauseLiveWork: expired && liveWork,
     liveWork,

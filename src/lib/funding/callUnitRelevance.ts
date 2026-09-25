@@ -17,6 +17,7 @@
 
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { activeMappingSql } from '@/lib/fundingDept/callSchoolMapping'
 
 /**
  * Strongest first. `unclassified` is not a weak match — it is the absence of
@@ -216,8 +217,10 @@ export function relevantCallWhereSql(
 
 /**
  * Operational DSR routing is stricter than taxonomy discovery.  A school sees
- * fresh work only when the origin attribution names it or a current person in
- * the school matches.  Recorded human work remains visible for audit.
+ * fresh work only when the origin attribution names it, a stored call-to-school
+ * mapping names it (once the department has switched mapping routing on — see
+ * `callSchoolMapping`), or a current person in the school matches.  Recorded
+ * human work remains visible for audit.
  */
 export function actionableSchoolCallWhereSql(
   tenantId: string,
@@ -229,6 +232,7 @@ export function actionableSchoolCallWhereSql(
   return Prisma.sql`(
     ${originSchool}=${schoolId}
     OR EXISTS(SELECT 1 FROM dsr_origin_responsibilities intake WHERE intake.tenant_id=${tenantId} AND intake.school_id=${schoolId} AND intake.call_id=${callId})
+    OR ${activeMappingSql(tenantId, schoolId, callId)}
     OR EXISTS(SELECT 1 FROM funding_opportunity_matches match
       JOIN dsr_match_projection_state state ON state.tenant_id=match.tenant_id AND state.school_id=match.school_id
         AND state.refreshed_at>now()-interval '5 minutes'

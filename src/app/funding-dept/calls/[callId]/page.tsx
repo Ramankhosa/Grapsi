@@ -130,6 +130,7 @@ const KIND_LABEL: Record<string, string> = {
   MILESTONE: 'Milestone',
   NUDGE: 'Auto-nudge',
   PROPOSAL: 'Proposal',
+  DEPARTMENT: 'Audit',
 }
 
 function formatDate(value: string | null) {

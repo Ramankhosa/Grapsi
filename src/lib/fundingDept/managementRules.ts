@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 
 export type ReportMode = 'pending' | 'cohort' | 'activity' | 'portfolio'
-export type AttentionFilter = 'upcoming-21' | 'missed-unallocated-no-submission'
+export type AttentionFilter = 'upcoming-21' | 'missed-unallocated-no-submission' | 'missed-never-allocated' | 'missed-allocated-not-submitted'
 export type WaitingWith = 'FACULTY' | 'DSR' | 'REVIEWER' | 'APPROVER' | 'AGENCY'
 export type OpportunityActionInput = {
   applications: number

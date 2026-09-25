@@ -26,6 +26,7 @@ import prisma from '@/lib/prisma'
 import { resolveActivityWindow } from './accountabilityService'
 import { getManagementReport } from './managementService'
 import { inPeriod } from './managementRules'
+import { isRelevantQuality } from './reportDefinitions'
 import { getDeptSettingsFor, type DeptSettings } from './settings'
 
 export interface SnapshotResult {
@@ -83,7 +84,7 @@ async function snapshotTenant(
     const actions=report.actions.filter(a=>a.school_id===school.id)
     const data={
       member_id:member.id==='unassigned'?null:member.id,
-      relevant_open:school.calls.filter(c=>c.quality==='confirmed' && (!c.deadline||c.deadline>=now)).length,
+      relevant_open:school.calls.filter(c=>isRelevantQuality(c.quality) && (!c.deadline||c.deadline>=now)).length,
       pending:school.calls.filter(c=>c.unallocated && (!c.deadline||c.deadline>=now)).length,
       untouched_pending:school.calls.filter(c=>c.unallocated&&!c.lastAction).length,
       live:open.length,

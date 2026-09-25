@@ -27,6 +27,7 @@ import type { ActivityWindow } from './accountabilityService'
 import { computeFlags, type AccountabilityFlag } from './accountabilityFlags'
 import { callEnteredAtSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
 import { listMembers } from './membershipService'
+import { applicationSubmittedSql } from './reportDefinitions'
 import { getDeptSettings, type DeptSettings } from './settings'
 import { isMemberAway, memberReachSchoolIds, serializeMember } from './shared'
 
@@ -264,6 +265,10 @@ async function decisionsForSchools(
  * other schools constantly, and keying on the assigner made real results vanish
  * from the officer whose numbers they belong to.
  */
+const SUBMITTED = applicationSubmittedSql({
+  submittedAt: 'COALESCE(gp.submitted_at, ca.submitted_at)', assignmentStatus: 'ca.status::text', proposalStatus: 'gp.status', outcome: 'ca.outcome::text',
+})
+
 async function workForSchools(
   tenantId: string,
   schoolIds: string[],
@@ -275,7 +280,9 @@ async function workForSchools(
   return prisma.$queryRaw<WorkRow[]>(Prisma.sql`
     SELECT root.school_id,
            COUNT(*)::int AS allocated,
-           COUNT(*) FILTER (WHERE ca.submitted_at IS NOT NULL)::int AS submitted,
+           -- The shared submission rule (reportDefinitions), so this conversion
+           -- rate and the management report count the same submissions.
+           COUNT(*) FILTER (WHERE ${SUBMITTED})::int AS submitted,
            COUNT(*) FILTER (WHERE ca.status = 'DECLINED')::int AS declined,
            COUNT(*) FILTER (
              WHERE ca.status = 'ASSIGNED'
@@ -284,6 +291,7 @@ async function workForSchools(
            )::int AS unanswered,
            COUNT(*) FILTER (WHERE ca.status = 'LAPSED')::int AS lapsed
       FROM call_assignments ca
+      LEFT JOIN grant_proposals gp ON gp.assignment_id = ca.id AND gp.tenant_id = ca.tenant_id
       JOIN LATERAL (
         SELECT unnest(u.path) AS school_id FROM tenant_org_units u WHERE u.id = ca.assignee_org_unit_id
       ) root ON root.school_id = ANY(${roots})

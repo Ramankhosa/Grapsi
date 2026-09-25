@@ -5,7 +5,7 @@ import { Prisma } from '@/lib/prisma-generated'
 
 import { callEnteredAtSql, textArray, visibleCallSql, openCallSql, liveCallWorkSql } from './callSql'
 import { queueSchoolMatchRefresh } from './currentMatches'
-import { queueStateSql, untouchedSql } from './queueState'
+import { applicationSubmittedSql, queueStateSql, untouchedSql } from './reportDefinitions'
 import { getDeptSettings, type DeptSettings } from './settings'
 
 /**
@@ -59,6 +59,10 @@ export interface SchoolFunnelRow {
 /** Assignments in these states mean nobody is actually on the call. */
 const NOT_TAKEN_UP = notTakenUpSql('ca')
 const OPEN_STATUSES = Prisma.sql`('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`
+const SUBMITTED = applicationSubmittedSql({
+  submittedAt: 'COALESCE(gp.submitted_at, ca.submitted_at)', assignmentStatus: 'ca.status::text',
+  proposalStatus: 'gp.status', outcome: 'ca.outcome::text',
+})
 
 const visibleSql = (tenantId: string) => visibleCallSql(tenantId, 'fc')
 
@@ -143,7 +147,11 @@ async function funnelForSchool(
     >(Prisma.sql`
       SELECT
         COUNT(*) FILTER (WHERE ca.status IN ${OPEN_STATUSES})::int AS live,
-        COUNT(*) FILTER (WHERE ca.status = 'COMPLETED')::int       AS submitted,
+        -- The shared submission rule (reportDefinitions): the assignment's own
+        -- COMPLETED status alone missed allocations whose linked proposal had
+        -- already gone to the agency, so this figure disagreed with the
+        -- management report for the same school.
+        COUNT(*) FILTER (WHERE ${SUBMITTED})::int                 AS submitted,
         COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int        AS awarded,
         COALESCE(SUM(ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED'), 0)::float AS award_amount,
         COUNT(*) FILTER (
@@ -152,6 +160,7 @@ async function funnelForSchool(
             AND ca.deadline_at < now()
         )::int AS overdue
       FROM call_assignments ca
+      LEFT JOIN grant_proposals gp ON gp.assignment_id = ca.id AND gp.tenant_id = ca.tenant_id
       WHERE ca.tenant_id = ${tenantId}
         AND ca.assignee_org_unit_id = ANY(${scopeArray})
     `),
@@ -291,14 +300,12 @@ export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRo
     prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
-         AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
+         AND ${openCallSql()}
     `),
     prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
-         AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
+         AND ${openCallSql()}
          AND NOT EXISTS (
            SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id
          )
