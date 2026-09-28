@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
+import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
 
 /**
  * One faculty member's stored profile, wherever the reader happens to be.
@@ -70,6 +71,7 @@ interface Props {
   /** Second header line before the profile arrives (department, institution…). */
   fallbackHint?: string | null
   onClose: () => void
+  onAllocated?: () => void
   /** Actions for this context — "Assign call", "Shortlist" — beside Close. */
   children?: ReactNode
 }
@@ -79,6 +81,7 @@ export default function FacultyProfileDrawer({
   fallbackName,
   fallbackHint,
   onClose,
+  onAllocated,
   children,
 }: Props) {
   const { authFetch } = useAuth()
@@ -114,7 +117,8 @@ export default function FacultyProfileDrawer({
   // often than it is read through.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      // A child allocation dialog owns Escape while it is open.
+      if (event.key === 'Escape' && !event.defaultPrevented) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -311,10 +315,11 @@ export default function FacultyProfileDrawer({
           ) : null}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-nickel-200 px-6 py-4">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-nickel-200 px-6 py-4">
           <button type="button" className="nk-btn-secondary" onClick={onClose}>
             Close
           </button>
+          <AllocateCallButton person={{ userId, name: data?.name || fallbackName, email: data?.email, school: data?.school, department: data?.department, employeeId: data?.employeeId }} onAssigned={onAllocated} />
           {children}
         </div>
       </div>

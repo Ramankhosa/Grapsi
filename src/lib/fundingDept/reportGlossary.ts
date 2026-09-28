@@ -82,6 +82,36 @@ export const DEADLINE_STATE_LABELS: Record<DeadlineState, string> = {
 }
 export const MISSED_DEADLINE_STATES: DeadlineState[] = ['MISSED_NEVER_ALLOCATED', 'MISSED_ALLOCATED_NOT_SUBMITTED']
 
+/* Action status — the coordinator's own mark, per school and call (DSR Reports hub) */
+
+export const ACTION_STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'] as const
+export type ActionStatus = (typeof ACTION_STATUSES)[number]
+export const ACTION_STATUS_LABELS: Record<ActionStatus, string> = {
+  NOT_STARTED: 'Not started',
+  IN_PROGRESS: 'In progress',
+  COMPLETED: 'Action completed',
+}
+
+/* Pendency — a school's directly matched call that nobody was allocated to */
+
+export const PENDENCY_AT_RISK_DAYS = 14
+export const PENDENCY_MATCH_TIERS = ['strong', 'moderate'] as const
+export const PENDENCY_STATES = ['MISSED', 'AT_RISK', 'PENDING', 'COMPLETED_NO_ALLOCATION'] as const
+export type PendencyState = (typeof PENDENCY_STATES)[number]
+export const PENDENCY_STATE_LABELS: Record<PendencyState, string> = {
+  MISSED: 'Missed',
+  AT_RISK: `At risk (${PENDENCY_AT_RISK_DAYS} days or less)`,
+  PENDING: 'Pending',
+  COMPLETED_NO_ALLOCATION: 'Marked completed, no allocation',
+}
+/** The three states that count as pendency; a coordinator-closed call is shown, not counted. */
+export const COUNTED_PENDENCY_STATES: PendencyState[] = ['MISSED', 'AT_RISK', 'PENDING']
+
+/* Follow-up effort — weekly, India time */
+
+export const FACULTY_CONTACT_KINDS = ['CALL', 'EMAIL', 'MEETING'] as const
+export const FOLLOW_UP_STAGE_ORDER = ['CONTACTED', 'PREPARING', 'APPROVALS', 'SUBMITTED'] as const
+
 /* Glossary — read by UI tooltips and every export's Definitions sheet */
 
 export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
@@ -107,6 +137,23 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
     MISSED_NEVER_ALLOCATED: 'The deadline passed with no allocation, no submission and no recorded closure.',
     MISSED_ALLOCATED_NOT_SUBMITTED: 'The deadline passed with an allocation but no submission.',
   }[state] })),
+  ...ACTION_STATUSES.map(state => ({ term: `Action: ${ACTION_STATUS_LABELS[state]}`, definition: {
+    NOT_STARTED: 'Nobody has recorded anything on this call for this school: no review decision, shortlist, allocation, follow-up or named action.',
+    IN_PROGRESS: 'Something has been recorded (a review, shortlist, allocation, follow-up or action), but the coordinator has not marked the work completed.',
+    COMPLETED: 'The coordinator marked this school’s action on the call as completed. Only a person sets this; allocating or shortlisting does not.',
+  }[state] })),
+  { term: 'Directly matched call', definition: `A call with at least one ${PENDENCY_MATCH_TIERS.join(' or ')} automatic faculty match in the school, first seen before the call's deadline. Weak, reconstructed and manual-allocation matches do not count.` },
+  ...PENDENCY_STATES.map(state => ({ term: `Pendency: ${PENDENCY_STATE_LABELS[state]}`, definition: {
+    MISSED: 'A directly matched call whose deadline passed with nobody from the school allocated, no independent application, and no "not relevant" decision.',
+    AT_RISK: `A directly matched call, still open, closing within ${PENDENCY_AT_RISK_DAYS} India calendar days, with nobody allocated.`,
+    PENDING: `A directly matched call, still open with more than ${PENDENCY_AT_RISK_DAYS} days left, with nobody allocated.`,
+    COMPLETED_NO_ALLOCATION: 'The coordinator marked the action completed without allocating anyone. Shown with their note for the head to judge; not counted as pendency.',
+  }[state] })),
+  { term: 'Pendency vs. escalation ladder', definition: 'The escalation reminders use a different rule: any relevant call nobody has reviewed or contacted about. This report only counts calls with a direct faculty match that nobody was allocated to.' },
+  { term: 'Follow-up', definition: 'An entry in the DSR contact log (call, email, meeting, note or scheduled reminder). Automatic review-history entries are not counted.' },
+  { term: 'Faculty contact', definition: 'A follow-up logged as a call, email or meeting with the faculty member.' },
+  { term: 'Follow-up week', definition: 'Monday to Sunday, India (Asia/Kolkata) time.' },
+  { term: 'Silent assignment', definition: 'An allocation still open (assigned, accepted or in progress) at the end of the week with no follow-up logged that week.' },
   { term: 'Reporting period', definition: 'Period totals cover calls that entered in the selected period, with their progress as of the report date. "Needs attention now" ignores the period.' },
   { term: 'Deadline day', definition: 'A deadline stays open until the end of its India (Asia/Kolkata) calendar day.' },
 ]

@@ -31,6 +31,11 @@ const updateSchema = z.object({
    * sentence in a field the record presents as the applicant's own.
    */
   lapsedReason: z.string().trim().max(2000).optional(),
+  /**
+   * Why the department is unallocating (CANCELLED). Optional here for older
+   * clients; the DSR Reports hub always sends one. Kept in the contact log.
+   */
+  cancelReason: z.string().trim().max(2000).optional(),
   submissionReference: z.string().trim().max(200).nullable().optional(),
   submissionUrl: z.string().trim().max(2000).nullable().optional(),
   submissionNotes: z.string().trim().max(5000).nullable().optional(),
@@ -354,6 +359,35 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     } catch (error) {
       console.warn('Assignment lapse: follow-up log failed', error)
     }
+  }
+
+  // Unallocating is the department withdrawing its own request. Say so in the
+  // contact log beside everything else done about this call, and put the person
+  // back on the shortlist: they were a match before and still are, so the call
+  // window keeps showing them rather than silently dropping them.
+  if (data.status === 'CANCELLED' && record.status !== 'CANCELLED') {
+    try {
+      await prisma.assignmentFollowUp.create({
+        data: {
+          tenant_id: context.tenantId,
+          assignment_id: record.id,
+          funding_call_id: record.funding_call_id,
+          org_unit_id: record.assignee_org_unit_id,
+          created_by_user_id: context.user.id,
+          kind: 'NOTE',
+          contact_target: 'INTERNAL',
+          note: payload.cancelReason ? `Unallocated by the department. ${payload.cancelReason}` : 'Unallocated by the department (no reason recorded).',
+        },
+      })
+    } catch (error) {
+      console.warn('Assignment cancel: follow-up log failed', error)
+    }
+    await prisma.callCandidate
+      .updateMany({
+        where: { tenant_id: context.tenantId, funding_call_id: record.funding_call_id, user_id: record.assignee_user_id, status: 'ASSIGNED' },
+        data: { status: 'SHORTLISTED' },
+      })
+      .catch(() => undefined)
   }
 
   // Mirror the answer onto the shortlist, so an officer opening the worksheet

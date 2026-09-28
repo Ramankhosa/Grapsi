@@ -10,6 +10,7 @@ import Link from 'next/link'
 import { Fragment, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
+import ManualAllocationDetails from './ManualAllocationDetails'
 import {
   DEADLINE_STATE_LABELS, DEADLINE_STATES, REPORT_DEFINITIONS, REVIEW_STATE_LABELS, REVIEW_STATES, SUBMISSION_STATE_LABELS,
   type DeadlineState, type ReviewState, type SubmissionState,
@@ -22,7 +23,7 @@ const date = (s?: string | null) => s ? new Date(s).toLocaleDateString('en-IN', 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const define = (term: string) => REPORT_DEFINITIONS.find(d => d.term === term)?.definition || ''
 const SUBMISSION_FILTERS: Array<[string, string]> = [['NO_ALLOCATION', 'No allocation'], ['NONE_SUBMITTED', 'Allocated, none submitted'], ['PARTLY_SUBMITTED', 'Partly submitted'], ['ALL_SUBMITTED', 'All submitted']]
-const SOURCES: Array<[string, string]> = [['ORIGIN', 'Origin school'], ['INGESTION_DIRECT', 'Direct discipline match'], ['INGESTION_KEYWORD', 'Keyword match'], ['INGESTION_BROAD', 'Broad discipline group'], ['ADDED_BY_HEAD', 'Added by the head'], ['RECONSTRUCTED_FROM_WORK', 'Reconstructed from work']]
+const SOURCES: Array<[string, string]> = [['ORIGIN', 'Origin school'], ['INGESTION_DIRECT', 'Direct discipline match'], ['INGESTION_KEYWORD', 'Keyword match'], ['INGESTION_BROAD', 'Broad discipline group'], ['ADDED_BY_HEAD', 'Added by the head'], ['RECONSTRUCTED_FROM_WORK', 'Reconstructed from work'], ['MANUAL_ALLOCATION', 'Manual allocation']]
 const deadlineTone = (s: DeadlineState) => s.startsWith('MISSED') ? 'text-red-700' : s === 'CLOSING_SOON' ? 'text-amber-700' : 'nk-sub'
 
 function useJson<T>(url: string | null, revision = 0) {
@@ -127,7 +128,7 @@ export function OverviewView({ periodQuery, revision, openRegister, openActions,
 type Responsibility = {
   schoolId: string; schoolName: string; sourceLabel: string; tier: string | null; mappingReason: string | null; mappedAt: string; backfilled: boolean
   coordinator: { id: string; name: string } | null; transferred: boolean; reviewState: ReviewState; deadlineState: DeadlineState
-  allocations: Array<{ applicationId: string; faculty: string | null; allocatedBy: string | null; allocatedAt: string; submissionState: SubmissionState; workingStage: string | null }>
+  allocations: Array<{ applicationId: string; faculty: string | null; allocatedBy: string | null; allocatedAt: string; submissionState: SubmissionState; workingStage: string | null; allocationMethod?: string | null; allocationReason?: string | null; allocationNote?: string | null }>
   independent: Array<{ applicationId: string; faculty: string | null; submissionState: SubmissionState }>
   disposition: { reason: string; explanation: string | null } | null; nextAction: { title: string; owner: string | null; dueAt: string | null } | null
 }
@@ -177,7 +178,7 @@ export function RegisterView({ periodQuery, filters, setFilters, schools, revisi
           <div className="flex flex-wrap items-baseline justify-between gap-2"><p className="font-medium">{r.schoolName}</p><span className="nk-badge" title={define(`Review: ${REVIEW_STATE_LABELS[r.reviewState]}`)}>{REVIEW_STATE_LABELS[r.reviewState]}</span></div>
           <p className="nk-sub">Mapped {date(r.mappedAt)} · {r.sourceLabel}{r.mappingReason ? ` — ${r.mappingReason}` : ''}{r.backfilled ? ' · reconstructed at backfill' : ''}</p>
           <p>Responsible now: {r.coordinator?.name || <span className="text-amber-700">No coordinator — assign coverage</span>}{r.transferred ? ' (transferred)' : ''}</p>
-          {r.allocations.map(a => <p key={a.applicationId} className="text-sm">Allocated {a.faculty || 'faculty not recorded'} · by {a.allocatedBy || 'not recorded'} on {date(a.allocatedAt)} · <span title={define(`Submission: ${SUBMISSION_STATE_LABELS[a.submissionState]}`)}>{SUBMISSION_STATE_LABELS[a.submissionState]}</span>{a.workingStage ? ` (${a.workingStage.toLowerCase().replace(/_/g, ' ')})` : ''}</p>)}
+          {r.allocations.map(a => <div key={a.applicationId} className="text-sm"><p>Allocated {a.faculty || 'faculty not recorded'} · by {a.allocatedBy || 'not recorded'} on {date(a.allocatedAt)} · <span title={define(`Submission: ${SUBMISSION_STATE_LABELS[a.submissionState]}`)}>{SUBMISSION_STATE_LABELS[a.submissionState]}</span>{a.workingStage ? ` (${a.workingStage.toLowerCase().replace(/_/g, ' ')})` : ''}</p><ManualAllocationDetails {...a}/></div>)}
           {r.independent.map(a => <p key={a.applicationId} className="text-sm">Independent application: {a.faculty} · {SUBMISSION_STATE_LABELS[a.submissionState]}</p>)}
           {r.disposition && <p className="text-sm">Closed: {r.disposition.reason.toLowerCase().replace(/_/g, ' ')}{r.disposition.explanation ? ` — ${r.disposition.explanation}` : ''}</p>}
           <p className="text-sm">Next: {r.nextAction ? `${r.nextAction.title} · ${r.nextAction.owner || ''}${r.nextAction.dueAt ? ` · due ${date(r.nextAction.dueAt)}` : ''}` : 'No open action'} · <span className={deadlineTone(r.deadlineState)}>{DEADLINE_STATE_LABELS[r.deadlineState]}</span></p>

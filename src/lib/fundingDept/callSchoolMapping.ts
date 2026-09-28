@@ -31,7 +31,7 @@ import { Prisma } from '@/lib/prisma-generated'
 import { textArray } from './callSql'
 import { getDeptSettings } from './settings'
 
-export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK'] as const
+export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK', 'MANUAL_ALLOCATION'] as const
 export type MappingSource = (typeof MAPPING_SOURCES)[number]
 export type MappingTier = 'direct' | 'keyword' | 'broad'
 export const MAPPING_SOURCE_LABELS: Record<MappingSource, string> = {
@@ -41,6 +41,7 @@ export const MAPPING_SOURCE_LABELS: Record<MappingSource, string> = {
   INGESTION_BROAD: 'Ingestion: broad discipline group',
   ADDED_BY_HEAD: 'Added by the DSR head',
   RECONSTRUCTED_FROM_WORK: 'Reconstructed from recorded work',
+  MANUAL_ALLOCATION: 'Manual allocation',
 }
 
 export type SchoolAreaProfile = { schoolId: string; areaIds: Set<string>; level1Codes: Set<string>; keywords: Set<string>; isUnmapped: boolean }
@@ -284,7 +285,7 @@ export function activeMappingSql(tenantId: string, schoolId: string, callIdExpr:
 /* One-off backfill                                                           */
 /* -------------------------------------------------------------------------- */
 
-const BACKFILL_PRIORITY: Record<MappingSource, number> = { ORIGIN: 0, RECONSTRUCTED_FROM_WORK: 1, INGESTION_DIRECT: 2, INGESTION_KEYWORD: 3, INGESTION_BROAD: 4, ADDED_BY_HEAD: 5 }
+const BACKFILL_PRIORITY: Record<MappingSource, number> = { ORIGIN: 0, RECONSTRUCTED_FROM_WORK: 1, INGESTION_DIRECT: 2, INGESTION_KEYWORD: 3, INGESTION_BROAD: 4, ADDED_BY_HEAD: 5, MANUAL_ALLOCATION: 6 }
 
 /**
  * The rows a backfill would write for one tenant, with honest dates:

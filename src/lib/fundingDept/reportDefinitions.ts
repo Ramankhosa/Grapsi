@@ -23,7 +23,10 @@ import { closesOpportunity } from './responsibility'
 
 export { QUEUE_STATES, isCallUntouched, queueStateFor, queueStateSql, untouchedSql } from './queueState'
 export * from './reportGlossary'
-import { CLOSING_SOON_DAYS, MISSED_DEADLINE_STATES, type DeadlineState, type ReviewState, type SubmissionState } from './reportGlossary'
+import {
+  ACTION_STATUSES, CLOSING_SOON_DAYS, FACULTY_CONTACT_KINDS, MISSED_DEADLINE_STATES, PENDENCY_AT_RISK_DAYS, PENDENCY_MATCH_TIERS,
+  type ActionStatus, type DeadlineState, type PendencyState, type ReviewState, type SubmissionState,
+} from './reportGlossary'
 export type { QueueState } from './queueState'
 
 /* -------------------------------------------------------------------------- */
@@ -217,6 +220,131 @@ export function deadlineStateSql(cols: { deadline: string; formalAllocations: st
     WHEN ${Prisma.raw(cols.formalAllocations)} > 0 THEN 'MISSED_ALLOCATED_NOT_SUBMITTED'
     ELSE 'MISSED_NEVER_ALLOCATED' END)`
 }
+
+/* -------------------------------------------------------------------------- */
+/* Action status — per school responsibility (Incoming Calls)                 */
+/* -------------------------------------------------------------------------- */
+
+export type ActionFacts = {
+  /** call_school_triage.action_completed_at: the coordinator's manual mark. */
+  actionCompletedAt: Date | string | null | undefined
+  /** call_school_triage.decided_at: a person recorded a review decision. */
+  triageDecidedAt: Date | string | null | undefined
+  /** Shortlisted or approached candidates from this school. */
+  shortlisted: number
+  /** Assignments to faculty of this school, in any status. */
+  allocations: number
+  /** Human follow-ups (not TRIAGE history rows) on this call in this school. */
+  followUps: number
+  /** Named call-level actions for this school and call, in any status. */
+  namedActions: number
+}
+
+/**
+ * Only the manual mark completes a call. Anything a person recorded makes it
+ * "in progress"; an automatic match or a sweep stamp is not a record, which is
+ * why the test is `decided_at`, never whether a triage row exists.
+ */
+export function actionStatus(f: ActionFacts): ActionStatus {
+  if (f.actionCompletedAt) return 'COMPLETED'
+  if (f.triageDecidedAt || f.shortlisted > 0 || f.allocations > 0 || f.followUps > 0 || f.namedActions > 0) return 'IN_PROGRESS'
+  return 'NOT_STARTED'
+}
+
+/** `actionStatus` in SQL. Each argument is an SQL expression yielding that fact. */
+export function actionStatusSql(cols: { actionCompletedAt: string; triageDecidedAt: string; shortlisted: string; allocations: string; followUps: string; namedActions: string }): Prisma.Sql {
+  return Prisma.raw(`(CASE
+    WHEN ${cols.actionCompletedAt} IS NOT NULL THEN 'COMPLETED'
+    WHEN ${cols.triageDecidedAt} IS NOT NULL OR ${cols.shortlisted} > 0 OR ${cols.allocations} > 0 OR ${cols.followUps} > 0 OR ${cols.namedActions} > 0 THEN 'IN_PROGRESS'
+    ELSE 'NOT_STARTED' END)`)
+}
+
+/** A call row shows its least-advanced school: one school not started means the call is not started. */
+export function rollupActionStatus(states: ActionStatus[]): ActionStatus {
+  if (!states.length) return 'NOT_STARTED'
+  return ACTION_STATUSES.find(state => states.includes(state)) || 'NOT_STARTED'
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pendency — directly matched, never allocated                               */
+/* -------------------------------------------------------------------------- */
+
+export type PendencyFacts = {
+  /** India calendar days to the deadline; null when none is recorded. */
+  daysToDeadline: number | null
+  /** Strong/moderate automatic matches in the school first seen by the deadline day. */
+  qualifyingMatches: number
+  /** Assignments in the school that were taken up (not CANCELLED/DECLINED/LAPSED). */
+  takenUpAllocations: number
+  /** Applications from the school made without an allocation. */
+  independentApplications: number
+  /** The school recorded "not relevant". */
+  dismissed: boolean
+  /** The coordinator marked the action completed. */
+  actionCompleted: boolean
+}
+
+/** Null when the (call, school) pair is not pendency at all. */
+export function pendencyState(f: PendencyFacts): PendencyState | null {
+  if (f.qualifyingMatches === 0 || f.takenUpAllocations > 0 || f.independentApplications > 0 || f.dismissed) return null
+  if (f.actionCompleted) return 'COMPLETED_NO_ALLOCATION'
+  if (f.daysToDeadline === null) return 'PENDING'
+  if (f.daysToDeadline < 0) return 'MISSED'
+  return f.daysToDeadline <= PENDENCY_AT_RISK_DAYS ? 'AT_RISK' : 'PENDING'
+}
+
+/** `pendencyState` in SQL; yields NULL when the pair is not pendency. `daysToDeadline` may be NULL. */
+export function pendencyStateSql(cols: { daysToDeadline: string; qualifyingMatches: string; takenUpAllocations: string; independentApplications: string; dismissed: string; actionCompleted: string }): Prisma.Sql {
+  return Prisma.raw(`(CASE
+    WHEN ${cols.qualifyingMatches} = 0 OR ${cols.takenUpAllocations} > 0 OR ${cols.independentApplications} > 0 OR ${cols.dismissed} THEN NULL
+    WHEN ${cols.actionCompleted} THEN 'COMPLETED_NO_ALLOCATION'
+    WHEN ${cols.daysToDeadline} IS NULL THEN 'PENDING'
+    WHEN ${cols.daysToDeadline} < 0 THEN 'MISSED'
+    WHEN ${cols.daysToDeadline} <= ${PENDENCY_AT_RISK_DAYS} THEN 'AT_RISK'
+    ELSE 'PENDING' END)`)
+}
+
+/**
+ * Match rows that count as "direct" for pendency: automatic (not reconstructed
+ * from past work, not a manual-allocation snapshot), strong or moderate, and
+ * first seen no later than the deadline's India day. `is_current` is not
+ * required, so a call missed months ago still shows the match it had then.
+ */
+export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string): Prisma.Sql {
+  const tiers = PENDENCY_MATCH_TIERS.map(t => `'${t}'`).join(',')
+  return Prisma.raw(`(${matchAlias}.inferred = false AND COALESCE(${matchAlias}.source_version,'') <> 'manual-allocation-v1'
+    AND ${matchAlias}.match_tier IN (${tiers})
+    AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= (${deadlineExpr} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date))`)
+}
+export const isQualifyingMatch = (m: { inferred: boolean; source_version: string | null; match_tier: string | null; first_seen_at: Date | string }, deadline: Date | string | null) =>
+  !m.inferred && m.source_version !== 'manual-allocation-v1' && PENDENCY_MATCH_TIERS.includes(m.match_tier as never)
+  && (!deadline || indiaDate(m.first_seen_at) <= indiaDate(deadline))
+
+/* -------------------------------------------------------------------------- */
+/* Follow-up effort — India weeks                                             */
+/* -------------------------------------------------------------------------- */
+
+const IST_OFFSET_MS = 330 * 60000
+/** YYYY-MM-DD of the India calendar day a UTC instant falls on. */
+export function indiaDate(at: Date | string): string {
+  return new Date(new Date(at).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10)
+}
+/** Monday (YYYY-MM-DD) of the India week containing this instant. */
+export function indiaWeekStart(at: Date | string): string {
+  const day = new Date(`${indiaDate(at)}T00:00:00Z`)
+  const offset = (day.getUTCDay() + 6) % 7
+  return new Date(day.getTime() - offset * 86400000).toISOString().slice(0, 10)
+}
+/** `indiaWeekStart` in SQL over a UTC timestamp column; yields a date. */
+export const indiaWeekStartSql = (column: string) => Prisma.raw(`date_trunc('week', (${column} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::date`)
+
+/** A follow-up the effort report counts: anything a person logged, not review history. */
+export const countableFollowUpSql = (alias = 'f') => Prisma.raw(`(${alias}.kind <> 'TRIAGE')`)
+export const isCountableFollowUp = (f: { kind: string }) => f.kind !== 'TRIAGE'
+export const facultyContactSql = (alias = 'f') =>
+  Prisma.raw(`(${alias}.kind IN (${FACULTY_CONTACT_KINDS.map(k => `'${k}'`).join(',')}) AND ${alias}.contact_target = 'FACULTY')`)
+export const isFacultyContact = (f: { kind: string; contact_target: string }) =>
+  FACULTY_CONTACT_KINDS.includes(f.kind as never) && f.contact_target === 'FACULTY'
 
 /* -------------------------------------------------------------------------- */
 /* Period rule                                                                */

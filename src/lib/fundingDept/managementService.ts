@@ -296,6 +296,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         reason:call.triage==='RELEVANT'?'School marked relevant':call.triage==='NOT_RELEVANT'?'School marked not relevant':isOrigin?'Selected as origin school':callMatches[0]?.match_reason || mappingRow?.reason || relevance.get(call.id)?.reason || null,
         reviewState:review,deadlineState:deadlineStatus,missed,submissionSummary:submission,
         allocations:callApps.filter(a=>a.assignment_id).map(a=>({applicationId:a.id,faculty:a.faculty||null,allocatedBy:a.allocatedBy||null,allocatedAt:a.created_at,
+          allocationMethod:a.allocation_method,allocationReason:a.allocation_reason,allocationNote:a.allocation_note,
           submissionState:submissionState(a,Boolean(a.verification)).state,workingStage:submissionState(a,Boolean(a.verification)).workingStage})),
         mapping:mappingRow?{source:mappingRow.source,reason:mappingRow.reason,mappedAt:mappingRow.mapped_at,backfilled:mappingRow.backfilled}:null,
         firstTouchAt,coverage:{primary:cover.primary?.user||null,deputies:deputies(school.id).map(m=>m.user),isAway:cover.away,covering:cover.away?cover.operational?.user||null:null,uncovered:cover.uncovered,responsible:responsible?.user||null,transferred:Boolean(transfer)},

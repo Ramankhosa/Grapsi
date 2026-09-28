@@ -3,11 +3,15 @@
 import Link from 'next/link'
 
 import ProposalStatusChip from '@/components/proposals/ProposalStatusChip'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
 import AssignDialog from '@/components/funding-dept/AssignDialog'
+import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
+import ManualAllocationDetails from '@/components/funding-dept/ManualAllocationDetails'
 import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
+import AssignmentRowActions from '@/components/funding-dept/AssignmentRowActions'
+import CallSchoolsPanel from '@/components/funding-dept/CallSchoolsPanel'
 import FollowUpPanel from '@/components/funding-dept/FollowUpPanel'
 import ReassignDialog from '@/components/funding-dept/ReassignDialog'
 import { useAuth } from '@/lib/auth-context'
@@ -69,6 +73,9 @@ interface TimelineEvent {
 }
 
 interface Assignment {
+  allocationMethod?: string | null
+  allocationReason?: string | null
+  allocationNote?: string | null
   id: string
   status: string
   deadlineAt: string | null
@@ -175,6 +182,11 @@ export default function CallDossierPage({ params }: { params: { callId: string }
   const [reassignTarget, setReassignTarget] = useState<Assignment | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [panelRevision, setPanelRevision] = useState(0)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  // Opened without ?school= (from Incoming calls): start on the first school the
+  // call actually reaches, not the viewer's first covered school.
+  const autoPicked = useRef(false)
 
   const load = useCallback(
     async (unitId: string) => {
@@ -188,6 +200,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           return
         }
         setData(payload)
+        setPanelRevision((value) => value + 1)
         if (!unitId && payload.school?.id) setSchoolId(payload.school.id)
         setError(null)
       } catch {
@@ -271,25 +284,6 @@ export default function CallDossierPage({ params }: { params: { callId: string }
     }
   }
 
-  const patchAssignment = async (id: string, body: Record<string, unknown>, label: string) => {
-    setBusy(true)
-    try {
-      const response = await authFetch(`/api/assignments/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const payload = await response.json()
-      if (!response.ok) {
-        showToast({ type: 'error', title: payload.error || `Could not ${label}.` })
-        return
-      }
-      await load(data?.school.id || '')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   if (authLoading || meLoading || (loading && !data)) {
     return (
       <main className="nk-ground nk-wash">
@@ -318,8 +312,8 @@ export default function CallDossierPage({ params }: { params: { callId: string }
       <main className="nk-ground nk-wash">
         <div className="mx-auto max-w-6xl px-4 py-16">
           <p className="nk-sub">{error}</p>
-          <Link href="/funding-dept/queue" className="nk-btn-secondary nk-btn-sm mt-4 inline-block">
-            Back to my schools&rsquo; calls
+          <Link href="/funding-dept/reports?tab=incoming" className="nk-btn-secondary nk-btn-sm mt-4 inline-block">
+            Back to Incoming calls
           </Link>
         </div>
       </main>
@@ -333,8 +327,8 @@ export default function CallDossierPage({ params }: { params: { callId: string }
   return (
     <main className="nk-ground nk-wash">
       <div className="mx-auto max-w-6xl px-4 py-8">
-        <Link href="/funding-dept/queue" className="nk-sub hover:underline">
-          ← My schools&rsquo; calls
+        <Link href="/funding-dept/reports?tab=incoming" className="nk-sub hover:underline">
+          ← DSR reports · Incoming calls
         </Link>
 
         {/* Header */}
@@ -365,6 +359,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           </div>
 
           <div className="flex flex-col items-end gap-2">
+            {!data.call.isDraft && <AllocateCallButton call={data.call} initialSchoolId={data.school.id} onAssigned={() => void load(data.school.id)} />}
             {data.schools.length > 1 && (
               <select
                 className="nk-select"
@@ -444,8 +439,26 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           </p>
         )}
 
+        {/* Every school this call concerns, side by side; picking one opens its faculty below. */}
+        <CallSchoolsPanel
+          callId={data.call.id}
+          selectedSchoolId={data.school.id}
+          revision={panelRevision}
+          onChanged={() => void load(data.school.id)}
+          onLoaded={(ids) => {
+            if (autoPicked.current) return
+            autoPicked.current = true
+            const fromUrl = new URLSearchParams(window.location.search).get('school')
+            if (!fromUrl && ids.length > 0 && !ids.includes(data.school.id)) setSchoolId(ids[0])
+          }}
+          onSelect={(id) => {
+            setSchoolId(id)
+            document.getElementById('school-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+        />
+
         {/* People */}
-        <section className="mt-8">
+        <section className="mt-8" id="school-detail">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="nk-title text-lg">Best matches in {data.school.name}</h2>
             <p className="nk-sub">
@@ -463,6 +476,56 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               )}
             </p>
           </div>
+          {(() => {
+            const shortlisted = data.people.filter((person) => person.candidateStatus === 'SHORTLISTED' && !person.assignmentId)
+            if (!me.capabilities.canAssign || shortlisted.length === 0 || data.call.isDraft) return null
+            return (
+              <div className="mt-3 rounded border border-cobalt-100 bg-cobalt-50 p-3 text-sm">
+                {!bulkOpen ? (
+                  <button className="nk-btn-primary nk-btn-sm" onClick={() => setBulkOpen(true)}>
+                    Allocate all shortlisted ({shortlisted.length})
+                  </button>
+                ) : (
+                  <form
+                    className="flex flex-wrap items-end gap-2"
+                    onSubmit={async (event) => {
+                      event.preventDefault()
+                      const form = new FormData(event.currentTarget)
+                      setBusy(true)
+                      try {
+                        const response = await authFetch('/api/assignments/bulk', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            fundingCallId: data.call.id,
+                            assignees: shortlisted.map((person) => ({ userId: person.userId, matchScore: person.score, matchTier: person.matchTier })),
+                            deadlineAt: form.get('deadline') || null,
+                            message: form.get('message') || null,
+                          }),
+                        })
+                        const payload = await response.json().catch(() => null)
+                        if (!response.ok) {
+                          showToast({ type: 'error', title: payload?.error || 'Could not allocate.' })
+                          return
+                        }
+                        showToast({ type: 'success', title: `Allocated to ${payload.createdCount}${payload.skippedCount ? ` · ${payload.skippedCount} skipped` : ''}` })
+                        setBulkOpen(false)
+                        await load(data.school.id)
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
+                  >
+                    <p className="w-full">Allocate this call to {shortlisted.map((person) => person.name).join(', ')}. Each is notified.</p>
+                    <label className="text-xs">Internal deadline<input name="deadline" type="date" className="nk-input block" /></label>
+                    <label className="min-w-[16rem] flex-1 text-xs">Message (optional)<input name="message" maxLength={5000} className="nk-input block w-full" /></label>
+                    <button className="nk-btn-primary nk-btn-sm" disabled={busy}>Allocate</button>
+                    <button type="button" className="nk-btn-secondary nk-btn-sm" onClick={() => setBulkOpen(false)}>Cancel</button>
+                  </form>
+                )}
+              </div>
+            )
+          })()}
           <div className="nk-panel mt-3">
             {data.peopleError ? (
               <p className="nk-sub p-4">{data.peopleError}</p>
@@ -581,6 +644,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
             <div className="mt-3 space-y-3">
               {data.assignments.map((assignment) => (
                 <div key={assignment.id} className="nk-panel p-4">
+                  <ManualAllocationDetails {...assignment} />
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -612,24 +676,25 @@ export default function CallDossierPage({ params }: { params: { callId: string }
                         <p className="nk-sub mt-0.5">Declined: {assignment.declinedReason}</p>
                       )}
                     </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      {assignment.status === 'DECLINED' && (
-                        <button
-                          className="nk-btn-secondary nk-btn-sm"
-                          disabled={busy}
-                          onClick={() =>
-                            void patchAssignment(assignment.id, { status: 'ASSIGNED' }, 'ask again')
-                          }
-                        >
-                          Ask again
-                        </button>
-                      )}
-                      <button
-                        className="nk-btn-secondary nk-btn-sm"
-                        onClick={() => setReassignTarget(assignment)}
-                      >
-                        Pass on
-                      </button>
+                    <div className="flex shrink-0 flex-wrap items-start gap-2">
+                      <AssignmentRowActions
+                        compact
+                        onChanged={(message) => {
+                          showToast({ type: 'success', title: message })
+                          void load(data.school.id)
+                        }}
+                        assignment={{
+                          id: assignment.id,
+                          status: assignment.status,
+                          outcome: assignment.outcome,
+                          deadlineAt: assignment.deadlineAt,
+                          declinedReason: assignment.declinedReason,
+                          callTitle: data.call.title,
+                          facultyName: assignment.assignee?.name || assignment.assignee?.email || 'Faculty',
+                          facultyEmail: assignment.assignee?.email,
+                          passedOnTo: assignment.passedOnTo,
+                        }}
+                      />
                       <button
                         className="nk-btn-secondary nk-btn-sm"
                         onClick={() =>
@@ -785,6 +850,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           fallbackName={profileTarget.name}
           fallbackHint={profileTarget.department}
           onClose={() => setProfileTarget(null)}
+          onAllocated={() => void load(data.school.id)}
         >
           {!profileTarget.assignmentId && (
             <button

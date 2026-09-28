@@ -12,7 +12,8 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { textArray, visibleCallSql } from './callSql'
+import { textArray, utcTimestamp, visibleCallSql } from './callSql'
+import { transferOwnerSql } from './hubScope'
 import type { ApplicationRow } from './managementRules'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import {
@@ -77,15 +78,15 @@ function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
       JOIN tenant_org_units s ON s.id = m.school_id
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = m.call_id AND tri.org_unit_id = m.school_id
       LEFT JOIN dsr_opportunity_dispositions disp ON disp.tenant_id=${tenantId} AND disp.school_id=m.school_id AND disp.call_id=m.call_id
-      LEFT JOIN dsr_responsibility_transfers tr ON tr.tenant_id=${tenantId} AND tr.school_id=m.school_id AND tr.call_id=m.call_id
+      LEFT JOIN LATERAL (SELECT ${transferOwnerSql(tenantId, 'm.school_id', 'm.call_id')} owner_user_id) tr ON TRUE
       WHERE m.tenant_id=${tenantId} AND m.is_active AND ${visibleCallSql(tenantId, 'fc')}
         ${f.scopeSchoolIds ? Prisma.sql`AND m.school_id = ANY(${textArray(f.scopeSchoolIds)})` : Prisma.empty}
         ${f.schoolId ? Prisma.sql`AND m.school_id = ${f.schoolId}` : Prisma.empty}
         ${f.source ? Prisma.sql`AND m.source = ${f.source}` : Prisma.empty}
         ${f.callId ? Prisma.sql`AND m.call_id = ${f.callId}` : Prisma.empty}
         ${f.callSearch ? Prisma.sql`AND (COALESCE(fc.scheme_title, fc.title) ILIKE ${`%${f.callSearch}%`} OR fc.id = ${f.callSearch})` : Prisma.empty}
-        ${f.start ? Prisma.sql`AND COALESCE(fc."publishedAt", fc."createdAt") >= ${f.start}` : Prisma.empty}
-        ${f.end ? Prisma.sql`AND COALESCE(fc."publishedAt", fc."createdAt") < ${f.end}` : Prisma.empty}
+        ${f.start ? Prisma.sql`AND COALESCE(fc."publishedAt", fc."createdAt") >= ${utcTimestamp(f.start)}` : Prisma.empty}
+        ${f.end ? Prisma.sql`AND COALESCE(fc."publishedAt", fc."createdAt") < ${utcTimestamp(f.end)}` : Prisma.empty}
     ), resp AS (
       SELECT r.*, ${review} review_state, ${deadline} deadline_state FROM facts r
     ), filtered AS (
@@ -109,7 +110,7 @@ export type RegisterResponsibility = {
   isOrigin: boolean; mappedAt: Date; backfilled: boolean; coordinator: { id: string; name: string } | null; transferred: boolean
   reviewState: ReviewState; deadlineState: DeadlineState; formalAllocations: number; allocatedSubmissions: number; submissions: number
   independentApplications: number; disposition: { reason: string; explanation: string | null } | null
-  allocations: Array<{ applicationId: string; faculty: string | null; allocatedBy: string | null; allocatedAt: Date; submissionState: string; workingStage: string | null }>
+  allocations: Array<{ applicationId: string; faculty: string | null; allocatedBy: string | null; allocatedAt: Date; submissionState: string; workingStage: string | null; allocationMethod?: string | null; allocationReason?: string | null; allocationNote?: string | null }>
   independent: Array<{ applicationId: string; faculty: string | null; submissionState: string }>
   nextAction: { title: string; owner: string | null; dueAt: Date | null } | null
 }
@@ -182,6 +183,7 @@ async function detail(tenantId: string, f: RegisterFilters, base: Prisma.Sql, ca
         submissions: r.submissions, independentApplications: r.independent_applications,
         disposition: r.disposition_reason ? { reason: r.disposition_reason, explanation: r.disposition_explanation } : null,
         allocations: schoolApps.filter(a => a.assignment_id).map(a => ({ applicationId: a.id, faculty: a.faculty_name, allocatedBy: a.allocator_name, allocatedAt: a.created_at,
+          allocationMethod: a.allocation_method, allocationReason: a.allocation_reason, allocationNote: a.allocation_note,
           ...submissionState(a, verified.has(a.id)), submissionState: submissionState(a, verified.has(a.id)).state })),
         independent: schoolApps.filter(a => !a.assignment_id).map(a => ({ applicationId: a.id, faculty: a.faculty_name, submissionState: submissionState(a, verified.has(a.id)).state })),
         nextAction: action ? { title: action.title, owner: action.owner, dueAt: action.due_at }
@@ -239,7 +241,7 @@ export async function getOverview(tenantId: string, f: { scopeSchoolIds?: string
       COALESCE(sum(formal_allocations),0)::int allocations, COALESCE(sum(submissions),0)::int submissions
     FROM filtered`)
   const [entered] = await prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`SELECT count(*)::int n FROM funding_calls fc
-    WHERE ${visibleCallSql(tenantId, 'fc')} AND COALESCE(fc."publishedAt", fc."createdAt") >= ${f.start} AND COALESCE(fc."publishedAt", fc."createdAt") < ${f.end}
+    WHERE ${visibleCallSql(tenantId, 'fc')} AND COALESCE(fc."publishedAt", fc."createdAt") >= ${utcTimestamp(f.start)} AND COALESCE(fc."publishedAt", fc."createdAt") < ${utcTimestamp(f.end)}
       ${f.scopeSchoolIds ? Prisma.sql`AND EXISTS (SELECT 1 FROM dsr_call_school_mappings m WHERE m.tenant_id=${tenantId} AND m.call_id=fc.id AND m.school_id = ANY(${textArray(f.scopeSchoolIds)}))` : Prisma.empty}`)
   const [attention] = await prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`${allBase}
     SELECT count(*) FILTER (WHERE deadline_state='CLOSING_SOON' AND review_state IN ('NOT_REVIEWED','REVIEWED_ALLOCATION_PENDING'))::int closing_soon_unallocated,

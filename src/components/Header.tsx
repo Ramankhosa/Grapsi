@@ -363,11 +363,10 @@ export default function Header() {
           {
             label: 'Day to day',
             items: [
-              { href: '/funding-dept', icon: '\u{1F9ED}', title: 'My Worklist', description: 'Deadlines, follow-ups due and open calls in your schools' },
-              { href: '/funding-dept/queue', icon: '\u{1F9EA}', title: "My Schools' Calls", description: 'Open calls matching your schools, and what is still unassigned' },
+              { href: '/funding-dept/reports', icon: '\u{1F4C2}', title: 'DSR Reports', description: 'Incoming calls, assigned calls, pendency and weekly follow-ups, linked together' },
+              { href: '/funding-dept/accountability?view=workbench', icon: '\u{1F9ED}', title: 'My Worklist', description: 'Deadlines, follow-ups due and open calls in your schools' },
               { href: '/funding-dept/chase', icon: '\u23F0', title: 'Chase Queue', description: 'Everything overdue, unanswered or gone quiet, worst first' },
               { href: '/funding-dept/proposals', icon: '\u{1F4DD}', title: 'Proposal Desk', description: 'Every application in your schools: drafts, reviews, clearance and the agency outcome' },
-              { href: '/funding-dept/assignments', icon: '\u{1F5C2}\uFE0F', title: 'Calls I Assigned', description: 'Track, chase and update the assignments you handed out' },
               { href: '/funding-dept/faculty', icon: '\u{1F393}', title: 'Faculty in My Schools', description: 'Directory of the faculty your coverage lets you assign to' },
               { href: '/researcher-matching', icon: '\u{1F3AF}', title: 'Find Researchers', description: 'Match faculty to a funding call and assign or circulate it' },
               {
@@ -444,6 +443,7 @@ export default function Header() {
             items: [
               { href: '/funding/imports', icon: '\u{1F4E5}', title: 'Import Funding Calls', description: "Upload call documents or URLs into your organization's catalog" },
               { href: '/researcher-matching', icon: '\u{1F3AF}', title: 'Find Researchers', description: 'Match faculty to a funding call, then assign or bulk-circulate it' },
+              { href: '/funding-dept/reports', icon: '\u{1F4C2}', title: 'DSR Reports', description: 'Incoming calls, assigned calls, pendency and weekly follow-ups, linked together' },
               { href: '/funding-dept/overview', icon: '\u{1F4CB}', title: 'Department Overview', description: 'Pendency, load and coverage, by member and by school' },
               { href: '/funding-dept/accountability', icon: '\u{1F4CA}', title: 'Accountability', description: 'Member by member: pendency, chasing, submissions and who is behind' },
               { href: '/tenant-admin/dsr-accountability', icon: '🧾', title: 'Sponsored Research Oversight', description: 'Unallocated calls, faculty nobody has approached, and how fast the office moves' },

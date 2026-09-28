@@ -25,7 +25,12 @@ export async function GET(request: NextRequest, { params }: { params: { userId: 
   const report=snapshot?await readReportSnapshot(snapshot,access.context.tenantId,access.context.user.id,reportScopeKey(access),reportFilterKey(query,'coverage')):
     await getManagementReport(access.context.tenantId,{...await managementWindow(access.context.tenantId,query),mode:'portfolio',schoolIds:[schoolId],includeExpired:query.get('includeExpired')==='true',facultyId:person.id})
   const faculty=report.faculty.find(p=>p.id===person.id)
-  const all=report.members.flatMap(m=>m.schools.filter(s=>s.id===schoolId).flatMap(s=>s.calls.filter(c=>c.matches.some(match=>match.user_id===person.id)).map(c=>({...c,match:c.matches.find(match=>match.user_id===person.id)}))))
+  const rows=report.members.flatMap(m=>m.schools.filter(s=>s.id===schoolId).flatMap(s=>s.calls.flatMap(c=>{
+    const match=c.matches.find(match=>match.user_id===person.id)
+    const allocation=c.allocations?.find(allocation=>allocation.faculty?.id===person.id)
+    return match||allocation?[{...c,match:match||null,allocation:allocation||null}]:[]
+  })))
+  const all=[...new Map(rows.map(call=>[call.id,call])).values()]
   const page=Math.max(1,Number.parseInt(query.get('page')||'1',10)||1),pageSize=20
   return NextResponse.json({person:{id:person.id,name:person.name||person.email,schoolId},readiness:{isUnprofiled:!faculty?.profileReady},calls:all.slice((page-1)*pageSize,page*pageSize),total:all.length,page,pageSize,options:report.options},{headers:{'Cache-Control':'private, no-store'}})
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Matching calls unavailable.'},{status:error instanceof ManagementError?error.status:500})}

@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
+import { utcTimestamp } from './callSql'
+
 export type OpportunitySource = 'alert' | 'candidate' | 'assignment' | 'matching'
 
 export async function snapshotFundingOpportunity(input: {
@@ -16,10 +18,10 @@ export async function snapshotFundingOpportunity(input: {
   source: OpportunitySource
   sourceVersion?: string | null
   firstSeenAt?: Date
-}): Promise<void> {
+}, db: Prisma.TransactionClient = prisma): Promise<void> {
   let orgUnitId = input.orgUnitId ?? null
   if (!orgUnitId) {
-    const profile = await prisma.researcherProfile.findUnique({
+    const profile = await db.researcherProfile.findUnique({
       where: { user_id: input.userId },
       select: { org_unit_id: true },
     })
@@ -28,15 +30,17 @@ export async function snapshotFundingOpportunity(input: {
 
   let schoolId: string | null = null
   if (orgUnitId) {
-    const unit = await prisma.tenantOrgUnit.findUnique({
+    const unit = await db.tenantOrgUnit.findUnique({
       where: { id: orgUnitId },
       select: { path: true },
     })
     schoolId = unit?.path?.[0] || orgUnitId
   }
 
+  // UTC like the ORM's columns: a bare bound Date or now() lands in the session
+  // time zone, which is not UTC on every server.
   const seenAt = input.firstSeenAt ?? new Date()
-  await prisma.$executeRaw(Prisma.sql`
+  await db.$executeRaw(Prisma.sql`
     INSERT INTO funding_opportunity_matches (
       id, tenant_id, funding_call_id, user_id, org_unit_id, school_id,
       match_score, match_tier, match_reason, source, source_version,
@@ -45,12 +49,13 @@ export async function snapshotFundingOpportunity(input: {
       ${`fom_${randomUUID()}`}, ${input.tenantId}, ${input.fundingCallId},
       ${input.userId}, ${orgUnitId}, ${schoolId}, ${input.score ?? null},
       ${input.tier ?? null}, ${input.reason ?? null}, ${input.source},
-      ${input.sourceVersion ?? null}, false, false, ${seenAt}, ${seenAt}, ${seenAt}, now(), now()
+      ${input.sourceVersion ?? null}, false, false, ${utcTimestamp(seenAt)}, ${utcTimestamp(seenAt)}, ${utcTimestamp(seenAt)},
+      (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC')
     )
     ON CONFLICT (tenant_id, funding_call_id, user_id, school_id)
     DO UPDATE SET
       last_seen_at = GREATEST(funding_opportunity_matches.last_seen_at, EXCLUDED.last_seen_at),
-      updated_at = now()
+      updated_at = (now() AT TIME ZONE 'UTC')
   `)
 }
 

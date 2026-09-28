@@ -11,6 +11,8 @@
  * mis-told story can be reproduced in a test rather than a fixture.
  */
 
+import { ALLOCATION_REASON_LABELS, type AllocationReason } from '@/lib/assignments/manualAllocation'
+
 export type TimelineKind =
   | 'TRIAGE'
   | 'SHORTLISTED'
@@ -75,6 +77,9 @@ export interface TimelineSources {
     created_by: Person | null
   }>
   assignments: Array<{
+    allocation_method?: string | null
+    allocation_reason?: string | null
+    allocation_note?: string | null
     id: string
     status: string
     created_at: Date | string
@@ -322,7 +327,7 @@ function fromAssignments(rows: TimelineSources['assignments']): TimelineEvent[] 
         at: iso(row.created_at),
         kind: 'ASSIGNED',
         title: `Assigned to ${assignee}`,
-        detail: null,
+        detail: row.allocation_method === 'MANUAL' ? ['Manual allocation', ALLOCATION_REASON_LABELS[row.allocation_reason as AllocationReason] || row.allocation_reason, row.allocation_note].filter(Boolean).join(' · ') : null,
         actor: assigner,
         assignmentId: row.id,
         refId: `${row.id}:assigned`,
@@ -581,13 +586,18 @@ export function departmentEventTitle(row: { entity_type: string; kind: string; s
   const school = row.school_name || 'a school'
   const after = row.after_data || {}
   switch (`${row.entity_type}:${row.kind}`) {
+    case 'ALLOCATION:MANUAL_ALLOCATION': return `Manually allocated to ${after.facultyName || 'faculty'} in ${school}`
     case 'MAPPING:MAPPED': return after.source === 'ORIGIN' ? `Mapped to ${school} as its origin school` : `Mapped to ${school}${after.reason ? ` — ${after.reason}` : ''}`
     case 'MAPPING:ADDED_BY_HEAD': return `DSR head added ${school}`
     case 'MAPPING:REINSTATED': return `DSR head reinstated ${school}`
+    case 'MAPPING:MANUAL_ALLOCATION': return `Manual allocation added ${school}'s responsibility`
+    case 'MAPPING:REOPENED_BY_ALLOCATION': return `Manual allocation reopened ${school}'s responsibility`
     case 'MAPPING:ENDED': return `DSR head ended ${school}'s responsibility`
     case 'RESPONSIBILITY:TRANSFER': return `Responsibility in ${school} transferred`
     case 'DISPOSITION:UPDATED': return `${school} recorded no uptake: ${String(after.disposition || '').toLowerCase().replace(/_/g, ' ')}`
     case 'ORIGIN_ATTRIBUTION:CORRECTED': return `Origin school corrected to ${after.origin_school_name || school}`
+    case 'REVIEW:ACTION_COMPLETED': return `${school}: DSR action marked completed`
+    case 'REVIEW:ACTION_REOPENED': return `${school}: DSR action completion undone`
     case 'ACTION:CREATED': return `Action set in ${school}: ${after.title || ''}`
     case 'ACTION:COMPLETED': return `Action completed in ${school}: ${after.title || ''}`
     case 'ACTION:CANCELLED': return `Action cancelled in ${school}: ${after.title || ''}`

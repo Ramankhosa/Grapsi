@@ -224,16 +224,16 @@ const fundingDeptGroup: ProductGroup = {
       tag: 'Department'
     },
     {
-      title: "My Schools' Calls",
-      description: "Open calls matching your schools' disciplines that still need somebody.",
-      href: '/funding-dept/queue',
+      title: 'Incoming Calls',
+      description: 'Open calls that reach your schools, and which still need a DSR action.',
+      href: '/funding-dept/reports?tab=incoming',
       icon: Filter,
       tag: 'Department'
     },
     {
-      title: 'Calls I Assigned',
-      description: 'Track replies and record what you did about them.',
-      href: '/funding-dept/assignments',
+      title: 'Assigned Calls',
+      description: 'Every allocation in your schools: replies, follow-ups and submissions.',
+      href: '/funding-dept/reports?tab=assigned',
       icon: ClipboardList,
       tag: 'Department'
     },

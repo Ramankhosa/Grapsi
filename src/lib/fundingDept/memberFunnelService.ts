@@ -238,6 +238,7 @@ export async function getMemberFunnelReport(
                  BOOL_AND(inferred) AS inferred, MIN(first_seen_at) AS first_seen_at
             FROM funding_opportunity_matches
            WHERE tenant_id = ${tenantId} AND school_id = ANY(${textArray(schoolIds)})
+             AND source_version IS DISTINCT FROM 'manual-allocation-v1'
            GROUP BY school_id, funding_call_id
         `)
       : Promise.resolve([]),

@@ -5,8 +5,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
+import ManualAllocationDetails from '@/components/funding-dept/ManualAllocationDetails'
 
 interface Assignment {
+  allocationMethod?: string | null
+  allocationReason?: string | null
+  allocationNote?: string | null
   id: string
   status: 'ASSIGNED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'LAPSED' | 'DECLINED'
   message: string | null
@@ -142,10 +146,11 @@ export default function AssignmentsPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await authFetch(`/api/assignments?view=${nextView}`)
+      const selectedId = new URLSearchParams(window.location.search).get('assignmentId')
+      const res = await authFetch(selectedId ? `/api/assignments/${encodeURIComponent(selectedId)}` : `/api/assignments?view=${nextView}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load assignments')
-      setAssignments(data.assignments || [])
+      setAssignments(data.assignment ? [data.assignment] : data.assignments || [])
     } catch (e: any) {
       setError(e.message)
       setAssignments([])
@@ -155,7 +160,11 @@ export default function AssignmentsPage() {
   }, [authFetch])
 
   useEffect(() => {
-    if (user) fetchAssignments(view)
+    if (user) {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('assignmentId') && params.get('view') === 'managed' && view !== 'managed') { setView('managed'); return }
+      fetchAssignments(view)
+    }
   }, [user, view, fetchAssignments])
 
   /**
@@ -353,7 +362,7 @@ export default function AssignmentsPage() {
             {(['mine', 'managed'] as const).map(tab => (
               <button
                 key={tab}
-                onClick={() => setView(tab)}
+                onClick={() => { window.history.replaceState(null, '', '/assignments'); if (view === tab) void fetchAssignments(tab); else setView(tab) }}
                 className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
                   view === tab
                     ? 'bg-blue-600 text-white'
@@ -443,6 +452,7 @@ export default function AssignmentsPage() {
                     </div>
                   </div>
 
+                  <ManualAllocationDetails {...assignment} />
                   {assignment.message && (
                     <blockquote className="mt-3 border-l-2 border-gray-300 dark:border-gray-600 pl-3 text-sm text-gray-600 dark:text-gray-300">
                       {assignment.message}

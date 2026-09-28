@@ -45,6 +45,15 @@ function assignment(overrides: Partial<TimelineSources['assignments'][number]>) 
 }
 
 describe('call timeline', () => {
+  it('shows the manual reason without treating willingness as faculty acceptance', () => {
+    const { events } = buildTimeline({ ...empty, assignments: [assignment({
+      allocation_method: 'MANUAL', allocation_reason: 'FACULTY_WILLINGNESS', allocation_note: 'Discussed at the faculty meeting',
+    })] });
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('ASSIGNED');
+    expect(events[0].detail).toBe('Manual allocation · Faculty willingness · Discussed at the faculty meeting');
+  });
+
   it('orders newest first and puts a pre-assignment note before the assignment', () => {
     const { events } = buildTimeline({
       ...empty,

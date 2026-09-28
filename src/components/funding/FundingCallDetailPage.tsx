@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import type { FundingCallDetail } from '@/types/funding'
 import CallResearchAreas from '@/components/funding/CallResearchAreas'
+import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
 
 type FundingCallDetailPageProps = {
   callId: string
@@ -198,6 +199,7 @@ export default function FundingCallDetailPage({
             </p>
           </div>
 
+          {call && !requireSuperAdmin && (call.status === 'PUBLISHED' || call.catalogStatus === 'PUBLISHED') && <AllocateCallButton call={{ id: callId, title: call.title, agency: call.agencyName, closeDate: call.deadlineAt }} onAssigned={() => void fetchCall()} />}
           {call && canPublishTenantCall && call.visibility === 'TENANT_PRIVATE' ? (
             <div className="flex flex-col items-end gap-1">
               <button

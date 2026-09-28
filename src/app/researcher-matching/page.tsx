@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
+import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import MatchResults, { MatchResult, SearchResponse } from '@/components/researcher-matching/MatchResults'
@@ -628,13 +629,10 @@ export default function TenantResearcherMatchingPage() {
                     </p>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  className="nk-btn-secondary nk-btn-sm shrink-0"
-                  onClick={() => setChangingCall(true)}
-                >
-                  Change call
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <AllocateCallButton call={{ id: selectedCall.id, title: selectedCall.schemeTitle, closeDate: selectedCall.closeDate }} onAssigned={() => { void fetchAssignments(); void loadShortlist(selectedCall.id) }} />
+                  <button type="button" className="nk-btn-secondary nk-btn-sm shrink-0" onClick={() => setChangingCall(true)}>Change call</button>
+                </div>
               </div>
             ) : (
               <div>
@@ -1224,6 +1222,7 @@ export default function TenantResearcherMatchingPage() {
               .filter(Boolean)
               .join(' \u00b7 ')}
             onClose={() => setProfileTarget(null)}
+            onAllocated={() => { void fetchAssignments(); if (selectedCall) void loadShortlist(selectedCall.id) }}
           >
             {canAssign &&
               mode === 'call' &&

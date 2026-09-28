@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
+import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 
@@ -120,10 +121,13 @@ export default function DeptFacultyPage() {
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(
-    async (nextOffset: number, next: FacultyFilters) => {
-      setLoading(true)
-      setFilters(next)
-      setDraftFilters(next)
+    async (nextOffset: number, next: FacultyFilters, refresh = false) => {
+      // Keep the roster mounted after allocation so scroll and focus survive.
+      if (!refresh) {
+        setLoading(true)
+        setFilters(next)
+        setDraftFilters(next)
+      }
       try {
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
@@ -153,7 +157,7 @@ export default function DeptFacultyPage() {
           setOffset(nextOffset)
         }
       } finally {
-        setLoading(false)
+        if (!refresh) setLoading(false)
       }
     },
     [authFetch]
@@ -621,6 +625,7 @@ export default function DeptFacultyPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
+                          <AllocateCallButton person={{ ...person, name: person.name || person.email }} onAssigned={() => void load(offset, filters, true)} className="nk-btn-primary nk-btn-sm mr-2" />
                           <button
                             type="button"
                             className="nk-btn-secondary nk-btn-sm"
@@ -671,6 +676,7 @@ export default function DeptFacultyPage() {
               .filter(Boolean)
               .join(' \u00b7 ')}
             onClose={() => setProfileTarget(null)}
+            onAllocated={() => void load(offset, filters, true)}
           />
         )}
       </div>

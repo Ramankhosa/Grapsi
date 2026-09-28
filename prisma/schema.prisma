@@ -805,6 +805,7 @@ model User {
   callAreaOverrides           FundingCallResearchAreaTaxonomy[] @relation("CallAreaOverrideAuthor")
   orgUnitResearchAreasAdded   TenantOrgUnitResearchArea[]       @relation("OrgUnitResearchAreaAuthor")
   callSchoolTriageDecisions   CallSchoolTriage[]                @relation("CallSchoolTriageDecider")
+  callSchoolTriageCompletions CallSchoolTriage[]                @relation("CallSchoolTriageCompleter")
   monitoredSourcesOwned       MonitoredSource[]                 @relation("MonitoredSourceOwner")
   monitoredChangesResolved    MonitoredChange[]                 @relation("MonitoredChangeResolver")
 
@@ -3164,6 +3165,11 @@ model CallAssignment {
   match_tier  String?
   match_basis String?
 
+  // Human allocation provenance, separate from automatic matching evidence.
+  allocation_method String?
+  allocation_reason String?
+  allocation_note   String?
+
   // Org placement AT THE TIME OF ASSIGNMENT, for scoping and reporting.
   // Snapshots, not live joins: moving someone next semester must not rewrite
   // last year's report, and the assigner is frequently an ADMIN with no
@@ -3432,6 +3438,14 @@ model CallSchoolTriage {
 
   decided_by_user_id String?
   decided_at         DateTime?
+
+  /// The coordinator's manual "action completed" mark for this school. Never
+  /// set by an allocation, shortlist or sweep — only by a person, through
+  /// POST /api/funding-dept/calls/[callId]/action-status (audited in dsr_events).
+  action_completed_at         DateTime?
+  action_completed_by_user_id String?
+  action_completed_note       String?
+
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt
 
@@ -3439,9 +3453,11 @@ model CallSchoolTriage {
   funding_call FundingCall   @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
   org_unit     TenantOrgUnit @relation(fields: [org_unit_id], references: [id], onDelete: Cascade)
   decided_by   User?         @relation("CallSchoolTriageDecider", fields: [decided_by_user_id], references: [id], onDelete: SetNull)
+  action_completed_by User?  @relation("CallSchoolTriageCompleter", fields: [action_completed_by_user_id], references: [id], onDelete: SetNull, map: "call_school_triage_action_completed_by_fkey")
 
   @@unique([funding_call_id, org_unit_id], map: "call_school_triage_call_unit_key")
   @@index([tenant_id, org_unit_id, status], map: "idx_call_school_triage_tenant_unit_status")
+  @@index([tenant_id, org_unit_id, action_completed_at], map: "idx_call_school_triage_action_completed")
   @@index([funding_call_id], map: "idx_call_school_triage_call")
   @@map("call_school_triage")
 }

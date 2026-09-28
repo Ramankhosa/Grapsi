@@ -76,3 +76,13 @@ export async function subtreeUnitIds(tenantId: string, rootIds: string[]): Promi
   `)
   return rows.length > 0 ? rows.map((row) => row.id) : rootIds
 }
+
+/**
+ * A JS instant as a UTC `timestamp` literal, for comparing with or writing to
+ * the ORM's zone-less UTC columns. A bare bound Date is read in the session time
+ * zone (Asia/Kolkata on some servers), which shifts it by 5½ hours.
+ */
+export function utcTimestamp(value: Date | null | undefined): Prisma.Sql {
+  if (!value) return Prisma.sql`NULL::timestamp`
+  return Prisma.sql`(${value.toISOString()}::timestamptz AT TIME ZONE 'UTC')`
+}

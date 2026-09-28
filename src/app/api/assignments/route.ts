@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { z } from 'zod'
+import { Prisma } from '@/lib/prisma-generated'
+import { createAssignmentSchema, ALLOCATION_REASON_LABELS } from '@/lib/assignments/manualAllocation'
+import { ensureManualAllocationMapping } from '@/lib/assignments/manualAllocationMapping'
 import { prisma } from '@/lib/prisma'
 import { snapshotFundingOpportunity } from '@/lib/fundingDept/opportunitySnapshot'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
@@ -24,16 +26,6 @@ export const dynamic = 'force-dynamic'
  * submission info. The message is stored and shown in-app — email is a
  * best-effort courtesy on top, since there is no in-app inbox.
  */
-
-const createSchema = z.object({
-  fundingCallId: z.string().trim().min(1, 'A funding call is required'),
-  assigneeUserId: z.string().trim().min(1, 'A faculty member is required'),
-  deadlineAt: z.string().trim().nullable().optional(),
-  message: z.string().trim().max(5000).nullable().optional(),
-  matchScore: z.number().nullable().optional(),
-  matchTier: z.string().trim().max(20).nullable().optional(),
-  matchBasis: z.string().trim().max(20).nullable().optional(),
-})
 
 /**
  * GET ?view=mine (default) | assigned-by-me | team (alias: managed)
@@ -170,7 +162,7 @@ export async function POST(request: NextRequest) {
 
   let payload
   try {
-    payload = createSchema.parse(await request.json())
+    payload = createAssignmentSchema.parse(await request.json())
   } catch (error: any) {
     return NextResponse.json(
       { error: error?.errors?.[0]?.message || 'Invalid request body' },
@@ -187,7 +179,9 @@ export async function POST(request: NextRequest) {
   }
 
   const assignee = await prisma.user.findFirst({
-    where: { id: payload.assigneeUserId, tenantId: context.tenantId },
+    where: { id: payload.assigneeUserId, tenantId: context.tenantId,
+      ...(payload.allocationMethod === 'MANUAL' ? { status: 'ACTIVE' as const, NOT: { roles: { hasSome: ['SUPER_ADMIN' as const, 'SUPER_ADMIN_VIEWER' as const] } } } : {}),
+    },
     select: { id: true, name: true, email: true },
   })
   if (!assignee) {
@@ -227,43 +221,72 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const record = await prisma.callAssignment.create({
-    data: {
-      tenant_id: context.tenantId,
-      funding_call_id: call.id,
-      assignee_user_id: assignee.id,
-      assigned_by_user_id: context.user.id,
-      message: payload.message || null,
-      deadline_at: parseDate(payload.deadlineAt),
-      match_score: payload.matchScore ?? null,
-      match_tier: payload.matchTier || null,
-      match_basis: payload.matchBasis || null,
-      // Org placement snapshotted at assignment time: moving someone next
-      // semester must not rewrite last year's report, and the assigner is often
-      // an admin with no researcher profile to join against.
-      assignee_org_unit_id: permission.assigneeUnitId,
-      assigner_org_unit_id: await resolveAssignerUnitId(context.scope),
-    },
-    include: assignmentInclude,
-  })
+  const manual = payload.allocationMethod === 'MANUAL'
+  const assignerUnitId = await resolveAssignerUnitId(context.scope)
+  let record
+  try {
+    record = await prisma.$transaction(async tx => {
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`)
+      const created = await tx.callAssignment.create({
+        data: {
+          tenant_id: context.tenantId,
+          funding_call_id: call.id,
+          assignee_user_id: assignee.id,
+          assigned_by_user_id: context.user.id,
+          message: payload.message || null,
+          deadline_at: parseDate(payload.deadlineAt),
+          match_score: manual ? null : payload.matchScore ?? null,
+          match_tier: manual ? null : payload.matchTier || null,
+          match_basis: manual ? null : payload.matchBasis || null,
+          allocation_method: payload.allocationMethod || null,
+          allocation_reason: payload.allocationReason || null,
+          allocation_note: payload.allocationNote || null,
+          // Placement is snapshotted so later moves cannot rewrite reporting.
+          assignee_org_unit_id: permission.assigneeUnitId,
+          assigner_org_unit_id: assignerUnitId,
+        },
+        include: assignmentInclude,
+      })
 
-  await snapshotFundingOpportunity({
-    tenantId: context.tenantId,
-    fundingCallId: call.id,
-    userId: assignee.id,
-    orgUnitId: permission.assigneeUnitId,
-    score: payload.matchScore ?? null,
-    tier: payload.matchTier ?? null,
-    reason: payload.matchBasis || null,
-    source: 'assignment',
-    sourceVersion: 'assignment-v1',
-  })
+      if (manual && payload.allocationReason) {
+        const reason = [ALLOCATION_REASON_LABELS[payload.allocationReason], payload.allocationNote].filter(Boolean).join(': ')
+        await ensureManualAllocationMapping(tx, { tenantId: context.tenantId, callId: call.id,
+          orgUnitId: permission.assigneeUnitId, actorId: context.user.id, reason })
+        // The application trigger keeps lifecycle history. A call-level event
+        // also exposes this human decision in the DSR Audit report.
+        await tx.$executeRaw(Prisma.sql`
+          INSERT INTO dsr_events(tenant_id, school_id, entity_type, entity_id, actor_user_id, kind, after_data, reason)
+          VALUES (${context.tenantId}, (SELECT path[1] FROM tenant_org_units WHERE id=${permission.assigneeUnitId}),
+            'ALLOCATION', ${call.id}, ${context.user.id}, 'MANUAL_ALLOCATION',
+            ${JSON.stringify({ assignmentId: created.id, facultyName: assignee.name || assignee.email, allocationReason: payload.allocationReason, allocationNote: payload.allocationNote || null })}::jsonb, ${reason})`)
+      }
+      await snapshotFundingOpportunity({
+        tenantId: context.tenantId,
+        fundingCallId: call.id,
+        userId: assignee.id,
+        orgUnitId: permission.assigneeUnitId,
+        score: manual ? null : payload.matchScore ?? null,
+        tier: manual ? null : payload.matchTier ?? null,
+        reason: manual ? null : payload.matchBasis || null,
+        source: 'assignment',
+        sourceVersion: manual ? 'manual-allocation-v1' : 'assignment-v1',
+      }, tx)
+      return created
+    })
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2002') {
+      const duplicate = await prisma.callAssignment.findUnique({ where: { funding_call_id_assignee_user_id: { funding_call_id: call.id, assignee_user_id: assignee.id } }, select: { id: true } })
+      if (duplicate) return NextResponse.json({ error: 'This call is already allocated to this faculty member.', assignmentId: duplicate.id }, { status: 409 })
+    }
+    console.error('Assignment creation failed', error)
+    return NextResponse.json({ error: 'Could not save the allocation. Please try again.' }, { status: 500 })
+  }
 
   await notifyNewAssignment({
     tenantId: context.tenantId,
     record,
     assigner: context.user,
-  })
+  }).catch(error => console.warn('Assignment notification unavailable', error))
 
   // Keep the shortlist honest without making the officer restate the outcome.
   // updateMany rather than upsert: assigning someone who was never shortlisted

@@ -12,6 +12,7 @@ export type OpportunityActionInput = {
   dispositionRecorded: boolean
 }
 export type ApplicationRow = {
+  allocation_method?: string | null; allocation_reason?: string | null; allocation_note?: string | null
   id: string; tenant_id: string; school_id: string | null; call_id: string | null
   assignment_id: string | null; proposal_id: string | null; faculty_id: string
   allocated_by: string; created_at: Date; assignment_status: string | null; outcome: string | null

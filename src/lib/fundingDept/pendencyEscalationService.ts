@@ -329,7 +329,7 @@ async function sweepTenant(
         title,
         body,
         category: 'DEADLINE',
-        linkUrl: '/funding-dept/accountability?tab=backlog',
+        linkUrl: '/funding-dept/reports?tab=incoming&action=NOT_STARTED',
       })
       result.noticesSent += 1
     } catch (error) {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { findCallsInMyAreas } from '@/lib/funding/myAreasService'
+import { utcTimestamp } from './callSql'
 
 // Coalesce simultaneous readers. Persisted projections are reused only while the
 // profile, membership, publication and call input fingerprint is unchanged.
@@ -84,6 +85,10 @@ async function refresh(tenantId:string,schoolId:string) {
   }
   const unprofiled=results.filter(r=>r.result.readiness.isUnprofiled).map(r=>r.profile.user_id)
   const at=new Date(), runId=randomUUID()
+  // These are the ORM's zone-less UTC columns. A bare bound Date is stored in the
+  // session time zone (IST on some servers), which put first_seen_at 5½ hours
+  // ahead and skewed Pendency's days-unallocated and its deadline-day cut-off.
+  const stamp=utcTimestamp(at)
   const rows=results.flatMap(({profile,result})=>result.calls.map(call=>({id:randomUUID(),userId:profile.user_id,unitId:profile.org_unit_id,callId:call.id,score:call.score,tier:call.tier,reason:`${call.source}${call.matchedOn?`: ${call.matchedOn}`:''}`})))
   if(await inputFingerprint(tenantId,schoolId)!==fingerprint)throw new Error('Matching inputs changed during refresh. Refresh the report to evaluate the updated profiles.')
   await prisma.$transaction(async tx=>{
@@ -91,7 +96,7 @@ async function refresh(tenantId:string,schoolId:string) {
     await tx.$executeRaw(Prisma.sql`UPDATE funding_opportunity_matches SET is_current=false WHERE tenant_id=${tenantId} AND school_id=${schoolId}`)
     // One bulk write; zero results deliberately deactivates all old matches.
     if(rows.length)await tx.$executeRaw(Prisma.sql`INSERT INTO funding_opportunity_matches(id,tenant_id,funding_call_id,user_id,org_unit_id,school_id,match_score,match_tier,match_reason,source,source_version,inferred,is_current,match_run_id,refreshed_at,first_seen_at,last_seen_at,created_at,updated_at)
-      SELECT r.id,${tenantId},r."callId",r."userId",r."unitId",${schoolId},r.score,r.tier,r.reason,'matching','person-call-census-v1',false,true,${runId},${at},${at},${at},${at},${at}
+      SELECT r.id,${tenantId},r."callId",r."userId",r."unitId",${schoolId},r.score,r.tier,r.reason,'matching','person-call-census-v1',false,true,${runId},${stamp},${stamp},${stamp},${stamp},${stamp}
       FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(id text,"callId" text,"userId" text,"unitId" text,score double precision,tier text,reason text)
       ON CONFLICT(tenant_id,funding_call_id,user_id,school_id) DO UPDATE SET org_unit_id=EXCLUDED.org_unit_id,match_score=EXCLUDED.match_score,match_tier=EXCLUDED.match_tier,match_reason=EXCLUDED.match_reason,source=EXCLUDED.source,source_version=EXCLUDED.source_version,inferred=false,is_current=true,match_run_id=EXCLUDED.match_run_id,refreshed_at=EXCLUDED.refreshed_at,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`)
     await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_match_projection_state(tenant_id,school_id,fingerprint,complete,unprofiled) VALUES(${tenantId},${schoolId},${fingerprint},${unprofiled.length===0},${JSON.stringify(unprofiled)}::jsonb) ON CONFLICT(tenant_id,school_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,complete=EXCLUDED.complete,unprofiled=EXCLUDED.unprofiled,refreshed_at=now()`)

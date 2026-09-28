@@ -12,7 +12,7 @@ import { textArray } from './callSql'
 import { departmentEventTitle } from './callTimeline'
 
 /** Events that belong to one call (entity_id is the call id, or the action names it). */
-const CALL_ENTITY_TYPES = ['MAPPING', 'REVIEW', 'RESPONSIBILITY', 'DISPOSITION', 'ORIGIN_ATTRIBUTION']
+const CALL_ENTITY_TYPES = ['MAPPING', 'REVIEW', 'RESPONSIBILITY', 'DISPOSITION', 'ORIGIN_ATTRIBUTION', 'ALLOCATION']
 export const AUDIT_ENTITY_TYPES = [...CALL_ENTITY_TYPES, 'ACTION', 'VERIFICATION', 'OWNERSHIP'] as const
 
 export type AuditRow = {
@@ -51,6 +51,8 @@ export async function getAuditTrail(tenantId: string, f: {
 
 function describe(row: { entity_type: string; kind: string; school_name: string | null; after_data: any }) {
   const school = row.school_name || 'a school'
+  if (row.entity_type === 'REVIEW' && row.kind === 'ACTION_COMPLETED') return `${school}: action marked completed`
+  if (row.entity_type === 'REVIEW' && row.kind === 'ACTION_REOPENED') return `${school}: action completion undone`
   if (row.entity_type === 'REVIEW') return `${school} review: ${row.kind.toLowerCase().replace(/_/g, ' ')}`
   if (row.entity_type === 'OWNERSHIP') return `${school} coverage ${row.kind === 'DELETE' ? 'removed' : row.kind === 'INSERT' ? 'assigned' : 'changed'}${row.after_data?.is_deputy ? ' (deputy)' : ''}`
   if (row.entity_type === 'VERIFICATION') return `${school} submission verified`
@@ -61,7 +63,11 @@ function describe(row: { entity_type: string; kind: string; school_name: string 
 /** Shaped for `buildTimeline`'s departmentEvents source. */
 export async function departmentEventsForCall(tenantId: string, callId: string, schoolIds?: string[]) {
   const { rows } = await getAuditTrail(tenantId, { callId, scopeSchoolIds: schoolIds, all: true })
-  return rows.filter(r => r.entity_type !== 'OWNERSHIP' && r.entity_type !== 'REVIEW').slice(0, 200).map(r => ({
+  // Review decisions already reach the timeline as TRIAGE contact-log rows; the
+  // manual "action completed" mark has no such row, so it comes from here.
+  const onTimeline = (r: AuditRow) => r.entity_type === 'REVIEW' ? ['ACTION_COMPLETED', 'ACTION_REOPENED'].includes(r.kind)
+    : r.entity_type !== 'OWNERSHIP' && r.entity_type !== 'ALLOCATION'
+  return rows.filter(onTimeline).slice(0, 200).map(r => ({
     id: `dsr:${r.id}`, entity_type: r.entity_type, kind: r.kind, reason: r.reason, occurred_at: r.occurred_at,
     actor: r.actor_name ? { name: r.actor_name, email: null } : null, school_name: r.school_name, after_data: r.after_data,
   }))
