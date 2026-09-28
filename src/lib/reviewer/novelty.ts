@@ -18,6 +18,7 @@ import {
   collectNoveltyReferences,
   computeEvidenceCoverage,
   fallbackNoveltyAssessment,
+  landscapeSupportsNovelty,
   normalizeNoveltyAssessment,
   type NoveltyAssessment,
 } from '@/lib/reviewer/noveltyCore'
@@ -84,6 +85,8 @@ async function assessNoveltyInner(input: NoveltyInput, now: Date): Promise<Novel
       number: row.patent!.publicationNumber,
       year: row.year,
       aspects_it_covers: row.facetsCovered,
+      // Without the abstract the model could only judge overlap from a title.
+      abstract: clip(row.patent!.abstract, 600) || null,
     }))
 
   const prompt = `You assess how novel and specific a grant proposal is, positioned against what has already been funded or patented. You are not scoring fundability.
@@ -147,7 +150,7 @@ export async function assessNovelty(input: NoveltyInput): Promise<NoveltyAssessm
   if (!reviewerNoveltyEnabled()) return null
   const now = new Date()
   const coverage = computeEvidenceCoverage(input.landscape)
-  if (!input.landscape || input.landscape.status === 'error') return fallbackNoveltyAssessment(coverage, now)
+  if (!landscapeSupportsNovelty(input.landscape)) return fallbackNoveltyAssessment(coverage, now)
 
   let budgetTimer: NodeJS.Timeout | undefined
   const budget = new Promise<NoveltyAssessment>((resolve) => {

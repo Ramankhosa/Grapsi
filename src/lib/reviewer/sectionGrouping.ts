@@ -264,6 +264,33 @@ export function countReviewerSections(sections: ReviewerSectionLike[]): Reviewer
 
 export type ReportFreshness = 'missing' | 'fresh' | 'stale'
 
+function isoStamp(value: unknown): string | null {
+  if (!value) return null
+  const at = new Date(value as any)
+  return Number.isFinite(at.getTime()) ? at.toISOString() : null
+}
+
+/**
+ * Titles the stored report scored that no longer have any reviewed version —
+ * a reviewed section edited in place returns to draft until it is reviewed
+ * again. Excluded titles are ignored: the report never described them.
+ */
+export function scoredTitlesAwaitingReview(overallReviewJson: any, sections: ReviewerSectionLike[]): string[] {
+  const scoreBasis = overallReviewJson?.score_basis && typeof overallReviewJson.score_basis === 'object'
+    ? overallReviewJson.score_basis
+    : null
+  const scoredVersions = scoreBasis?.scoredVersions
+  if (!scoredVersions || typeof scoredVersions !== 'object') return []
+  const excluded = new Set(
+    (Array.isArray(scoreBasis?.excludedTitles) ? scoreBasis.excludedTitles : [])
+      .map((title: unknown) => String(title).trim().toLowerCase())
+  )
+  return groupReviewerSections(sections)
+    .filter(group => !excluded.has(group.title.toLowerCase()))
+    .filter(group => typeof scoredVersions[group.title] === 'number' && !group.history.some(isReviewedRow))
+    .map(group => group.title)
+}
+
 /**
  * Whether the stored report still describes the current drafts.
  *
@@ -372,12 +399,33 @@ export function reportFreshness(
 
   const scoredVersions = scoreBasis?.scoredVersions
   if (scoredVersions && typeof scoredVersions === 'object') {
+    // A section the report scored that has since been edited back to draft:
+    // the report still quotes the old text. Those groups have no reviewed row,
+    // so the filter above used to drop them and the report read as current.
+    if (scoredTitlesAwaitingReview(overallReviewJson, sections).length > 0) return 'stale'
+
     const pins = scoreBasis?.pinnedVersions && typeof scoreBasis.pinnedVersions === 'object'
       ? scoreBasis.pinnedVersions
       : null
+    const stamps = scoreBasis?.scoredReviewStamps && typeof scoreBasis.scoredReviewStamps === 'object'
+      ? scoreBasis.scoredReviewStamps
+      : null
     for (const group of groups) {
       const scored = scoredVersions[group.title]
-      if (typeof scored !== 'number' || scored !== expectedScoredVersion(group, pins)) return 'stale'
+      const expected = expectedScoredVersion(group, pins)
+      if (typeof scored !== 'number' || scored !== expected) return 'stale'
+      // Same version, different review: the section was edited in place and
+      // reviewed again, which keeps its version number. Compared by equality
+      // with the stamp recorded at generation, never by clock order. Skipped
+      // when either side is missing, so an older report or a caller that did
+      // not load the timestamp cannot read as stale by accident.
+      const stamp = stamps?.[group.title]
+      if (typeof stamp === 'string') {
+        const row = group.history.find(section => versionOf(section) === expected && isReviewedRow(section))
+        const reviewedAt = isoStamp(row?.last_reviewed_at)
+        const recorded = isoStamp(stamp)
+        if (reviewedAt && recorded && reviewedAt !== recorded) return 'stale'
+      }
     }
     return 'fresh'
   }

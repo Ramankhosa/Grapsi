@@ -11,7 +11,7 @@
 
 import prisma from '@/lib/prisma'
 import { buildAtrDocument } from '@/lib/reviewer/atrDocument'
-import { resolveSectionVersions } from '@/lib/reviewer/finalReport'
+import { resolveReportSections } from '@/lib/reviewer/finalReport'
 import { ensureCurrentReport } from '@/lib/reviewer/reportGeneration'
 
 export function asStringList(value: unknown): string[] {
@@ -105,9 +105,9 @@ export async function buildAtrForCall(
   })
 
   const reviewJson = call.overall_review_json as Record<string, any>
-  const scoredVersions = reviewJson?.score_basis?.scoredVersions || null
-  const sections = resolveSectionVersions(allSections as any, scoredVersions)
-    .effective.filter((section: any) => section.status === 'reviewed')
+  // Exactly the sections the report scored — a section the user left out of
+  // the report used to print here with its score beside a verdict ignoring it.
+  const sections = resolveReportSections(allSections as any, reviewJson)
     .map((section: any) => ({
       id: section.id,
       section_title: section.section_title,

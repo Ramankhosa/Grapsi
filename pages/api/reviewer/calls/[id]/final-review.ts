@@ -46,6 +46,8 @@ interface OverallReviewJson {
   score_basis?: Record<string, unknown> | null;
   landscape?: Record<string, unknown> | null;
   novelty_assessment?: Record<string, unknown> | null;
+  prior_work_flags?: Array<Record<string, unknown>>;
+  generated_at?: string;
 }
 
 /**
@@ -80,6 +82,9 @@ function toSafeOverallReview(raw: any): OverallReviewJson {
     landscape: source.landscape && typeof source.landscape === 'object' ? source.landscape : null,
     // Novelty & positioning verdict, evidence-bounded; reference only.
     novelty_assessment: source.novelty_assessment && typeof source.novelty_assessment === 'object' ? source.novelty_assessment : null,
+    // Where the panel's words and the prior-work evidence disagree; computed.
+    prior_work_flags: Array.isArray(source.prior_work_flags) ? source.prior_work_flags : [],
+    generated_at: typeof source.generated_at === 'string' ? source.generated_at : undefined,
   };
 }
 
@@ -188,12 +193,28 @@ export default async function handler(
     // Handle POST request - generate new final review
     if (req.method === 'POST') {
       try {
+        // What the stored report was asked for. A request that does not say
+        // otherwise keeps it: the Regenerate button and the auto-run post no
+        // body, and used to silently put back every section the user had
+        // deliberately left out of the report (and drop their version pins).
+        const storedBasis = (call.overall_review_json as any)?.score_basis || {};
+        const storedExclusions = Array.isArray(storedBasis.excludedTitles)
+          ? storedBasis.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
+          : [];
+        const storedPins = normalizeVersionSelections(storedBasis.pinnedVersions);
+
         // Accept both `{ title: version }` and the legacy `{ "title|version": version }`
         // shape; the latter was posted by compare mode and never matched anything.
-        const versionSelections = normalizeVersionSelections(req.body?.versionSelections);
+        // `useLatestVersions` is the explicit "score the newest reviewed draft of
+        // everything" request (the superseded banner, the full auto-run).
+        const versionSelections = req.body?.versionSelections !== undefined
+          ? normalizeVersionSelections(req.body.versionSelections)
+          : req.body?.useLatestVersions === true
+            ? {}
+            : storedPins;
         const excludedTitles = Array.isArray(req.body?.excludedTitles)
           ? req.body.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
-          : [];
+          : storedExclusions;
         const displayMode = req.body?.displayMode === 'parallel' ? 'parallel' : 'single';
         const hasPreferences = Boolean(req.body?.versionSelections || req.body?.excludedTitles || req.body?.displayMode);
 

@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 
 import prisma from '@/lib/prisma'
+import { isPatentNestConfigured } from '@/lib/patentnest/client'
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import {
   buildDeterministicSummary,
@@ -10,7 +11,12 @@ import {
 import { normalizeVersionSelections } from '@/lib/reviewer/finalReport'
 import { buildReviewerLandscape, buildSectionDigests } from '@/lib/reviewer/landscape'
 import { assessNovelty } from '@/lib/reviewer/novelty'
-import { reportFreshness, type ReportFreshness } from '@/lib/reviewer/sectionGrouping'
+import { buildPriorWorkFlags } from '@/lib/reviewer/priorWorkFlags'
+import {
+  reportFreshness,
+  scoredTitlesAwaitingReview,
+  type ReportFreshness,
+} from '@/lib/reviewer/sectionGrouping'
 import {
   completeReviewerUsage,
   releaseReviewerUsage,
@@ -60,6 +66,11 @@ export interface ReviewerReportStatus {
   freshness: ReportFreshness
   /** Titles whose current draft is newer than the version the report scored. */
   outdatedSections: string[]
+  /**
+   * Titles the report scored that were edited in place and have not been
+   * reviewed again. Regenerating now would silently drop them from the report.
+   */
+  awaitingReviewSections: string[]
   reviewedSectionCount: number
   /** The picker's pins recorded with the stored report, honoured on regeneration. */
   pinnedVersions: Record<string, number>
@@ -81,6 +92,9 @@ export async function getReportStatus(callId: string): Promise<ReviewerReportSta
   const freshness = reportFreshness(call?.overall_review_json, sections as any)
   const scoreBasis = (call?.overall_review_json as any)?.score_basis
   const scoredVersions = scoreBasis?.scoredVersions
+  const scoredStamps = scoreBasis?.scoredReviewStamps && typeof scoreBasis.scoredReviewStamps === 'object'
+    ? scoreBasis.scoredReviewStamps
+    : null
   const pinnedVersions = normalizeVersionSelections(scoreBasis?.pinnedVersions)
   const excludedTitles: string[] = Array.isArray(scoreBasis?.excludedTitles)
     ? scoreBasis.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
@@ -91,7 +105,13 @@ export async function getReportStatus(callId: string): Promise<ReviewerReportSta
     const { effective } = resolveSectionVersions(sections as any, pinnedVersions, { excludedTitles })
     for (const section of effective) {
       const scored = scoredVersions[section.section_title]
-      if (typeof scored !== 'number' || scored !== Number(section.version || 1)) {
+      const stamp = scoredStamps?.[section.section_title]
+      const reviewedAt = section.last_reviewed_at ? new Date(section.last_reviewed_at as any).toISOString() : null
+      if (
+        typeof scored !== 'number'
+        || scored !== Number(section.version || 1)
+        || (typeof stamp === 'string' && reviewedAt && stamp !== reviewedAt)
+      ) {
         outdatedSections.push(section.section_title)
       }
     }
@@ -100,6 +120,7 @@ export async function getReportStatus(callId: string): Promise<ReviewerReportSta
   return {
     freshness,
     outdatedSections,
+    awaitingReviewSections: scoredTitlesAwaitingReview(call?.overall_review_json, sections as any),
     reviewedSectionCount: (sections as any[]).filter(isScorableReviewedSection).length,
     pinnedVersions,
     excludedTitles,
@@ -146,19 +167,31 @@ export function landscapeNoveltyInputHash(input: {
 
 /**
  * Whether a landscape built at `builtAt` can stand in for a fresh build: same
- * inputs, not an errored build, recent enough that the search corpus has not
- * moved on, and reuse not disabled by the kill switch.
+ * inputs, every source actually answered, recent enough that the search corpus
+ * has not moved on, and reuse not disabled by the kill switch.
+ *
+ * "Not an errored build" used to be the only quality bar, so a run where the
+ * patent search failed but projects came back (`partial`) — or where patent
+ * search was not configured yet — was reused for a week, and regenerating the
+ * report never searched for patents again.
  */
 export function landscapeIsReusable(
   landscape: any,
   builtAt: unknown,
   hash: string,
-  now: Date
+  now: Date,
+  options: { patentSearchConfigured?: boolean } = {}
 ): boolean {
   if (!reviewerLandscapeReuseEnabled()) return false
   if (!landscape || typeof landscape !== 'object') return false
   if (landscape.input_hash !== hash) return false
-  if (landscape.status === 'error') return false
+  if (landscape.status === 'error' || landscape.status === 'partial') return false
+  const sources = landscape.sources && typeof landscape.sources === 'object' ? landscape.sources : {}
+  if (sources.patents?.status === 'error' || sources.projects?.error) return false
+  const patentSearchConfigured = options.patentSearchConfigured ?? isPatentNestConfigured()
+  if (sources.patents?.status === 'not_configured' && patentSearchConfigured) return false
+  // A step that degraded (timed-out tagging, fallback query) is worth one more try.
+  if (Array.isArray(landscape.notes) && landscape.notes.length > 0) return false
 
   const builtAtMs = Date.parse(String(builtAt || ''))
   if (!Number.isFinite(builtAtMs)) return false
@@ -169,8 +202,19 @@ export function landscapeIsReusable(
 /**
  * Whether the previous report's landscape can stand in for a fresh build.
  */
-export function shouldReuseLandscape(prevReport: any, hash: string, now: Date): boolean {
-  return landscapeIsReusable(prevReport?.landscape, prevReport?.generated_at, hash, now)
+export function shouldReuseLandscape(
+  prevReport: any,
+  hash: string,
+  now: Date,
+  options: { patentSearchConfigured?: boolean } = {}
+): boolean {
+  return landscapeIsReusable(prevReport?.landscape, prevReport?.generated_at, hash, now, options)
+}
+
+/** A stored novelty verdict worth keeping — the `unassessed` fallback is not. */
+export function reusableNoveltyOf(novelty: unknown): any | null {
+  if (!novelty || typeof novelty !== 'object') return null
+  return (novelty as any).verdict && (novelty as any).verdict !== 'unassessed' ? novelty : null
 }
 
 /**
@@ -183,15 +227,18 @@ export function shouldReuseLandscape(prevReport: any, hash: string, now: Date): 
  * or four times and it costs us tokens". Parking it means a retry pays only for
  * the panel report.
  */
-export function landscapeCacheOf(parsedJson: unknown): { landscape: any; built_at: string } | null {
+export function landscapeCacheOf(parsedJson: unknown): { landscape: any; novelty: any | null; built_at: string } | null {
   const parsed = parsedJson && typeof parsedJson === 'object' ? (parsedJson as Record<string, any>) : null
   const cache = parsed?.landscape_cache
   if (!cache || typeof cache !== 'object' || !cache.landscape) return null
-  return { landscape: cache.landscape, built_at: String(cache.built_at || '') }
+  return { landscape: cache.landscape, novelty: cache.novelty || null, built_at: String(cache.built_at || '') }
 }
 
-/** Park a landscape a failed run already paid for. Best effort by design. */
-async function parkLandscape(callId: string, landscape: any, hash: string): Promise<void> {
+/**
+ * Park a landscape (and the novelty verdict built on it) that a failed run
+ * already paid for. Best effort by design.
+ */
+async function parkLandscape(callId: string, landscape: any, novelty: any, hash: string): Promise<void> {
   if (!landscape || typeof landscape !== 'object' || landscape.status === 'error') return
 
   const call = await prisma.reviewerCall.findUnique({ where: { id: callId }, select: { parsed_json: true } })
@@ -206,6 +253,7 @@ async function parkLandscape(callId: string, landscape: any, hash: string): Prom
         ...parsed,
         landscape_cache: {
           landscape: { ...landscape, input_hash: hash },
+          ...(reusableNoveltyOf(novelty) ? { novelty } : {}),
           built_at: new Date().toISOString(),
         },
       } as any,
@@ -222,6 +270,99 @@ function withoutLandscapeCache(parsedJson: unknown): Record<string, any> | null 
   return rest
 }
 
+// ---------------------------------------------------------------------------
+// One generation at a time, and a daily ceiling
+//
+// The quota ledger charges one report per workspace — regenerating after a
+// revision is meant to be free — which left the most expensive call in the
+// module (a 16k-token panel report, plus landscape and novelty) unmetered and
+// unlimited. Nothing stopped two runs at once either: the auto-run's last step
+// and a click on Regenerate both paid, and the last write won.
+//
+// Both guards live in `review_progress_state` so no migration is needed. The
+// section runner merges into that column rather than overwriting it, so the
+// lock survives section reviews running alongside. The web tier runs in PM2
+// cluster mode, which rules out an in-process lock.
+// ---------------------------------------------------------------------------
+
+const REPORT_LOCK_TTL_MS = 10 * 60 * 1000
+const REPORT_RUN_WINDOW_MS = 24 * 60 * 60 * 1000
+
+export function reviewerReportDailyLimit(): number {
+  const configured = Number(process.env.REVIEWER_REPORT_DAILY_LIMIT)
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 15
+}
+
+/** Report runs recorded in the last 24 hours, oldest first. Pure. */
+export function recentReportRuns(progressState: unknown, now: Date): string[] {
+  const state = progressState && typeof progressState === 'object' ? (progressState as Record<string, any>) : {}
+  const runs = Array.isArray(state.report_runs) ? state.report_runs : []
+  return runs
+    .map((value: unknown) => String(value || ''))
+    .filter((value: string) => {
+      const at = Date.parse(value)
+      return Number.isFinite(at) && now.getTime() - at < REPORT_RUN_WINDOW_MS && at <= now.getTime()
+    })
+}
+
+export async function acquireReportLock(callId: string): Promise<string | null> {
+  const token = crypto.randomUUID()
+  const until = new Date(Date.now() + REPORT_LOCK_TTL_MS).toISOString()
+  const claimed = await prisma.$executeRaw`
+    UPDATE "reviewer_calls"
+    SET review_progress_state =
+      (CASE WHEN jsonb_typeof(review_progress_state) = 'object' THEN review_progress_state ELSE '{}'::jsonb END)
+      || jsonb_build_object('report_lock', jsonb_build_object('token', ${token}::text, 'until', ${until}::text))
+    WHERE id = ${callId}
+      AND (
+        review_progress_state IS NULL
+        OR jsonb_typeof(review_progress_state) <> 'object'
+        OR review_progress_state->'report_lock' IS NULL
+        OR (review_progress_state->'report_lock'->>'until')::timestamptz < now()
+      )
+  `
+  return claimed > 0 ? token : null
+}
+
+export async function releaseReportLock(callId: string, token: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "reviewer_calls"
+    SET review_progress_state = review_progress_state - 'report_lock'
+    WHERE id = ${callId}
+      AND jsonb_typeof(review_progress_state) = 'object'
+      AND review_progress_state->'report_lock'->>'token' = ${token}
+  `
+}
+
+export async function recordReportRun(callId: string, runs: string[]): Promise<void> {
+  const payload = JSON.stringify(runs.slice(-50))
+  await prisma.$executeRaw`
+    UPDATE "reviewer_calls"
+    SET review_progress_state =
+      (CASE WHEN jsonb_typeof(review_progress_state) = 'object' THEN review_progress_state ELSE '{}'::jsonb END)
+      || jsonb_build_object('report_runs', ${payload}::jsonb)
+    WHERE id = ${callId}
+  `
+}
+
+/** The panel prompt's call context gets the same ceiling as a section review. */
+const REPORT_CALL_CONTEXT_MAX_CHARS = Number(process.env.REVIEWER_CALL_CONTEXT_MAX_CHARS) || 24_000
+
+export function capCallContext(text: string): string {
+  if (text.length <= REPORT_CALL_CONTEXT_MAX_CHARS) return text
+  return `${text.slice(0, REPORT_CALL_CONTEXT_MAX_CHARS)}\n[Call context truncated for the panel report]`
+}
+
+/** When each scored section was last reviewed — the freshness fingerprint. */
+function reviewStampsOf(sections: any[]): Record<string, string> {
+  const stamps: Record<string, string> = {}
+  for (const section of sections) {
+    const at = section?.last_reviewed_at ? new Date(section.last_reviewed_at) : null
+    if (at && Number.isFinite(at.getTime())) stamps[section.section_title] = at.toISOString()
+  }
+  return stamps
+}
+
 export interface GenerateReviewerReportResult {
   /** The payload written to `reviewer_calls.overall_review_json`. */
   report: Record<string, any>
@@ -232,18 +373,42 @@ export interface GenerateReviewerReportResult {
   allSections: any[]
 }
 
-/**
- * Build and persist the panel report for a reviewer workspace.
- *
- * Throws `ReviewerReportError` for conditions the caller should surface rather
- * than log: nothing reviewed yet, or the model returning something unusable.
- */
-export async function generateReviewerReport(input: {
+interface GenerateReviewerReportInput {
   callId: string
   versionSelections?: Record<string, unknown> | null
   /** Section titles to leave out of the report entirely (the picker's unchecked rows). */
   excludedTitles?: string[] | null
-}): Promise<GenerateReviewerReportResult> {
+}
+
+/**
+ * Build and persist the panel report for a reviewer workspace.
+ *
+ * Throws `ReviewerReportError` for conditions the caller should surface rather
+ * than log: nothing reviewed yet, another generation already running, the
+ * daily ceiling reached, or the model returning something unusable.
+ */
+export async function generateReviewerReport(input: GenerateReviewerReportInput): Promise<GenerateReviewerReportResult> {
+  const lockToken = await acquireReportLock(input.callId)
+  if (!lockToken) {
+    const exists = await prisma.reviewerCall.findUnique({ where: { id: input.callId }, select: { id: true } })
+    if (!exists) throw new ReviewerReportError('Reviewer workspace not found', 'CALL_NOT_FOUND', 404)
+    throw new ReviewerReportError(
+      'The panel report for this proposal is already being generated. It will appear when that run finishes — check back in a minute.',
+      'REPORT_IN_PROGRESS',
+      409
+    )
+  }
+
+  try {
+    return await generateReviewerReportLocked(input)
+  } finally {
+    await releaseReportLock(input.callId, lockToken).catch((error) => {
+      console.warn('[Reviewer] Could not release the report lock (it expires on its own):', error)
+    })
+  }
+}
+
+async function generateReviewerReportLocked(input: GenerateReviewerReportInput): Promise<GenerateReviewerReportResult> {
   const call = await prisma.reviewerCall.findUnique({
     where: { id: input.callId },
     select: {
@@ -252,11 +417,22 @@ export async function generateReviewerReport(input: {
       parsed_json: true,
       LLM_model_used: true,
       overall_review_json: true,
+      review_progress_state: true,
     },
   })
 
   if (!call) {
     throw new ReviewerReportError('Reviewer workspace not found', 'CALL_NOT_FOUND', 404)
+  }
+
+  const now = new Date()
+  const recentRuns = recentReportRuns(call.review_progress_state, now)
+  if (recentRuns.length >= reviewerReportDailyLimit()) {
+    throw new ReviewerReportError(
+      `This proposal's panel report has been generated ${recentRuns.length} times in the last 24 hours, which is the daily limit. The current report stays available; try again tomorrow.`,
+      'REPORT_DAILY_LIMIT',
+      429
+    )
   }
 
   const allSections = await prisma.reviewerSection.findMany({ where: { call_id: input.callId } })
@@ -299,9 +475,13 @@ export async function generateReviewerReport(input: {
 
   const modelType = call.LLM_model_used === 'OPENAI' ? 'O' : 'G'
   const parsedContext = call.parsed_json && typeof call.parsed_json === 'object' ? (call.parsed_json as any) : null
-  const description = parsedContext
-    ? parsedContext.reviewer_context_text || parsedContext.description || parsedContext.call_summary || ''
-    : ''
+  // Section reviews cap the call context; the panel prompt used to receive it
+  // whole, so a long URL-extracted call made the costliest prompt costlier.
+  const description = capCallContext(String(
+    parsedContext
+      ? parsedContext.reviewer_context_text || parsedContext.description || parsedContext.call_summary || ''
+      : ''
+  ))
 
   // Compliance, coverage, limit breaches, and the weighted score are counted
   // here rather than asked for. Every *authored* section counts toward
@@ -320,11 +500,35 @@ export async function generateReviewerReport(input: {
   )
   const anchorScore = deterministic.weightedScore ?? deterministic.meanSectionScore ?? null
 
-  // Reference-only prior-work landscape (similar funded projects + Indian
-  // patents), started here so it runs alongside the panel model. It is awaited
-  // only after the panel review returns and is never passed to it, so it
-  // cannot influence the score. Pre-caught: a panel failure below must not
-  // leave an unhandled rejection behind.
+  // Hold the quota slot before anything is spent — the landscape included. It
+  // used to start first, so a tenant already out of quota still paid for a
+  // distill call, a tagging call and two searches on every click, and the
+  // result was thrown away. A failed report releases the slot again.
+  let reportUsage
+  try {
+    reportUsage = await reserveReviewerUsage({
+      callId: input.callId,
+      operationId: reviewerReportOperationId(input.callId),
+      operationType: 'reviewer_final_report',
+      metadata: { projectTitle: call.project_title },
+    })
+  } catch (error) {
+    if (error instanceof ServiceQuotaExceededError) {
+      throw new ReviewerReportError(error.message, error.code, 429)
+    }
+    throw error
+  }
+
+  // Past the quota check, this run will spend: it counts toward the ceiling.
+  await recordReportRun(input.callId, [...recentRuns, now.toISOString()]).catch((error) => {
+    console.warn('[Reviewer] Could not record the report run:', error)
+  })
+
+  // Reference-only prior work: the landscape (similar funded projects + Indian
+  // patents) and the novelty verdict built on it. Both start now and run
+  // alongside the panel model; neither is ever passed to it, so they cannot
+  // influence the score. Novelty used to wait for the panel to finish, adding
+  // up to 45s to a request that is already the slowest in the module.
   //
   // When the digests and call context are unchanged since the stored report,
   // the previous landscape (and novelty verdict) are reused outright — they
@@ -343,20 +547,31 @@ export async function generateReviewerReport(input: {
     callDescription: description,
     digests: buildSectionDigests(digestSections),
   })
-  const now = new Date()
   // Either the landscape stored with the last report, or one parked by a run
   // whose panel model failed after the landscape had already been paid for.
   const parkedLandscape = landscapeCacheOf(call.parsed_json)
-  const reusableLandscape = shouldReuseLandscape(prevReport, landscapeInputHash, now)
-    ? prevReport.landscape
+  const reuseSource: 'report' | 'parked' | null = shouldReuseLandscape(prevReport, landscapeInputHash, now)
+    ? 'report'
     : parkedLandscape && landscapeIsReusable(parkedLandscape.landscape, parkedLandscape.built_at, landscapeInputHash, now)
-      ? parkedLandscape.landscape
+      ? 'parked'
       : null
-  const reuseLandscape = Boolean(reusableLandscape)
-  if (reuseLandscape) {
-    console.log('[Reviewer] Landscape inputs unchanged — reusing the stored landscape and novelty assessment')
+  const reusableLandscape = reuseSource === 'report'
+    ? prevReport.landscape
+    : reuseSource === 'parked'
+      ? parkedLandscape!.landscape
+      : null
+  // An `unassessed` stored verdict is the failure fallback: one fresh attempt
+  // against the (reused) landscape is worth its single call.
+  const reusableNovelty = reuseSource === 'report'
+    ? reusableNoveltyOf(prevReport?.novelty_assessment)
+    : reuseSource === 'parked'
+      ? reusableNoveltyOf(parkedLandscape!.novelty)
+      : null
+  if (reuseSource) {
+    console.log(`[Reviewer] Landscape inputs unchanged — reusing the ${reuseSource === 'report' ? 'stored' : 'parked'} landscape`)
   }
-  const landscapePromise = reuseLandscape
+
+  const landscapePromise: Promise<any> = reuseSource
     ? Promise.resolve(reusableLandscape)
     : buildReviewerLandscape({
         callId: input.callId,
@@ -368,23 +583,24 @@ export async function generateReviewerReport(input: {
         console.error('[Reviewer] Landscape build rejected unexpectedly:', error)
         return null
       })
-
-  // Hold the quota slot before the panel model runs; a failed report releases
-  // it again so the tenant is only charged for reports it actually received.
-  let reportUsage
-  try {
-    reportUsage = await reserveReviewerUsage({
-      callId: input.callId,
-      operationId: reviewerReportOperationId(input.callId),
-      operationType: 'reviewer_final_report',
-      metadata: { projectTitle: call.project_title },
+  // Pre-caught: a panel failure below must not leave an unhandled rejection.
+  const noveltyPromise: Promise<any> = landscapePromise
+    .then((landscape) => {
+      if (!landscape) return null
+      if (reusableNovelty) return reusableNovelty
+      return assessNovelty({
+        callId: input.callId,
+        projectTitle: call.project_title || '',
+        parsedContext,
+        modelType: modelType as 'O' | 'G',
+        sections: digestSections,
+        landscape,
+      })
     })
-  } catch (error) {
-    if (error instanceof ServiceQuotaExceededError) {
-      throw new ReviewerReportError(error.message, error.code, 429)
-    }
-    throw error
-  }
+    .catch((error) => {
+      console.error('[Reviewer] Novelty assessment rejected unexpectedly:', error)
+      return null
+    })
 
   const reviewerService = new ReviewerService()
   const owner = await resolveReviewerCallOwner(input.callId)
@@ -403,42 +619,22 @@ export async function generateReviewerReport(input: {
     )
   } catch (error) {
     await releaseReviewerUsage(reportUsage).catch(() => undefined)
-    // Park whatever the landscape build produced alongside the failed report,
-    // so the retry the user is about to make does not pay for it a second time.
-    if (!reuseLandscape) {
-      await parkLandscape(input.callId, await landscapePromise, landscapeInputHash).catch(() => undefined)
+    // Park whatever the prior-work steps produced alongside the failed report,
+    // so the retry the user is about to make does not pay for them again.
+    if (reuseSource !== 'report') {
+      const [parkable, parkableNovelty] = await Promise.all([landscapePromise, noveltyPromise])
+      await parkLandscape(input.callId, parkable, parkableNovelty, landscapeInputHash).catch(() => undefined)
     }
     throw error
   }
 
-  const landscape = await landscapePromise
+  const [landscape, noveltyAssessment] = await Promise.all([landscapePromise, noveltyPromise])
 
-  // Novelty & positioning: evidence-bounded verdict over the landscape. Runs
-  // after the panel report, never feeds it, and is reference-only for the PI.
-  // Reused together with the landscape when inputs are unchanged — unless the
-  // stored verdict is the `unassessed` failure fallback, in which case one
-  // fresh attempt against the (reused) landscape is worth its single call.
-  const reusableNovelty = reuseLandscape
-    && prevReport?.novelty_assessment
-    && typeof prevReport.novelty_assessment === 'object'
-    && prevReport.novelty_assessment.verdict !== 'unassessed'
-      ? prevReport.novelty_assessment
-      : null
-  const noveltyAssessment = reusableNovelty
-    ? reusableNovelty
-    : landscape
-      ? await assessNovelty({
-          callId: input.callId,
-          projectTitle: call.project_title || '',
-          parsedContext,
-          modelType: modelType as 'O' | 'G',
-          sections: digestSections,
-          landscape,
-        }).catch((error) => {
-          console.error('[Reviewer] Novelty assessment rejected unexpectedly:', error)
-          return null
-        })
-      : null
+  // Where the panel's own words and the prior-work evidence disagree, or a
+  // proposal aspect is already patented — computed, never scored.
+  const priorWorkFlags = landscape || noveltyAssessment
+    ? buildPriorWorkFlags({ overall: overallReview, novelty: noveltyAssessment, landscape })
+    : []
 
   const report = {
     ...overallReview,
@@ -447,6 +643,7 @@ export async function generateReviewerReport(input: {
     // regeneration can prove the inputs unchanged and reuse it.
     ...(landscape ? { landscape: { ...landscape, input_hash: landscapeInputHash } } : {}),
     ...(noveltyAssessment ? { novelty_assessment: noveltyAssessment } : {}),
+    ...(landscape || noveltyAssessment ? { prior_work_flags: priorWorkFlags } : {}),
     score_basis: {
       weightedScore: deterministic.weightedScore,
       meanSectionScore: deterministic.meanSectionScore,
@@ -458,6 +655,10 @@ export async function generateReviewerReport(input: {
       // a v3 report from a v1 one — and so freshness is decided by version
       // rather than by clock comparison.
       scoredVersions: chosenVersions,
+      // When each scored draft was last reviewed. A section edited in place
+      // keeps its version number, so the version alone never noticed that the
+      // text — and its review — had changed underneath the report.
+      scoredReviewStamps: reviewStampsOf(reviewedSections),
       supersededVersionCount: superseded.length,
       // What the picker asked for, kept apart from what was scored, so an
       // automatic regeneration can honour the same pins and exclusions instead
@@ -473,8 +674,14 @@ export async function generateReviewerReport(input: {
 
   try {
     // The stored report now carries its own landscape, so any parked copy is
-    // dead weight.
-    const parsedWithoutCache = withoutLandscapeCache(call.parsed_json)
+    // dead weight. Re-read first: the run took minutes, and writing back the
+    // snapshot taken at the start would undo a share or a saved preference
+    // made meanwhile.
+    const current = await prisma.reviewerCall.findUnique({
+      where: { id: input.callId },
+      select: { parsed_json: true },
+    })
+    const parsedWithoutCache = withoutLandscapeCache(current?.parsed_json)
     await prisma.reviewerCall.update({
       where: { id: input.callId },
       data: {
@@ -552,6 +759,16 @@ export async function ensureCurrentReport(
   }
   if (status.reviewedSectionCount === 0) {
     return { regenerated: false, freshness: status.freshness, error: null }
+  }
+  // A section the report scored is being edited and has not been reviewed
+  // again. Regenerating now would score the proposal without it — a quieter
+  // and worse error than shipping the stale report with its warning.
+  if (status.awaitingReviewSections.length > 0) {
+    return {
+      regenerated: false,
+      freshness: status.freshness,
+      error: `Edited sections are awaiting review (${status.awaitingReviewSections.join(', ')}). Review them, then regenerate the report.`,
+    }
   }
 
   try {

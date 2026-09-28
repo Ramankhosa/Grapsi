@@ -30,6 +30,12 @@ export type ReviewerLandscape = {
     projects: { searched: boolean; count: number; degradedMode: 'full_text_only' | null; error?: string }
     patents: { searched: boolean; status: 'ok' | 'not_configured' | 'error'; count: number; error?: string }
   }
+  /**
+   * Steps that degraded without failing the whole landscape (a timed-out
+   * tagging call, a fallback query). A landscape carrying notes is complete
+   * enough to show but is rebuilt rather than reused on the next report.
+   */
+  notes?: string[]
   error?: string
 }
 
@@ -208,6 +214,7 @@ export function assembleLandscape(input: {
   assessmentSource: 'llm' | 'fallback'
   sources: LandscapeSourceOutcomes
   now: Date
+  notes?: string[]
   error?: string
 }): ReviewerLandscape {
   const projectsFailed = Boolean(input.sources.projects.error)
@@ -231,6 +238,106 @@ export function assembleLandscape(input: {
     assessmentSource: input.assessmentSource,
     priorWork: input.priorWork,
     sources: input.sources,
+    ...(input.notes?.length ? { notes: input.notes.map((note) => normalizeText(note, 300)).filter(Boolean) } : {}),
     ...(input.error ? { error: normalizeText(input.error, 500) } : {}),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a stored landscape. Shared by the report pages and the Word export so
+// both describe the same run in the same words.
+
+export type LandscapeNotice = {
+  tone: 'error' | 'warning' | 'info'
+  text: string
+}
+
+function sourceFailure(value: string | undefined, fallback: string) {
+  const clean = normalizeText(value, 200)
+  return clean ? clean.replace(/\.$/, '') : fallback
+}
+
+/**
+ * What a reader must be told before trusting the list — above all, that an
+ * empty list after a failed search is not evidence of an open field. Returns
+ * notices in reading order; an empty array means the run was clean.
+ */
+export function describeLandscapeRun(landscape: Partial<ReviewerLandscape> | null | undefined): LandscapeNotice[] {
+  if (!landscape || typeof landscape !== 'object') return []
+  const notices: LandscapeNotice[] = []
+  const projects = landscape.sources?.projects
+  const patents = landscape.sources?.patents
+  const rows = landscape.priorWork?.rows?.length ?? 0
+
+  if (landscape.status === 'error') {
+    notices.push({
+      tone: 'error',
+      text: `The prior-work search did not complete for this report${landscape.error ? ` (${sourceFailure(landscape.error, 'unknown error')})` : ''}. `
+        + 'An empty list here does not mean the field is open — regenerate the report to search again.',
+    })
+  }
+  if (patents?.status === 'error' && landscape.status !== 'error') {
+    notices.push({
+      tone: 'warning',
+      text: `Indian patent search failed for this run (${sourceFailure(patents.error, 'PatentNest was unavailable')}), so no patents are listed. Regenerate the report to search again.`,
+    })
+  } else if (patents?.status === 'error') {
+    notices.push({ tone: 'warning', text: `Indian patent search: ${sourceFailure(patents.error, 'PatentNest was unavailable')}.` })
+  }
+  if (patents?.status === 'not_configured') {
+    notices.push({ tone: 'info', text: 'Indian patents were not searched — patent search is not configured on this server.' })
+  }
+  if (projects?.error && landscape.status !== 'error') {
+    notices.push({
+      tone: 'warning',
+      text: `Funded-project search failed for this run (${sourceFailure(projects.error, 'search unavailable')}), so no funded projects are listed.`,
+    })
+  }
+  for (const note of landscape.notes || []) notices.push({ tone: 'info', text: note })
+  if (landscape.status === 'empty' && rows === 0) {
+    notices.push({
+      tone: 'info',
+      text: 'Both searches ran and nothing closely comparable was retrieved. Add more technical detail to the sections before treating that as an open field.',
+    })
+  }
+  return notices
+}
+
+export type LandscapeSummary = {
+  fundedCount: number
+  patentCount: number
+  /** Proposal aspects at least one retrieved patent already covers. */
+  patentedAspects: Array<{ facet: string; numbers: string[]; unfunded: boolean }>
+  /** Aspects neither corpus covers (an assessed absence, not a thin search). */
+  openAspects: string[]
+  /** Aspects attempted by completed awards that reported no output. */
+  hardAspects: string[]
+  searchFailed: boolean
+}
+
+/** Counts and headline readings for the cover, the novelty panel and the ATR. */
+export function summarizeLandscape(landscape: Partial<ReviewerLandscape> | null | undefined): LandscapeSummary | null {
+  if (!landscape || typeof landscape !== 'object') return null
+  const rows = landscape.priorWork?.rows ?? []
+  const rowByKey = new Map(rows.map((row) => [row.key, row]))
+  const gaps = landscape.priorWork?.gaps ?? []
+  const coverage = landscape.priorWork?.coverage ?? []
+  return {
+    fundedCount: rows.filter((row) => row.kind === 'funded').length,
+    patentCount: rows.filter((row) => row.kind === 'patented').length,
+    patentedAspects: coverage
+      .filter((entry) => entry.patented.rowKeys.length > 0)
+      .map((entry) => ({
+        facet: entry.facet,
+        numbers: entry.patented.rowKeys
+          .map((key) => rowByKey.get(key)?.patent?.publicationNumber || rowByKey.get(key)?.title || '')
+          .filter(Boolean)
+          .slice(0, 3),
+        // Patented and not yet funded is the reading that needs a design-around.
+        unfunded: entry.funded.rowKeys.length === 0,
+      })),
+    openAspects: gaps.filter((gap) => gap.reading === 'unexplored').map((gap) => gap.facet),
+    hardAspects: gaps.filter((gap) => gap.reading === 'attempted_no_output').map((gap) => gap.facet),
+    searchFailed: landscape.status === 'error' || landscape.sources?.patents?.status === 'error' || Boolean(landscape.sources?.projects?.error),
   }
 }

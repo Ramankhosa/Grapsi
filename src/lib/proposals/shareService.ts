@@ -11,7 +11,7 @@
  * bills the tenant's quota and produces a different report.
  */
 import { buildAtrForCall } from '@/lib/reviewer/atrExport'
-import { resolveSectionVersions } from '@/lib/reviewer/finalReport'
+import { resolveReportSections } from '@/lib/reviewer/finalReport'
 import { writeFundingBufferAsset } from '@/lib/funding/storage'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 import prisma from '@/lib/prisma'
@@ -79,11 +79,11 @@ export async function shareProposalReview(input: ShareReviewInput) {
       where: { call_id: review.reviewer_call_id },
     })
 
-    // Only the versions the report actually scored. Without this the snapshot
-    // carries both v1 and v2 of a revised section and the applicant reads two
-    // contradictory verdicts on the same text.
-    const resolution = resolveSectionVersions(sections as any, null)
-    const effective = (resolution.effective.length > 0 ? resolution.effective : sections) as any[]
+    // Only the versions the report actually scored, minus any section the
+    // report left out. Without this the snapshot carries both v1 and v2 of a
+    // revised section and the applicant reads two contradictory verdicts on
+    // the same text.
+    const effective = resolveReportSections(sections as any, call.overall_review_json) as any[]
 
     snapshot = {
       overall: call.overall_review_json,

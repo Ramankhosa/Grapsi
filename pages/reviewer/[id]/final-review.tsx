@@ -10,10 +10,19 @@ import {
   FaFilter, FaPrint, FaShare, FaLink, FaFileWord, FaCheck, FaTimes, FaExclamationTriangle, FaFileExport,
 } from 'react-icons/fa';
 import { ReviewerText } from '@/components/reviewer/ReviewerText';
-import { compareSections, reportFreshness, supersededScoredSections } from '@/lib/reviewer/sectionGrouping';
+import {
+  compareSections,
+  reportFreshness,
+  scoredTitlesAwaitingReview,
+  supersededScoredSections,
+} from '@/lib/reviewer/sectionGrouping';
 import ReviewerShell from '@/components/reviewer/ReviewerShell';
-import PriorWorkList from '@/components/funding-intelligence/PriorWorkList';
-import CoverageMap from '@/components/funding-intelligence/CoverageMap';
+import {
+  PriorWorkFlags,
+  PriorWorkSnapshot,
+  ReportLandscape,
+  patentSearchHref,
+} from '@/components/reviewer/report/ReportPriorWork';
 import {
   ComplianceBars,
   ConsistencyFlags,
@@ -93,6 +102,8 @@ export default function FinalReview() {
   const [shareLink, setShareLink] = useState<string>('');
   const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<boolean>(false);
   const [shareLinkError, setShareLinkError] = useState<string>('');
+  const [isPublic, setIsPublic] = useState<boolean>(false);
+  const [isRevokingShare, setIsRevokingShare] = useState<boolean>(false);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -114,6 +125,7 @@ export default function FinalReview() {
         }
 
         setCallData(callResponse.data.call);
+        setIsPublic(Boolean(callResponse.data.call?.is_public));
         const reportPreferences = callResponse.data.call?.parsed_json?.report_preferences || null;
 
         const sectionsResponse = await axios.get(`/api/reviewer/calls/${id}/sections`);
@@ -244,6 +256,11 @@ export default function FinalReview() {
     () => supersededScoredSections(callData?.overall_review_json, rawSections),
     [callData, rawSections]
   );
+  // Sections the report scored that were edited and not yet reviewed again.
+  const awaitingReview = useMemo(
+    () => scoredTitlesAwaitingReview(callData?.overall_review_json, rawSections),
+    [callData, rawSections]
+  );
 
   const supplementaryMaterials = Array.from(new Set([
     ...(Array.isArray(overallReview.supplementary_materials) ? overallReview.supplementary_materials : []),
@@ -273,15 +290,22 @@ export default function FinalReview() {
     };
   });
 
+  const landscape = overallReview.landscape && typeof overallReview.landscape === 'object' ? overallReview.landscape : null;
+  const priorWorkFlags = Array.isArray(overallReview.prior_work_flags) ? overallReview.prior_work_flags : [];
+  const hasPriorWork = Boolean(overallReview.novelty_assessment || landscape);
+
+  // Prior work sits with the overall assessment — novelty and its evidence up
+  // top, the full landscape before the per-section detail. It used to be the
+  // last panel on the page, below every section card.
   const jumpItems = [
     { id: 'overview', label: 'Overview' },
-    ...(overallReview.novelty_assessment ? [{ id: 'novelty', label: 'Novelty' }] : []),
+    ...(hasPriorWork ? [{ id: 'novelty', label: 'Novelty & prior work' }] : []),
     { id: 'scores', label: 'Scores' },
     { id: 'fix-first', label: 'Fix first' },
     { id: 'consistency', label: 'Consistency & compliance' },
     { id: 'assessment', label: 'Strengths & weaknesses' },
+    ...(landscape ? [{ id: 'landscape', label: 'Landscape' }] : []),
     { id: 'sections', label: 'Sections' },
-    ...(overallReview.landscape ? [{ id: 'landscape', label: 'Landscape' }] : []),
   ];
 
   // --- actions --------------------------------------------------------------
@@ -303,6 +327,7 @@ export default function FinalReview() {
       const response = await axios.post(`/api/reviewer/calls/${id}/share-report`, sharePreferences);
       if (!response.data?.share_url) throw new Error('Failed to generate share link');
       setShareLink(response.data.share_url);
+      setIsPublic(true);
       toast.success('Public share link created');
     } catch (err) {
       console.error('Error generating share link:', err);
@@ -313,11 +338,35 @@ export default function FinalReview() {
     }
   };
 
-  const regenerateFinalReview = async () => {
+  const stopSharing = async () => {
+    if (!id) return;
+    try {
+      setIsRevokingShare(true);
+      await axios.delete(`/api/reviewer/calls/${id}/share-report`);
+      setIsPublic(false);
+      setShareLink('');
+      toast.success('The public link is off. Anyone who has it now sees "report unavailable".');
+    } catch (err) {
+      console.error('Error revoking share link:', err);
+      toast.error(err?.response?.data?.error || 'Could not turn the public link off. Please try again.');
+    } finally {
+      setIsRevokingShare(false);
+    }
+  };
+
+  /**
+   * `refresh` rebuilds the report under the choices it already records (the
+   * sections left out, any version pins). `latest` scores the newest reviewed
+   * draft of every section, still leaving out what the user left out.
+   */
+  const regenerateFinalReview = async (mode: 'refresh' | 'latest' = 'refresh') => {
     if (!id) return;
     try {
       setIsRegenerating(true);
-      const response = await axios.post(`/api/reviewer/calls/${id}/final-review`);
+      const response = await axios.post(
+        `/api/reviewer/calls/${id}/final-review`,
+        mode === 'latest' ? { useLatestVersions: true } : {}
+      );
       if (response.data && response.data.call) {
         toast.success('Final review regenerated');
         router.reload();
@@ -455,9 +504,9 @@ export default function FinalReview() {
             <FaFileWord aria-hidden="true" /> {isGeneratingATR ? 'Building…' : 'ATR'}
           </button>
           <button onClick={generateShareLink} disabled={isGeneratingShareLink} className="nk-btn-secondary nk-btn-sm">
-            <FaShare aria-hidden="true" /> {isGeneratingShareLink ? 'Generating…' : 'Share'}
+            <FaShare aria-hidden="true" /> {isGeneratingShareLink ? 'Generating…' : isPublic ? 'Share link' : 'Share'}
           </button>
-          <button onClick={regenerateFinalReview} disabled={isRegenerating} className="nk-btn-primary nk-btn-sm">
+          <button onClick={() => regenerateFinalReview('refresh')} disabled={isRegenerating} className="nk-btn-primary nk-btn-sm">
             {isRegenerating ? 'Regenerating…' : 'Regenerate'}
           </button>
         </div>
@@ -466,10 +515,15 @@ export default function FinalReview() {
       <div id="top" className="space-y-6">
         <ReportJumpBar items={jumpItems} />
 
-        {freshness === 'stale' ? (
+        {awaitingReview.length > 0 ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
+            <strong>Out of date.</strong> {awaitingReview.join(', ')} {awaitingReview.length === 1 ? 'was' : 'were'} edited after this report was written and {awaitingReview.length === 1 ? 'is' : 'are'} awaiting review.
+            Review {awaitingReview.length === 1 ? 'it' : 'them'} first — regenerating now would leave {awaitingReview.length === 1 ? 'that section' : 'those sections'} out of the report.
+          </div>
+        ) : freshness === 'stale' ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
-            <span><strong>Out of date.</strong> A section was reviewed after this report was written. Regenerate to bring the verdict in line with the current drafts.</span>
-            <button onClick={regenerateFinalReview} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">{isRegenerating ? 'Regenerating…' : 'Regenerate now'}</button>
+            <span><strong>Out of date.</strong> A section changed or was reviewed again after this report was written. Regenerate to bring the verdict in line with the current drafts.</span>
+            <button onClick={() => regenerateFinalReview('refresh')} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">{isRegenerating ? 'Regenerating…' : 'Regenerate now'}</button>
           </div>
         ) : superseded.length > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
@@ -479,7 +533,7 @@ export default function FinalReview() {
               {superseded.map((entry) => `v${entry.latest}`).join(', ')}{' '}
               {superseded.length === 1 ? 'has' : 'have'} since been reviewed. Regenerate to score the latest instead.
             </span>
-            <button onClick={regenerateFinalReview} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">
+            <button onClick={() => regenerateFinalReview('latest')} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">
               {isRegenerating ? 'Regenerating…' : 'Score the latest versions'}
             </button>
           </div>
@@ -547,12 +601,24 @@ export default function FinalReview() {
 
         {shareLink ? (
           <div className="rounded-md border border-cobalt-200 bg-cobalt-50 p-4 print:hidden">
-            <h3 className="mb-1 flex items-center text-sm font-semibold text-cobalt-800"><FaLink className="mr-2" /> Public share link</h3>
-            <p className="mb-2 text-xs text-cobalt-700">Anyone with this link can view the report without logging in.</p>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="flex items-center text-sm font-semibold text-cobalt-800"><FaLink className="mr-2" /> Public share link</h3>
+              <button onClick={stopSharing} disabled={isRevokingShare} className="nk-btn-ghost nk-btn-sm text-red-700">
+                {isRevokingShare ? 'Turning off…' : 'Stop sharing'}
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-cobalt-700">Anyone with this link can view the report — including the section text — without logging in.</p>
             <div className="flex">
               <input type="text" value={shareLink} readOnly className="flex-1 rounded-l-md border border-cobalt-300 p-2 text-sm" />
               <button onClick={() => { navigator.clipboard.writeText(shareLink); toast.success('Link copied'); }} className="rounded-r-md bg-cobalt-600 px-4 py-2 text-sm text-white hover:bg-cobalt-700">Copy</button>
             </div>
+          </div>
+        ) : isPublic ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-cobalt-200 bg-cobalt-50 px-4 py-2 text-sm text-cobalt-800 print:hidden">
+            <span><FaLink className="mr-2 inline" aria-hidden="true" />This report is shared by public link.</span>
+            <button onClick={stopSharing} disabled={isRevokingShare} className="nk-btn-ghost nk-btn-sm text-red-700">
+              {isRevokingShare ? 'Turning off…' : 'Stop sharing'}
+            </button>
           </div>
         ) : null}
         {shareLinkError ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{shareLinkError}</div> : null}
@@ -576,10 +642,14 @@ export default function FinalReview() {
           </div>
         </Panel>
 
-        {/* 2. Novelty */}
-        {overallReview.novelty_assessment ? (
-          <Panel id="novelty" title="Novelty & positioning" note="Where this idea sits against already-funded work and patents — reference only, not part of the score">
-            <NoveltyBlock novelty={overallReview.novelty_assessment} />
+        {/* 2. Novelty & prior work */}
+        {hasPriorWork ? (
+          <Panel id="novelty" title="Novelty & prior work" note="Where this idea sits against already-funded work and patents — reference only, not part of the score">
+            <div className="space-y-5">
+              {overallReview.novelty_assessment ? <NoveltyBlock novelty={overallReview.novelty_assessment} /> : null}
+              <PriorWorkFlags flags={priorWorkFlags} />
+              {landscape ? <PriorWorkSnapshot landscape={landscape} /> : null}
+            </div>
           </Panel>
         ) : null}
 
@@ -653,7 +723,14 @@ export default function FinalReview() {
           </div>
         </Panel>
 
-        {/* 7. Sections */}
+        {/* 7. Landscape — the evidence behind the novelty verdict */}
+        {landscape ? (
+          <Panel id="landscape" title="Research & patent landscape" note="Similar funded projects and Indian patents retrieved for reference — not part of the score">
+            <ReportLandscape landscape={landscape} patentHref={patentSearchHref} />
+          </Panel>
+        ) : null}
+
+        {/* 8. Sections */}
         <Panel
           id="sections"
           title="Section by section"
@@ -711,34 +788,6 @@ export default function FinalReview() {
             </div>
           )}
         </Panel>
-
-        {/* 8. Landscape */}
-        {overallReview.landscape ? (
-          <Panel id="landscape" title="Research & patent landscape" note="Similar funded projects and Indian patents retrieved for reference — not part of the score">
-            {overallReview.landscape.priorWork?.rows?.length > 0 ? (
-              <>
-                <PriorWorkList rows={overallReview.landscape.priorWork.rows} summary={overallReview.landscape.priorWork.summary} />
-                {overallReview.landscape.priorWork.coverage?.length > 0 ? (
-                  <CoverageMap
-                    coverage={overallReview.landscape.priorWork.coverage}
-                    rows={overallReview.landscape.priorWork.rows}
-                    patentsSearched={overallReview.landscape.sources?.patents?.status === 'ok'}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <p className="text-sm text-nickel-600">No closely comparable funded projects or Indian patents were retrieved for this proposal.</p>
-            )}
-            <p className="mt-4 text-xs text-nickel-500">
-              {`Similar funded projects: ${overallReview.landscape.sources?.projects?.count ?? 0} retrieved from the sanctioned-project corpus. `}
-              {overallReview.landscape.sources?.patents?.status === 'ok'
-                ? `Indian patents searched via PatentNest (${overallReview.landscape.sources.patents.count} retrieved).`
-                : overallReview.landscape.sources?.patents?.status === 'not_configured'
-                  ? 'Indian patents not searched — patent search is not configured on this server.'
-                  : 'Indian patent search was unavailable for this run.'}
-            </p>
-          </Panel>
-        ) : null}
 
         <div className="hidden p-4 text-center text-[12px] text-nickel-500 print:block">
           <p>Panel report · {callData?.project_title || ''} · {overallReview.generated_at ? new Date(overallReview.generated_at).toLocaleDateString() : new Date().toLocaleDateString()}</p>

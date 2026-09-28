@@ -30,9 +30,13 @@ vi.mock('@/lib/reviewer/usage', () => ({
 }))
 
 import {
+  capCallContext,
   landscapeCacheOf,
   landscapeIsReusable,
   landscapeNoveltyInputHash,
+  recentReportRuns,
+  reusableNoveltyOf,
+  reviewerReportDailyLimit,
   shouldReuseLandscape,
 } from '@/lib/reviewer/reportGeneration'
 
@@ -142,6 +146,7 @@ describe('landscapeCacheOf', () => {
     }
     expect(landscapeCacheOf(parked)).toEqual({
       landscape: { status: 'ok' },
+      novelty: null,
       built_at: '2026-08-24T11:00:00Z',
     })
   })
@@ -170,5 +175,108 @@ describe('landscapeIsReusable', () => {
     const parked = { status: 'ok', input_hash: hash }
     const old = new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString()
     expect(landscapeIsReusable(parked, old, hash, NOW)).toBe(false)
+  })
+})
+
+describe('landscapeIsReusable — every source must have answered', () => {
+  // Only a fully errored build used to be refused, so a run whose patent
+  // search failed was reused for a week and patents never came back.
+  const hash = landscapeNoveltyInputHash(hashInput())
+  const builtAt = new Date(NOW.getTime() - 60_000).toISOString()
+  const clean = (overrides: Record<string, any> = {}) => ({
+    status: 'ok',
+    input_hash: hash,
+    sources: {
+      projects: { searched: true, count: 5, degradedMode: null },
+      patents: { searched: true, status: 'ok', count: 4 },
+    },
+    ...overrides,
+  })
+
+  it('reuses a landscape where both searches answered', () => {
+    expect(landscapeIsReusable(clean(), builtAt, hash, NOW)).toBe(true)
+  })
+
+  it('rebuilds a partial landscape, so a failed patent search is retried', () => {
+    const partial = clean({
+      status: 'partial',
+      sources: {
+        projects: { searched: true, count: 5, degradedMode: null },
+        patents: { searched: false, status: 'error', count: 0, error: 'PatentNest authentication failed.' },
+      },
+    })
+    expect(landscapeIsReusable(partial, builtAt, hash, NOW)).toBe(false)
+  })
+
+  it('rebuilds when the patent search errored even if the status reads ok', () => {
+    const patentsFailed = clean({ sources: { projects: { searched: true, count: 5, degradedMode: null }, patents: { searched: false, status: 'error', count: 0 } } })
+    expect(landscapeIsReusable(patentsFailed, builtAt, hash, NOW)).toBe(false)
+  })
+
+  it('rebuilds when the project search errored', () => {
+    const projectsFailed = clean({ sources: { projects: { searched: false, count: 0, degradedMode: null, error: 'timeout' }, patents: { searched: true, status: 'ok', count: 4 } } })
+    expect(landscapeIsReusable(projectsFailed, builtAt, hash, NOW)).toBe(false)
+  })
+
+  it('rebuilds a not-configured patent search once patent search is configured', () => {
+    const notConfigured = clean({ sources: { projects: { searched: true, count: 5, degradedMode: null }, patents: { searched: false, status: 'not_configured', count: 0 } } })
+    expect(landscapeIsReusable(notConfigured, builtAt, hash, NOW, { patentSearchConfigured: true })).toBe(false)
+    expect(landscapeIsReusable(notConfigured, builtAt, hash, NOW, { patentSearchConfigured: false })).toBe(true)
+  })
+
+  it('rebuilds a landscape that recorded a degraded step', () => {
+    const degraded = clean({ notes: ['Matching the results against the proposal timed out.'] })
+    expect(landscapeIsReusable(degraded, builtAt, hash, NOW)).toBe(false)
+  })
+})
+
+describe('reusableNoveltyOf', () => {
+  it('keeps a real verdict and drops the unassessed fallback', () => {
+    expect(reusableNoveltyOf({ verdict: 'incremental' })).toEqual({ verdict: 'incremental' })
+    expect(reusableNoveltyOf({ verdict: 'unassessed' })).toBeNull()
+    expect(reusableNoveltyOf(null)).toBeNull()
+  })
+
+  it('is read back from a parked cache alongside the landscape', () => {
+    const parked = { landscape_cache: { landscape: { status: 'ok' }, novelty: { verdict: 'differentiated' }, built_at: '2026-08-24T11:00:00Z' } }
+    expect(landscapeCacheOf(parked)?.novelty).toEqual({ verdict: 'differentiated' })
+  })
+})
+
+describe('report run ceiling', () => {
+  afterEach(() => {
+    delete process.env.REVIEWER_REPORT_DAILY_LIMIT
+  })
+
+  it('counts only runs inside the last 24 hours', () => {
+    const state = {
+      report_runs: [
+        new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString(),
+        new Date(NOW.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+        new Date(NOW.getTime() - 60 * 1000).toISOString(),
+        'not-a-date',
+      ],
+      report_lock: { token: 'x', until: NOW.toISOString() },
+    }
+    expect(recentReportRuns(state, NOW)).toHaveLength(2)
+    expect(recentReportRuns(null, NOW)).toEqual([])
+    expect(recentReportRuns({ report_runs: 'garbage' }, NOW)).toEqual([])
+  })
+
+  it('defaults to 15 and honours a positive override', () => {
+    expect(reviewerReportDailyLimit()).toBe(15)
+    process.env.REVIEWER_REPORT_DAILY_LIMIT = '4'
+    expect(reviewerReportDailyLimit()).toBe(4)
+    process.env.REVIEWER_REPORT_DAILY_LIMIT = '0'
+    expect(reviewerReportDailyLimit()).toBe(15)
+  })
+})
+
+describe('capCallContext', () => {
+  it('leaves a normal call context alone and truncates an oversized one', () => {
+    expect(capCallContext('short context')).toBe('short context')
+    const capped = capCallContext('x'.repeat(30_000))
+    expect(capped.length).toBeLessThan(25_000)
+    expect(capped).toContain('[Call context truncated for the panel report]')
   })
 })

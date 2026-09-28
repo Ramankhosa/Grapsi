@@ -1,48 +1,68 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getServerSession, requireReviewerCallAccess } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import crypto from 'crypto';
 
+/**
+ * POST mints (or reuses) the public link to a panel report; DELETE takes it
+ * down. There used to be no way back: once shared, a report stayed public for
+ * good, because nothing in the app ever cleared `is_public`.
+ *
+ * Access follows the rest of the workspace (`requireReviewerCallAccess` with
+ * edit rights), not bare ownership — a project collaborator or a proposal-desk
+ * colleague who can regenerate the report can also share or unshare it.
+ */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  // Only allow POST requests
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
+  if (req.method !== 'POST' && req.method !== 'DELETE') {
+    res.setHeader('Allow', ['POST', 'DELETE']);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
-  
+
   // Get the user session
   const session = await getServerSession(req, res);
-  
+
   // Check authentication
   if (!session || !session.user?.id) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  if (!(await requireGrantReviewFeature(session, res))) return;
-  
   // Get the call ID from the URL
   const callId = req.query.id as string;
-  
+
   if (!callId) {
     return res.status(400).json({ error: 'Call ID is required' });
   }
 
+  const access = await requireReviewerCallAccess(callId, session, res, 'editContent');
+  if (!access) return;
+
+  if (req.method === 'DELETE') {
+    try {
+      // Clearing the token as well as the flag means a link that leaked keeps
+      // failing even if the report is shared again later.
+      await prisma.reviewerCall.update({
+        where: { id: callId },
+        data: { is_public: false, share_token: null },
+      });
+      return res.status(200).json({ success: true, shared: false });
+    } catch (error) {
+      console.error('Error revoking share link:', error);
+      return res.status(500).json({ error: 'Failed to stop sharing this report' });
+    }
+  }
+
   // Get display preferences from the request body
-  const { displayMode, versionSelections } = req.body;
+  const { displayMode, versionSelections } = req.body || {};
 
   try {
-    // Verify the call belongs to the user
     const call = await prisma.reviewerCall.findUnique({
-      where: {
-        id: callId,
-        user_id: session.user.id
-      }
+      where: { id: callId }
     });
-    
+
     if (!call) {
       return res.status(404).json({ error: 'Call not found' });
     }

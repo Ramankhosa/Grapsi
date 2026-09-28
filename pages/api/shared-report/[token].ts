@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 import prisma from '@/lib/prisma'
-import { resolveSectionVersions } from '@/lib/reviewer/finalReport'
+import { resolveReportSections, resolveSectionVersions } from '@/lib/reviewer/finalReport'
 
 /**
  * Public, token-gated read of a shared panel report.
@@ -109,22 +109,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         && Object.keys(section.ai_review_json as object).length > 0
     )
 
-    // The versions the stored report was actually built from. Falling back to
-    // the sharer's picker choice, then to the newest draft, keeps reports
-    // written before `score_basis` existed rendering correctly.
-    const scoredVersions = asRecord(overall.score_basis).scoredVersions
-    const versionSelections =
-      (scoredVersions && typeof scoredVersions === 'object' ? scoredVersions : null)
-      || preferences.versionSelections
-      || null
+    // The versions the stored report was actually built from, minus the
+    // sections it deliberately left out. Reports written before `score_basis`
+    // existed fall back to the sharer's picker choice, then the newest draft.
+    const scoreBasis = asRecord(overall.score_basis)
+    const excludedTitles = new Set(
+      (Array.isArray(scoreBasis.excludedTitles) ? scoreBasis.excludedTitles : [])
+        .map((title: unknown) => String(title || '').trim().toLowerCase())
+    )
+    const hasScoredVersions = Boolean(scoreBasis.scoredVersions && typeof scoreBasis.scoredVersions === 'object')
 
-    // Parallel view is a version comparison, so it needs every draft. Single
-    // view renders the list verbatim and would otherwise print a revised
-    // section once per version.
+    // Parallel view is a version comparison, so it needs every draft of the
+    // titles in the report. Single view renders the list verbatim and would
+    // otherwise print a revised section once per version.
     const sections =
       preferences.displayMode === 'parallel'
-        ? reviewed
-        : resolveSectionVersions(reviewed as any, versionSelections).effective
+        ? reviewed.filter((section) => !excludedTitles.has(String(section.section_title || '').trim().toLowerCase()))
+        : hasScoredVersions
+          ? resolveReportSections(reviewed as any, overall)
+          : resolveSectionVersions(reviewed as any, preferences.versionSelections || null).effective
 
     res.setHeader('Cache-Control', 'no-store')
     return res.status(200).json({

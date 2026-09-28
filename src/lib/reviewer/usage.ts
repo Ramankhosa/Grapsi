@@ -30,8 +30,19 @@ export interface ReviewerUsageReservation {
   operationType?: ReviewerOperationType
 }
 
-export function reviewerSectionOperationId(sectionId: string, version: number | null | undefined): string {
-  return `reviewer-section:${sectionId}:v${version ?? 1}`
+/**
+ * `changedContentHash` is passed only when the text differs from what was last
+ * reviewed on this row (an in-place edit): that review is a new, billable run.
+ * Without it the id is unchanged from before, so re-running an unchanged
+ * review — or any review already on the ledger — is still not counted twice.
+ */
+export function reviewerSectionOperationId(
+  sectionId: string,
+  version: number | null | undefined,
+  changedContentHash?: string | null
+): string {
+  const base = `reviewer-section:${sectionId}:v${version ?? 1}`
+  return changedContentHash ? `${base}:${changedContentHash}` : base
 }
 
 export function reviewerReportOperationId(callId: string): string {

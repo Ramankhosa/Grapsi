@@ -1,10 +1,16 @@
 // Action Taken Report (ATR) — the Word deliverable a researcher fills in and
 // forwards. Built for reading order, not data order:
 //
-//   cover + verdict → how to use → contents (hyperlinked)
-//   1. At a glance (scorecards)      2. What to fix first (the worksheet)
-//   3. Panel assessment              4. Section by section (worksheets)
-//   5. Research & patent landscape   Appendix: how this report was produced
+//   cover + verdict + prior work → how to use → contents (hyperlinked)
+//   1. At a glance (scorecards, novelty, prior-work flags)
+//   2. What to fix first (the worksheet)
+//   3. Panel assessment
+//   4. Research & patent landscape (when the report has one)
+//   5. Section by section (worksheets)   Appendix: how this report was produced
+//
+// The landscape sits with the overall assessment, ahead of the per-section
+// detail: it answers "has this been done?", a question about the whole idea.
+// It used to be the last part, after every section worksheet.
 //
 // Everything here is deterministic rendering of the stored report; nothing is
 // generated. Pages-router safe (no `server-only`).
@@ -31,6 +37,7 @@ import {
   WidthType,
 } from 'docx'
 
+import { describeLandscapeRun, summarizeLandscape } from '@/lib/reviewer/landscapeCore'
 import { compareSections } from '@/lib/reviewer/sectionGrouping'
 
 export type AtrSectionInput = {
@@ -333,6 +340,14 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
   const children: Array<Paragraph | Table> = []
   const generated = formatDate(input.generatedAt || overall.generated_at)
 
+  const landscape = overall.landscape && typeof overall.landscape === 'object' ? overall.landscape : null
+  const landscapeSummary = summarizeLandscape(landscape)
+  const priorWorkFlags = Array.isArray(overall.prior_work_flags) ? overall.prior_work_flags : []
+  // Part numbers follow what the report contains, so a report without a
+  // landscape does not skip from Part 3 to Part 5.
+  const landscapePart = landscape ? 4 : null
+  const sectionsPart = landscape ? 5 : 4
+
   // --- Stale banner -------------------------------------------------------
   if (input.staleNotice) {
     children.push(new Paragraph({
@@ -406,11 +421,29 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
     }
   }
 
+  // Prior work — retrieved, not judged; the headline belongs on the cover.
+  if (landscapeSummary) {
+    const priorLine = landscapeSummary.searchFailed && landscapeSummary.fundedCount + landscapeSummary.patentCount === 0
+      ? `The prior-work search did not complete for this report — see Part ${landscapePart}.`
+      : [
+          `${landscapeSummary.fundedCount} comparable funded project${landscapeSummary.fundedCount === 1 ? '' : 's'}`,
+          `${landscapeSummary.patentCount} Indian patent${landscapeSummary.patentCount === 1 ? '' : 's'} retrieved`,
+          landscapeSummary.patentedAspects.length
+            ? `${landscapeSummary.patentedAspects.length} of your aspects already patented`
+            : null,
+          landscapeSummary.searchFailed ? `one search failed (see Part ${landscapePart})` : null,
+        ].filter(Boolean).join('   ·   ')
+    children.push(para(
+      [run('Prior work (reference)  ', { bold: true, size: 20, color: BRAND }), run(priorLine, { size: 20 })],
+      { spacing: { after: 160 } }
+    ))
+  }
+
   // How to use
   children.push(note(
     'How to use this document: work through Part 2 first — it ranks the changes that move the funding decision most. ' +
-    'Write what you did in the shaded "Action taken" column of each table, then return to Part 4 for section-level fixes. ' +
-    'Part 1 shows where marks were lost; Part 5 lists comparable funded work and patents for reference only.'
+    `Write what you did in the shaded "Action taken" column of each table, then return to Part ${sectionsPart} for section-level fixes. ` +
+    `Part 1 shows where marks were lost${landscapePart ? `; Part ${landscapePart} lists comparable funded work and patents for reference only` : ''}.`
   ))
 
   // Contents (hyperlinked; no field update prompt)
@@ -419,20 +452,20 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
     spacing: { before: 120, after: 80 },
   }))
   const contents: Array<[string, string]> = [
-    ['1. At a glance — scores and verdicts', 'part-1'],
+    ['1. At a glance — scores, verdicts and novelty', 'part-1'],
     ['2. What to fix first — priority actions worksheet', 'part-2'],
     ['3. Panel assessment — summary, strengths, cross-section issues', 'part-3'],
-    ['4. Section by section — worksheets', 'part-4'],
-    ...(overall.landscape ? [['5. Research & patent landscape (reference)', 'part-5'] as [string, string]] : []),
+    ...(landscapePart ? [[`${landscapePart}. Research & patent landscape (reference)`, 'part-landscape'] as [string, string]] : []),
+    [`${sectionsPart}. Section by section — worksheets`, 'part-sections'],
     ['Appendix — how this report was produced', 'appendix'],
   ]
   for (const [label, anchor] of contents) {
     children.push(new Paragraph({ children: [link(label, anchor, 21)], spacing: { after: 40 }, indent: { left: 240 } }))
-    if (anchor === 'part-4') {
-      // Section entries nest under Part 4, where a reader expects them.
+    if (anchor === 'part-sections') {
+      // Section entries nest under their part, where a reader expects them.
       sections.forEach((section, index) => {
         children.push(new Paragraph({
-          children: [link(`4.${index + 1}  ${section.section_title}${section.version > 1 ? ` (v${section.version})` : ''}`, sectionAnchor(section), 19)],
+          children: [link(`${sectionsPart}.${index + 1}  ${section.section_title}${section.version > 1 ? ` (v${section.version})` : ''}`, sectionAnchor(section), 19)],
           spacing: { after: 30 },
           indent: { left: 600 },
         }))
@@ -499,8 +532,24 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
     if (bits.length) children.push(muted(`How the overall score was formed: ${bits.join(' · ')}.`))
   }
 
+  if (novelty || priorWorkFlags.length) {
+    children.push(heading('Novelty and prior work (reference only)', 2))
+  }
+  if (priorWorkFlags.length) {
+    children.push(muted('Where the panel\'s wording and the prior-work evidence need reconciling. Computed from the retrieved records; not part of the score.'))
+    children.push(grid(
+      ['Severity', 'What the prior-work check found', 'What to do', 'Action taken (your remarks)'],
+      [10, 40, 30, 20],
+      priorWorkFlags.map((flag: any) => [
+        bandCell(text(flag?.severity, 'medium'), flag?.severity === 'high' ? 'weak' : flag?.severity === 'low' ? 'none' : 'adequate'),
+        { value: text(flag?.issue, '—'), size: 19 },
+        { value: text(flag?.action, '—'), size: 19 },
+        { value: ' ', fill: WORKSHEET_FILL },
+      ])
+    ))
+    children.push(spacer(100))
+  }
   if (novelty) {
-    children.push(heading('Novelty and positioning (reference only)', 2))
     if (novelty.positioning_summary) children.push(para(text(novelty.positioning_summary)))
     const alreadyDone = Array.isArray(novelty.already_done) ? novelty.already_done : []
     if (alreadyDone.length) {
@@ -536,7 +585,7 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
       ])
     ))
   } else {
-    children.push(para('The panel did not rank priority actions for this report. Use the section worksheets in Part 4.'))
+    children.push(para(`The panel did not rank priority actions for this report. Use the section worksheets in Part ${sectionsPart}.`))
   }
   children.push(backToContents())
 
@@ -576,8 +625,74 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
   }
   children.push(backToContents())
 
-  // --- Part 4: Section by section ----------------------------------------
-  children.push(heading('4. Section by section', 1, 'part-4'))
+  // --- Part 4: Landscape ---------------------------------------------------
+  if (landscape && landscapePart) {
+    const rows = Array.isArray(landscape.priorWork?.rows) ? landscape.priorWork.rows : []
+    const funded = rows.filter((row: any) => row?.kind === 'funded' && row?.award)
+    const patented = rows.filter((row: any) => row?.kind === 'patented' && row?.patent)
+    children.push(heading(`${landscapePart}. Research & patent landscape (reference only)`, 1, 'part-landscape'))
+    children.push(muted('Similar already-funded projects and Indian patents retrieved for this proposal. This did not influence the scores.'))
+
+    // Say what went wrong before listing anything: an empty table after a
+    // failed search is not evidence of an open field.
+    for (const notice of describeLandscapeRun(landscape)) {
+      children.push(note(notice.text, notice.tone === 'error' ? 'FDECEC' : notice.tone === 'warning' ? 'FFF4DB' : NOTE_FILL))
+    }
+
+    if (landscapeSummary?.patentedAspects.length) {
+      children.push(heading('Aspects of your proposal already patented', 2))
+      children.push(grid(['Aspect', 'Patents covering it', 'Funded work on it?'], [46, 34, 20],
+        landscapeSummary.patentedAspects.map((aspect) => [
+          text(aspect.facet),
+          aspect.numbers.join(', ') || '—',
+          aspect.unfunded ? bandCell('None found — design around', 'weak') : { value: 'Yes', align: AlignmentType.CENTER },
+        ])))
+      children.push(spacer(100))
+    }
+    if (patented.length) {
+      children.push(heading('Comparable Indian patents', 2))
+      children.push(grid(['Patent', 'Assignee', 'Number', 'Year', 'Aspects of your proposal it touches'], [38, 16, 14, 6, 26],
+        patented.slice(0, 10).map((row: any) => [
+          {
+            value: [
+              new Paragraph({ children: [run(text(row.title), { bold: true, size: 19 })], spacing: { after: 40 } }),
+              ...(row.patent.abstract ? [new Paragraph({ children: [run(clip(text(row.patent.abstract), 320), { size: 17, color: MUTED })], spacing: { after: 0 } })] : []),
+            ],
+          },
+          text(row.patent.assignee, '—'), text(row.patent.publicationNumber, '—'), row.year ? String(row.year) : '—', list(row.facetsCovered).join('; ') || '—',
+        ])))
+      children.push(spacer(100))
+    }
+    if (funded.length) {
+      children.push(heading('Comparable funded projects', 2))
+      children.push(grid(['Project', 'Agency / scheme', 'Year', 'Budget', 'Status', 'Aspects of your proposal it touches'], [30, 16, 7, 12, 9, 26],
+        funded.slice(0, 12).map((row: any) => [
+          text(row.title), [row.award.agencyName, row.award.schemeName].filter(Boolean).join(' · '), row.year ? String(row.year) : '—',
+          row.award.budgetAmount ? `${row.award.budgetCurrency || ''} ${Number(row.award.budgetAmount).toLocaleString('en-IN')}`.trim() : '—',
+          text(row.award.status, '—'), list(row.facetsCovered).join('; ') || '—',
+        ])))
+      children.push(spacer(100))
+    }
+    if (landscapeSummary && (landscapeSummary.openAspects.length || landscapeSummary.hardAspects.length)) {
+      children.push(heading('Where the field looks open', 2))
+      if (landscapeSummary.openAspects.length) {
+        children.push(para([run('No retrieved award or patent covers: ', { bold: true, size: 20 }), run(landscapeSummary.openAspects.join('; '), { size: 20 })]))
+      }
+      if (landscapeSummary.hardAspects.length) {
+        children.push(para([run('Attempted by completed awards that reported no output (treat as hard, not empty): ', { bold: true, size: 20 }), run(landscapeSummary.hardAspects.join('; '), { size: 20 })]))
+      }
+    }
+    const patentNote = landscape.sources?.patents?.status === 'ok'
+      ? `Patents searched via PatentNest (${landscape.sources.patents.count ?? patented.length} retrieved).`
+      : landscape.sources?.patents?.status === 'not_configured'
+        ? 'Patents not searched — patent search is not configured on this server.'
+        : 'Patent search failed for this run.'
+    children.push(muted(`Sources: sanctioned-project corpus (${landscape.sources?.projects?.count ?? funded.length} retrieved). ${patentNote}`))
+    children.push(backToContents())
+  }
+
+  // --- Section by section --------------------------------------------------
+  children.push(heading(`${sectionsPart}. Section by section`, 1, 'part-sections'))
   children.push(muted('Each section in proposal order. Revised sections show the change against the version reviewed before.'))
 
   sections.forEach((section, index) => {
@@ -585,7 +700,7 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
     const versionLabel = section.version > 1
       ? ` — v${section.version}${review.revision_of_version ? ` (revision of v${review.revision_of_version})` : ''}`
       : ''
-    children.push(heading(`4.${index + 1}  ${section.section_title}${versionLabel}`, 2, sectionAnchor(section)))
+    children.push(heading(`${sectionsPart}.${index + 1}  ${section.section_title}${versionLabel}`, 2, sectionAnchor(section)))
 
     const band = SCORE_BANDS[scoreBand(review.score)]
     const scoreLine: TextRun[] = [
@@ -631,42 +746,6 @@ export async function buildAtrDocument(input: AtrDocumentInput): Promise<Buffer>
     }
     children.push(backToContents())
   })
-
-  // --- Part 5: Landscape ---------------------------------------------------
-  const landscape = overall.landscape && typeof overall.landscape === 'object' ? overall.landscape : null
-  if (landscape) {
-    const rows = Array.isArray(landscape.priorWork?.rows) ? landscape.priorWork.rows : []
-    const funded = rows.filter((row: any) => row?.kind === 'funded' && row?.award)
-    const patented = rows.filter((row: any) => row?.kind === 'patented' && row?.patent)
-    children.push(heading('5. Research & patent landscape (reference only)', 1, 'part-5'))
-    children.push(muted('Similar already-funded projects and Indian patents retrieved for this proposal. This did not influence the scores above.'))
-    if (funded.length) {
-      children.push(heading('Comparable funded projects', 2))
-      children.push(grid(['Project', 'Agency / scheme', 'Year', 'Budget', 'Status', 'Aspects of your proposal it touches'], [30, 16, 7, 12, 9, 26],
-        funded.slice(0, 12).map((row: any) => [
-          text(row.title), [row.award.agencyName, row.award.schemeName].filter(Boolean).join(' · '), row.year ? String(row.year) : '—',
-          row.award.budgetAmount ? `${row.award.budgetCurrency || ''} ${Number(row.award.budgetAmount).toLocaleString('en-IN')}`.trim() : '—',
-          text(row.award.status, '—'), list(row.facetsCovered).join('; ') || '—',
-        ])))
-      children.push(spacer(100))
-    }
-    if (patented.length) {
-      children.push(heading('Comparable Indian patents', 2))
-      children.push(grid(['Patent', 'Assignee', 'Number', 'Year', 'Aspects of your proposal it touches'], [32, 20, 14, 7, 27],
-        patented.slice(0, 10).map((row: any) => [
-          text(row.title), text(row.patent.assignee, '—'), text(row.patent.publicationNumber, '—'), row.year ? String(row.year) : '—', list(row.facetsCovered).join('; ') || '—',
-        ])))
-      children.push(spacer(100))
-    }
-    if (!funded.length && !patented.length) children.push(para('No closely comparable funded projects or Indian patents were retrieved for this proposal.'))
-    const patentNote = landscape.sources?.patents?.status === 'ok'
-      ? `Patents searched via PatentNest (${landscape.sources.patents.count ?? patented.length} retrieved).`
-      : landscape.sources?.patents?.status === 'not_configured'
-        ? 'Patents not searched — patent search is not configured on this server.'
-        : 'Patent search was unavailable for this run.'
-    children.push(muted(`Sources: sanctioned-project corpus (${landscape.sources?.projects?.count ?? funded.length} retrieved). ${patentNote}`))
-    children.push(backToContents())
-  }
 
   // --- Appendix --------------------------------------------------------------
   children.push(heading('Appendix — how this report was produced', 1, 'appendix'))

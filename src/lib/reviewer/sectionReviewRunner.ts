@@ -292,9 +292,21 @@ export async function reviewSectionById(input: ReviewSectionInput): Promise<Revi
     // again if the review fails, so a failed run costs the tenant nothing.
     let usageReservation
     try {
+      // Keyed by section version, so re-running an unchanged review stays
+      // free — but an in-place edit keeps the version number, which made every
+      // edit-and-re-review of the same row free forever. Text that differs from
+      // what was last reviewed is a new run.
+      const previousReviewHash = typeof section.ai_review_json?.reviewed_input_hash === 'string'
+        ? section.ai_review_json.reviewed_input_hash
+        : null
+      const currentHash = sectionContentHash(section.user_input)
       usageReservation = await reserveReviewerUsage({
         callId,
-        operationId: reviewerSectionOperationId(sectionId, section.version),
+        operationId: reviewerSectionOperationId(
+          sectionId,
+          section.version,
+          previousReviewHash && previousReviewHash !== currentHash ? currentHash : null
+        ),
         operationType: 'reviewer_section_review',
         metadata: { sectionTitle: section.section_title, version: section.version ?? 1 },
       })
@@ -432,9 +444,14 @@ export async function reviewSectionById(input: ReviewSectionInput): Promise<Revi
         version: section.version ?? 1,
         timestamp: new Date().toISOString(),
       }
+      // Merged, not overwritten: the column also carries the report
+      // generator's lock and run log, which a section review finishing in the
+      // middle of a report run must not wipe.
       await prisma.$executeRaw`
         UPDATE "reviewer_calls"
-        SET review_progress_state = ${progressState}::jsonb
+        SET review_progress_state =
+          (CASE WHEN jsonb_typeof(review_progress_state) = 'object' THEN review_progress_state ELSE '{}'::jsonb END)
+          || ${progressState}::jsonb
         WHERE id = ${callId}
       `.catch((progressError) => console.warn('Could not record review progress:', progressError))
 

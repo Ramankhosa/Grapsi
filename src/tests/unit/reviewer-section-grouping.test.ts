@@ -5,6 +5,7 @@ import {
   countReviewerSections,
   groupReviewerSections,
   reportFreshness,
+  scoredTitlesAwaitingReview,
   sectionStatus,
 } from '@/lib/reviewer/sectionGrouping'
 
@@ -157,5 +158,55 @@ describe('reportFreshness', () => {
     const report = { generated_at: '2026-07-05T00:00:00.000Z', executive_summary: 'x' }
     expect(reportFreshness(report, [reviewed('Abstract', 1, '2026-07-09T00:00:00.000Z')])).toBe('stale')
     expect(reportFreshness(report, [reviewed('Abstract', 1, '2026-07-02T00:00:00.000Z')])).toBe('fresh')
+  })
+})
+
+describe('reportFreshness after an in-place edit', () => {
+  // An in-place edit keeps the row and its version number, so a report could
+  // not tell that the text — and its review — had changed underneath it.
+  const reviewedAt = (title: string, version: number, at: string) =>
+    section({ id: `${title}-${version}`, section_title: title, version, status: 'reviewed', ai_review_json: { score: 7 }, last_reviewed_at: at })
+
+  it('goes stale when the scored version was reviewed again after the report', () => {
+    const report = {
+      score_basis: {
+        scoredVersions: { Abstract: 1 },
+        scoredReviewStamps: { Abstract: '2026-07-01T00:00:00.000Z' },
+      },
+    }
+    expect(reportFreshness(report, [reviewedAt('Abstract', 1, '2026-07-01T00:00:00.000Z')])).toBe('fresh')
+    expect(reportFreshness(report, [reviewedAt('Abstract', 1, '2026-07-03T09:30:00.000Z')])).toBe('stale')
+  })
+
+  it('compares stamps by instant, so a Date and its ISO string agree', () => {
+    const report = { score_basis: { scoredVersions: { Abstract: 1 }, scoredReviewStamps: { Abstract: '2026-07-01T00:00:00.000Z' } } }
+    const row = section({ section_title: 'Abstract', status: 'reviewed', ai_review_json: { score: 7 }, last_reviewed_at: new Date('2026-07-01T00:00:00.000Z') })
+    expect(reportFreshness(report, [row])).toBe('fresh')
+  })
+
+  it('ignores stamps when the caller did not load review times', () => {
+    const report = { score_basis: { scoredVersions: { Abstract: 1 }, scoredReviewStamps: { Abstract: '2026-07-01T00:00:00.000Z' } } }
+    const row = section({ section_title: 'Abstract', status: 'reviewed', ai_review_json: { score: 7 }, last_reviewed_at: null })
+    expect(reportFreshness(report, [row])).toBe('fresh')
+  })
+
+  it('goes stale while a scored section sits edited back to draft', () => {
+    const report = { score_basis: { scoredVersions: { Abstract: 1, Methodology: 1 } } }
+    const sections = [
+      reviewedAt('Abstract', 1, '2026-07-01T00:00:00.000Z'),
+      section({ id: 'm1', section_title: 'Methodology', status: 'draft', sourceStale: true, ai_review_json: { score: 6 } }),
+    ]
+    expect(scoredTitlesAwaitingReview(report, sections)).toEqual(['Methodology'])
+    expect(reportFreshness(report, sections)).toBe('stale')
+  })
+
+  it('does not count a section the report deliberately left out', () => {
+    const report = { score_basis: { scoredVersions: { Abstract: 1, Budget: 1 }, excludedTitles: ['Budget'] } }
+    const sections = [
+      reviewedAt('Abstract', 1, '2026-07-01T00:00:00.000Z'),
+      section({ id: 'b1', section_title: 'Budget', status: 'draft' }),
+    ]
+    expect(scoredTitlesAwaitingReview(report, sections)).toEqual([])
+    expect(reportFreshness(report, sections)).toBe('fresh')
   })
 })

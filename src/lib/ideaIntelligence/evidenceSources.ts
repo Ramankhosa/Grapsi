@@ -1,6 +1,11 @@
 import { literatureSearchService, type SearchResult } from '@/lib/services/literature-search-service'
 import { serpApiProvider, type SerpApiSearchResult } from '@/lib/serpapi-provider'
-import { isPatentNestConfigured, searchIndianPatents } from '@/lib/patentnest/client'
+import {
+  isPatentNestConfigured,
+  PatentNestClient,
+  searchIndianPatents,
+  type PatentNestClientOptions,
+} from '@/lib/patentnest/client'
 import { IDEA_SOURCE_FLAGS, type IdeaSourceFlags } from '@/lib/ideaIntelligence/sourceFlags'
 import { sanitizeExternalUrl } from '@/lib/urlSafety'
 
@@ -161,13 +166,15 @@ function normalizePatentnestItem(item: any): PatentEvidence | null {
   }
 }
 
-async function searchPatentnest(query: string, limit: number) {
+async function searchPatentnest(query: string, limit: number, clientOptions?: PatentNestClientOptions) {
   if (!isPatentNestConfigured()) {
     return { results: [], status: 'not_configured' as const }
   }
 
   try {
-    const response = await searchIndianPatents(query, limit)
+    const response = clientOptions
+      ? await new PatentNestClient(clientOptions).searchIndianPatents(query, limit)
+      : await searchIndianPatents(query, limit)
     return {
       results: response.data.results.map(normalizePatentnestItem).filter(Boolean).slice(0, limit) as PatentEvidence[],
       status: 'ok' as const,
@@ -191,9 +198,16 @@ export type PatentnestSearchOutcome = {
  * Narrow entry point for callers that want PatentNest only — no SerpAPI /
  * Google Patents lookup. Used by the reviewer's landscape step, where the
  * patent corpus is deliberately limited to our own API.
+ *
+ * `clientOptions` lets a caller running inside a time budget bound retries and
+ * Retry-After pauses; by default a 429 may wait as long as upstream asks.
  */
-export async function retrievePatentnestPatents(query: string, limit = 10): Promise<PatentnestSearchOutcome> {
-  return searchPatentnest(query, Math.min(Math.max(Math.trunc(limit) || 1, 1), 20))
+export async function retrievePatentnestPatents(
+  query: string,
+  limit = 10,
+  clientOptions?: PatentNestClientOptions
+): Promise<PatentnestSearchOutcome> {
+  return searchPatentnest(query, Math.min(Math.max(Math.trunc(limit) || 1, 1), 20), clientOptions)
 }
 
 export function emptyIdeaEvidence(disabledSources: string[] = []): MultiSourceEvidence {

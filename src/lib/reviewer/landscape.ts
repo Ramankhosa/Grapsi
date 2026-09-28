@@ -20,7 +20,7 @@ import {
   type PatentnestSearchOutcome,
 } from '@/lib/ideaIntelligence/evidenceSources'
 import { loadProjectRecords } from '@/lib/ideaIntelligence/projectRecords'
-import { buildPriorWork, type PriorWorkAwardInput } from '@/lib/ideaIntelligence/priorWork'
+import { buildPriorWork, type FacetAssessedItem, type PriorWorkAwardInput } from '@/lib/ideaIntelligence/priorWork'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
 import { extractMeaningfulText } from '@/lib/reviewer/content'
 import {
@@ -40,6 +40,18 @@ export const REVIEWER_LANDSCAPE_PATENT_LIMIT = 10
 // Soft budget for the whole step. The panel model usually takes 30–60s, so the
 // landscape running alongside it inside this budget adds no wall-clock time.
 export const REVIEWER_LANDSCAPE_BUDGET_MS = 75_000
+// Per-step ceilings inside that budget. A step that overruns degrades on its
+// own (fallback query, untagged rows) instead of discarding the whole
+// landscape — which is what a single outer race used to do, throwing away
+// searches that had already come back.
+const DISTILL_BUDGET_MS = 20_000
+const SEARCH_BUDGET_MS = 25_000
+const FACET_MAP_MIN_MS = 8_000
+const RECORDS_RESERVE_MS = 3_000
+// The outer race is only a backstop for a step that ignores its own ceiling.
+const HARD_STOP_MARGIN_MS = 15_000
+// A Retry-After from PatentNest must not stall the report for 40 seconds.
+const PATENT_CLIENT_OPTIONS = { maxRetries: 1, maxRetryDelayMs: 3_000, timeoutMs: 15_000 }
 
 const LANDSCAPE_DISTILL_STAGE_CODE = 'GRANT_REVIEWER_LANDSCAPE_DISTILL'
 const LANDSCAPE_FACET_MAP_STAGE_CODE = 'GRANT_REVIEWER_LANDSCAPE_FACET_MAP'
@@ -73,6 +85,37 @@ import { runReviewerAuxiliaryText, type OwnerContext } from '@/lib/reviewer/auxL
 function normalizeText(value: unknown, maxLength: number) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
+
+/**
+ * Resolve with the step's value, or with `onTimeout()` once `ms` has passed.
+ * The losing promise keeps running (LLM calls cannot be aborted) but its result
+ * is ignored, and a late rejection is swallowed rather than left unhandled.
+ */
+async function withinBudget<T>(
+  promise: Promise<T>,
+  ms: number,
+  onTimeout: () => T
+): Promise<{ value: T; timedOut: boolean }> {
+  let timer: NodeJS.Timeout | undefined
+  const guarded = promise.then((value) => ({ value, timedOut: false }))
+  guarded.catch(() => undefined)
+  const timeout = new Promise<{ value: T; timedOut: boolean }>((resolve) => {
+    timer = setTimeout(() => resolve({ value: onTimeout(), timedOut: true }), Math.max(0, ms))
+  })
+  try {
+    return await Promise.race([guarded, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+type FacetMapResult = {
+  awardAssessments: FacetAssessedItem[]
+  patentAssessments: FacetAssessedItem[]
+  assessed: boolean
+}
+
+const EMPTY_FACET_MAP: FacetMapResult = { awardAssessments: [], patentAssessments: [], assessed: false }
 
 export function buildSectionDigests(sections: ReviewerLandscapeInput['sections']) {
   const digests: Array<{ title: string; text: string }> = []
@@ -130,7 +173,7 @@ async function mapFacets(input: {
   patents: PatentEvidence[]
   owner: OwnerContext
   modelType: 'O' | 'G'
-}) {
+}): Promise<FacetMapResult> {
   const comparisonProjects = input.projects
     .slice(0, REVIEWER_LANDSCAPE_PROJECT_COMPARISON_LIMIT)
     .map((project) => ({
@@ -152,7 +195,7 @@ async function mapFacets(input: {
     date: patent.publicationDate || patent.filingDate || patent.priorityDate,
     abstract: patent.abstract ? normalizeText(patent.abstract, PATENT_ABSTRACT_CHARS) : null,
   }))
-  const empty = { awardAssessments: [], patentAssessments: [], assessed: false }
+  const empty = EMPTY_FACET_MAP
   if (!comparisonProjects.length && !comparisonPatents.length) return empty
 
   const prompt = `Tag each retrieved record with which facets of the proposal it touches. Only the sections below were searched.
@@ -230,7 +273,15 @@ function emptyErrorLandscape(distillation: LandscapeDistillation, message: strin
   })
 }
 
+type ProjectSearchOutcome =
+  | { ok: true; value: Awaited<ReturnType<typeof searchProjects>> }
+  | { ok: false; error: string }
+
 async function buildLandscapeInner(input: ReviewerLandscapeInput): Promise<ReviewerLandscape> {
+  const deadline = Date.now() + REVIEWER_LANDSCAPE_BUDGET_MS
+  const remaining = () => Math.max(0, deadline - Date.now())
+  const notes: string[] = []
+
   const owner = await resolveReviewerCallOwner(input.callId)
   const parsedContext = input.parsedContext && typeof input.parsedContext === 'object' ? input.parsedContext : {}
   const callDescription = normalizeText(
@@ -239,37 +290,78 @@ async function buildLandscapeInner(input: ReviewerLandscapeInput): Promise<Revie
   )
   const sectionDigests = buildSectionDigests(input.sections)
 
-  const distillation = await distillProposal({
-    projectTitle: input.projectTitle,
-    callDescription,
-    sectionDigests,
-    owner,
-    modelType: input.modelType,
-  })
+  const distillStep = await withinBudget(
+    distillProposal({
+      projectTitle: input.projectTitle,
+      callDescription,
+      sectionDigests,
+      owner,
+      modelType: input.modelType,
+    }),
+    Math.min(DISTILL_BUDGET_MS, remaining()),
+    () => buildFallbackDistillation({ projectTitle: input.projectTitle, callDescription, sectionDigests })
+  )
+  const distillation = distillStep.value
+  if (distillStep.timedOut) {
+    notes.push('Extracting the proposal’s key aspects timed out, so the search used a query built directly from the section text.')
+  }
 
-  const [projectSettled, patentSettled] = await Promise.allSettled([
-    searchProjects(distillation, owner),
-    retrievePatentnestPatents(distillation.semanticQuery, REVIEWER_LANDSCAPE_PATENT_LIMIT),
+  const searchBudget = Math.min(SEARCH_BUDGET_MS, remaining())
+  const [projectStep, patentStep] = await Promise.all([
+    withinBudget<ProjectSearchOutcome>(
+      searchProjects(distillation, owner).then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error: error instanceof Error ? error.message : 'Project search failed' })
+      ),
+      searchBudget,
+      () => ({ ok: false, error: 'Funded-project search timed out' })
+    ),
+    withinBudget<PatentnestSearchOutcome>(
+      retrievePatentnestPatents(distillation.semanticQuery, REVIEWER_LANDSCAPE_PATENT_LIMIT, PATENT_CLIENT_OPTIONS)
+        .catch((error) => ({
+          results: [],
+          status: 'error' as const,
+          error: error instanceof Error ? error.message : 'PatentNest search failed',
+        })),
+      searchBudget,
+      () => ({ results: [], status: 'error', error: 'Patent search timed out' })
+    ),
   ])
 
-  const projectSearch = projectSettled.status === 'fulfilled' ? projectSettled.value : null
-  const patentSearch: PatentnestSearchOutcome = patentSettled.status === 'fulfilled'
-    ? patentSettled.value
-    : { results: [], status: 'error', error: patentSettled.reason instanceof Error ? patentSettled.reason.message : 'PatentNest search failed' }
+  const projectOutcome = projectStep.value
+  const projectSearch = projectOutcome.ok ? projectOutcome.value : null
+  const patentSearch = patentStep.value
   const projects = projectSearch?.results ?? []
   const patents = patentSearch.results
 
-  const facetMap = await mapFacets({
-    facets: distillation.facets,
-    projects,
-    patents,
-    owner,
-    modelType: input.modelType,
-  })
+  // Tagging is the step most likely to overrun (it reads every abstract). It
+  // only starts with enough time left to finish; otherwise the rows are kept
+  // and listed untagged rather than lost.
+  let facetMap: FacetMapResult = EMPTY_FACET_MAP
+  if (projects.length || patents.length) {
+    const tagBudget = remaining() - RECORDS_RESERVE_MS
+    if (tagBudget >= FACET_MAP_MIN_MS) {
+      const tagStep = await withinBudget(
+        mapFacets({ facets: distillation.facets, projects, patents, owner, modelType: input.modelType }),
+        tagBudget,
+        () => EMPTY_FACET_MAP
+      )
+      facetMap = tagStep.value
+      if (tagStep.timedOut) notes.push('Matching the results against the proposal’s aspects timed out, so the rows below are listed untagged.')
+    } else {
+      notes.push('The searches took most of the time budget, so the rows below are listed without matching them to the proposal’s aspects.')
+    }
+  }
 
-  const awardExtras = await loadProjectRecords(projects.map((project) => project.id))
-    .then((records) => records.extras)
-    .catch(() => [])
+  const awardExtras = projects.length
+    ? (await withinBudget(
+        loadProjectRecords(projects.map((project) => project.id))
+          .then((records) => records.extras)
+          .catch(() => []),
+        Math.max(1_000, remaining()),
+        () => []
+      )).value
+    : []
 
   const priorWork = buildPriorWork({
     awards: projects.map((project): PriorWorkAwardInput => ({
@@ -303,12 +395,10 @@ async function buildLandscapeInner(input: ReviewerLandscapeInput): Promise<Revie
     assessmentSource: facetMap.assessed ? 'llm' : 'fallback',
     sources: {
       projects: {
-        searched: projectSettled.status === 'fulfilled',
+        searched: projectOutcome.ok,
         count: projects.length,
         degradedMode: projectSearch?.degradedMode ?? null,
-        ...(projectSettled.status === 'rejected'
-          ? { error: projectSettled.reason instanceof Error ? projectSettled.reason.message : 'Project search failed' }
-          : {}),
+        ...(!projectOutcome.ok ? { error: normalizeText(projectOutcome.error, 300) } : {}),
       },
       patents: {
         searched: patentSearch.status === 'ok',
@@ -318,6 +408,7 @@ async function buildLandscapeInner(input: ReviewerLandscapeInput): Promise<Revie
       },
     },
     now: new Date(),
+    notes,
   })
 }
 
@@ -330,14 +421,16 @@ async function buildLandscapeInner(input: ReviewerLandscapeInput): Promise<Revie
 export async function buildReviewerLandscape(input: ReviewerLandscapeInput): Promise<ReviewerLandscape | null> {
   if (!reviewerLandscapeEnabled()) return null
 
+  // Backstop only: every step inside has its own ceiling, so this fires only
+  // if one of them ignores it.
   let budgetTimer: NodeJS.Timeout | undefined
   const budget = new Promise<ReviewerLandscape>((resolve) => {
     budgetTimer = setTimeout(() => {
       resolve(emptyErrorLandscape(
         buildFallbackDistillation({ projectTitle: input.projectTitle, callDescription: '', sectionDigests: [] }),
-        `Landscape step exceeded its ${Math.round(REVIEWER_LANDSCAPE_BUDGET_MS / 1000)}s budget`
+        `Prior-work search exceeded its ${Math.round((REVIEWER_LANDSCAPE_BUDGET_MS + HARD_STOP_MARGIN_MS) / 1000)}s limit`
       ))
-    }, REVIEWER_LANDSCAPE_BUDGET_MS)
+    }, REVIEWER_LANDSCAPE_BUDGET_MS + HARD_STOP_MARGIN_MS)
   })
 
   try {

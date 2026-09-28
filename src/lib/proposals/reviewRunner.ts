@@ -513,6 +513,18 @@ export async function runProposalReview(
           await sleep(wait)
           continue
         }
+        // Someone regenerated the same workspace's report from the reviewer
+        // page while this run reached its last step. Wait for theirs.
+        if (
+          error instanceof ReviewerReportError
+          && error.code === 'REPORT_IN_PROGRESS'
+          && attempt < MAX_ATTEMPTS_PER_STEP
+        ) {
+          say(state, 'Another report run on this workspace is finishing. Waiting 60s.')
+          await beat(reviewId, state)
+          await sleep(60000)
+          continue
+        }
         reportError =
           error instanceof ReviewerReportError
             ? error.message

@@ -25,8 +25,20 @@ const RATE_LIMIT_BUFFER_MS = 2000
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+// A 429 that names a quota or a daily ceiling will not clear by waiting a
+// minute; retrying it only repeats the refusal (and used to burn the attempts).
+const NON_RETRYABLE_429_CODES = new Set([
+  'REPORT_DAILY_LIMIT',
+  'DAILY_QUOTA_EXCEEDED',
+  'MONTHLY_QUOTA_EXCEEDED',
+  'TEAM_QUOTA_EXCEEDED',
+  'SERVICE_DISABLED',
+])
+
 function isRateLimited(error) {
-  return error?.response?.status === 429 || error?.response?.data?.code === 'GEMINI_RATE_LIMITED'
+  const code = error?.response?.data?.code
+  if (code === 'GEMINI_RATE_LIMITED') return true
+  return error?.response?.status === 429 && !NON_RETRYABLE_429_CODES.has(code)
 }
 
 function retryAfterMs(error) {
@@ -277,7 +289,9 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
 
       for (let attempt = 1; attempt <= REVIEW_MAX_ATTEMPTS && !reportOk; attempt++) {
         try {
-          await axios.post(`/api/reviewer/calls/${callId}/final-review`)
+          // A full run scores the newest reviewed draft of every section, but
+          // keeps the sections the user left out of the report left out.
+          await axios.post(`/api/reviewer/calls/${callId}/final-review`, { useLatestVersions: true })
           patchStep('report', { status: 'done' })
           reportOk = true
         } catch (reportError) {

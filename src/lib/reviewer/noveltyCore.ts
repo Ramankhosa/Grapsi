@@ -55,6 +55,21 @@ export function computeEvidenceCoverage(landscape: Pick<ReviewerLandscape, 'sour
   return 'thin'
 }
 
+/**
+ * Whether a landscape gives the novelty call anything to stand on. A failed
+ * patent search next to a clean (even empty) project search still leaves a
+ * judgement to make — "generic" reads off the proposal's own text — so only a
+ * run where nothing was searched at all, or the whole step failed, is skipped.
+ */
+export function landscapeSupportsNovelty(
+  landscape: Pick<ReviewerLandscape, 'status' | 'error' | 'sources'> | null | undefined
+): boolean {
+  if (!landscape) return false
+  if (landscape.status !== 'error') return true
+  if (landscape.error) return false
+  return Boolean(landscape.sources?.projects?.searched || landscape.sources?.patents?.searched)
+}
+
 /** The refs the model may cite: award ids, patent ids and family members, publication numbers. */
 export function collectNoveltyReferences(landscape: Pick<ReviewerLandscape, 'priorWork'> | null | undefined): NoveltyReference[] {
   const refs: NoveltyReference[] = []

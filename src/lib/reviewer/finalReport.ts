@@ -172,6 +172,40 @@ export function resolveSectionVersions<T extends ReviewerVersionedSection>(
   return { effective, superseded, chosenVersions, pendingDrafts, excludedTitles }
 }
 
+/**
+ * The sections a stored report actually scored, one reviewed row per title —
+ * what every rendering of that report (ATR, shared link, proposal snapshot,
+ * archive) must print beside it.
+ *
+ * Three renderers used to resolve this on their own and each dropped a part:
+ * none honoured `excludedTitles`, so a section the user deliberately left out
+ * of the report still printed with its score next to a verdict that ignored it.
+ *
+ * When the report records `scoredVersions`, only those titles are returned; a
+ * section reviewed after the report was written is not part of it (the stale
+ * banner says so). Older reports without the field fall back to the newest
+ * reviewed version of every non-excluded title.
+ */
+export function resolveReportSections<T extends ReviewerVersionedSection>(
+  sections: T[],
+  overallReviewJson: unknown
+): T[] {
+  const basis = overallReviewJson && typeof overallReviewJson === 'object'
+    ? (overallReviewJson as Record<string, any>).score_basis
+    : null
+  const scoredVersions = basis?.scoredVersions && typeof basis.scoredVersions === 'object'
+    ? (basis.scoredVersions as Record<string, unknown>)
+    : null
+  const excludedTitles = Array.isArray(basis?.excludedTitles)
+    ? basis.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
+    : []
+  const reviewed = (Array.isArray(sections) ? sections : []).filter(isReviewedRow)
+  const { effective } = resolveSectionVersions(reviewed, scoredVersions, { excludedTitles })
+  if (!scoredVersions) return effective
+  const scoredTitles = new Set(Object.keys(scoredVersions))
+  return effective.filter((section) => scoredTitles.has(String(section.section_title || '').trim()))
+}
+
 function normalizeTitle(value: string): string {
   return String(value || '')
     .toLowerCase()

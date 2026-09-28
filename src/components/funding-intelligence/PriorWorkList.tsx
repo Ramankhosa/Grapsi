@@ -47,10 +47,19 @@ export default function PriorWorkList({
   rows,
   summary,
   highlightKeys = [],
+  linkAwards = true,
+  patentHref,
 }: {
   rows: PriorWorkRow[]
   summary: PriorWorkSummary
   highlightKeys?: string[]
+  /** False on public pages, where the award detail route needs a login. */
+  linkAwards?: boolean
+  /**
+   * Where a patent row links when its source record carries no URL (PatentNest
+   * records never do). Return null to leave the row unlinked.
+   */
+  patentHref?: (row: PriorWorkRow) => string | null
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [showAll, setShowAll] = useState(false)
@@ -59,7 +68,9 @@ export default function PriorWorkList({
   const filtered = useMemo(() => (
     filter === 'all' ? rows : rows.filter((row) => (filter === 'funded' ? row.kind === 'funded' : row.kind === 'patented'))
   ), [filter, rows])
-  const visible = showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE)
+  // Rows past the fold stay in the DOM, hidden on screen but printed: a printed
+  // report used to stop at row 12, and everything after it simply vanished.
+  const visibleCount = showAll ? filtered.length : DEFAULT_VISIBLE
 
   const collapsedNote = [
     summary.duplicateAwardsCollapsed ? `${summary.duplicateAwardsCollapsed} duplicate award${summary.duplicateAwardsCollapsed === 1 ? '' : 's'} merged` : null,
@@ -113,16 +124,20 @@ export default function PriorWorkList({
       </div>
 
       <div className="mt-4 divide-y divide-slate-100">
-        {visible.map((row) => {
+        {filtered.map((row, index) => {
           const isAward = row.kind === 'funded'
           // The abstract is the only thing that lets a reader judge how close the
           // row really is, so it is shown in full rather than teased.
           const abstract = (isAward ? row.award?.abstract : row.patent?.abstract) || null
-          const detailHref = isAward && row.award ? `/funding/intelligence/projects/${row.award.id}` : row.patent?.url || null
+          const patentLink = row.patent ? row.patent.url || patentHref?.(row) || null : null
+          const detailHref = isAward && row.award
+            ? (linkAwards ? `/funding/intelligence/projects/${row.award.id}` : null)
+            : patentLink
+          const beyondFold = index >= visibleCount
           return (
             <article
               key={row.key}
-              className={`flex flex-wrap items-start gap-4 py-4 ${highlighted.has(row.key) ? '-mx-3 rounded-xl bg-amber-50 px-3' : ''}`}
+              className={`${beyondFold ? 'hidden print:flex' : 'flex'} flex-wrap items-start gap-4 py-4 print:break-inside-avoid ${highlighted.has(row.key) ? '-mx-3 rounded-xl bg-amber-50 px-3' : ''}`}
             >
               <span
                 className={`mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
@@ -166,19 +181,19 @@ export default function PriorWorkList({
                 ) : null}
               </div>
 
-              {isAward && row.award ? (
+              {isAward && row.award && linkAwards ? (
                 <Link
                   href={`/funding/intelligence/projects/${row.award.id}`}
-                  className="shrink-0 text-xs font-semibold text-teal-700 hover:underline"
+                  className="shrink-0 text-xs font-semibold text-teal-700 hover:underline print:hidden"
                 >
                   Open award
                 </Link>
-              ) : row.patent?.url ? (
+              ) : patentLink ? (
                 <a
-                  href={row.patent.url}
+                  href={patentLink}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-teal-700 hover:underline"
+                  className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-teal-700 hover:underline print:hidden"
                 >
                   Read patent <ExternalLink className="h-3 w-3" />
                 </a>
@@ -192,7 +207,7 @@ export default function PriorWorkList({
         <button
           type="button"
           onClick={() => setShowAll((value) => !value)}
-          className="mt-4 rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          className="mt-4 rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 print:hidden"
         >
           {showAll ? `Show top ${DEFAULT_VISIBLE}` : `Show all ${filtered.length}`}
         </button>

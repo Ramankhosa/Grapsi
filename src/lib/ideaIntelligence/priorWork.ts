@@ -377,11 +377,23 @@ function buildPatentRows(
  * researcher's own idea each row touches rather than by a blended score: the
  * award corpus has a reranker score and the patent corpus does not, so any
  * single number spanning both would be invented.
+ *
+ * Ties are broken by each row's rank *within its own corpus* — the award
+ * reranker's order for awards, the patent search's own order for patents — so
+ * equally-covering rows interleave. Breaking them on the award score instead
+ * put every award ahead of every patent (patents score 0), which pushed all
+ * patents below the fold of a 12-row list.
  */
-function rankRows(rows: PriorWorkRow[]): PriorWorkRow[] {
-  return [...rows].sort((left, right) => (
+function rankRows(awardRows: PriorWorkRow[], patentRows: PriorWorkRow[]): PriorWorkRow[] {
+  const corpusRank = new Map<string, number>()
+  ;[...awardRows]
+    .sort((left, right) => (right.award?.relevanceScore || 0) - (left.award?.relevanceScore || 0))
+    .forEach((row, index) => corpusRank.set(row.key, index))
+  patentRows.forEach((row, index) => corpusRank.set(row.key, index))
+
+  return [...awardRows, ...patentRows].sort((left, right) => (
     right.facetsCovered.length - left.facetsCovered.length
-    || (right.award?.relevanceScore || 0) - (left.award?.relevanceScore || 0)
+    || (corpusRank.get(left.key) ?? 0) - (corpusRank.get(right.key) ?? 0)
     || (right.year || 0) - (left.year || 0)
     || left.title.localeCompare(right.title)
   )).map((row) => ({ ...row, matchBasis: describeMatch(row) }))
@@ -567,7 +579,7 @@ export function buildPriorWork(input: {
 
   const awardResult = buildAwardRows(input.awards, extrasById, awardAssessedById)
   const patentResult = buildPatentRows(input.patents, patentAssessedById)
-  const rows = rankRows([...awardResult.rows, ...patentResult.rows])
+  const rows = rankRows(awardResult.rows, patentResult.rows)
   const coverage = buildCoverage(input.signals, rows)
 
   return {

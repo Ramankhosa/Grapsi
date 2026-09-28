@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 
 import { ReviewerProse, ReviewerText } from '@/components/reviewer/ReviewerText'
+import { summarizeLandscape } from '@/lib/reviewer/landscapeCore'
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -213,6 +214,7 @@ export function ReportCover({ overall, projectTitle, agencyName, generatedAt, re
   const overLimits = (compliance?.limits || []).filter((limit: any) => limit?.status === 'over').length
   const revised = Object.entries(scoredVersions || {}).filter(([, version]) => Number(version) > 1)
   const pending = Object.entries(pendingDrafts || {})
+  const priorWork = summarizeLandscape(overall?.landscape)
 
   return (
     <div className="flex flex-wrap items-start gap-6">
@@ -233,6 +235,21 @@ export function ReportCover({ overall, projectTitle, agencyName, generatedAt, re
               <Chip band={NOVELTY_BAND[novelty.verdict] || 'none'} title="Reference only — computed against retrieved prior work">
                 Novelty: {NOVELTY_LABELS[novelty.verdict] || novelty.verdict}{novelty.confidence ? ` · ${novelty.confidence} confidence` : ''}
               </Chip>
+            </a>
+          ) : null}
+          {priorWork ? (
+            <a href="#landscape" className="no-underline">
+              {priorWork.searchFailed && priorWork.fundedCount + priorWork.patentCount === 0 ? (
+                <Chip band="weak" title="The prior-work search did not complete for this report">Prior work: search failed</Chip>
+              ) : (
+                <Chip
+                  band={priorWork.patentedAspects.some((aspect) => aspect.unfunded) ? 'adequate' : 'none'}
+                  title="Reference only — retrieved funded projects and Indian patents"
+                >
+                  Prior work: {priorWork.patentCount} patent{priorWork.patentCount === 1 ? '' : 's'} · {priorWork.fundedCount} funded
+                  {priorWork.searchFailed ? ' · partial' : ''}
+                </Chip>
+              )}
             </a>
           ) : null}
           {compliance ? (
