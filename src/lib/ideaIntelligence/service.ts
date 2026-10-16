@@ -401,6 +401,12 @@ function fundingCallAccessWhere(access: RecommendationAccessScope): Prisma.Fundi
         is_active: { not: false },
         OR: [{ status: 'PUBLISHED' }, { catalog_status: 'PUBLISHED' }],
       },
+      {
+        // Released imported catalogue calls are researcher-visible too.
+        visibility: 'GLOBAL_CATALOG',
+        is_active: { not: false },
+        OR: [{ status: 'PUBLISHED' }, { catalog_status: 'PUBLISHED' }],
+      },
       ...(access?.tenantId
         ? [{ visibility: 'TENANT_PRIVATE' as const, tenantId: access.tenantId }]
         : []),

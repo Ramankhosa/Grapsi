@@ -127,7 +127,7 @@ export function getFundingCallVerificationStatus(metadata: Prisma.JsonValue | nu
 
 export async function canUserUseFundingCall(
   fundingCallId: string,
-  user: { id: string; email?: string | null }
+  user: { id: string; email?: string | null; tenantId?: string | null }
 ) {
   const call = await prisma.fundingCall.findUnique({
     where: { id: fundingCallId },
@@ -137,6 +137,9 @@ export async function canUserUseFundingCall(
       is_active: true,
       uploaded_by: true,
       metadata: true,
+      visibility: true,
+      tenantId: true,
+      enrichment_level: true,
     },
   })
 
@@ -145,6 +148,15 @@ export async function canUserUseFundingCall(
   }
 
   if (call.catalog_status === 'PUBLISHED' && call.is_active !== false) {
+    // Published is not enough: another tenant's private call must stay out of
+    // reach, and an imported catalogue call needs its official guidelines
+    // (enrichment) before anyone drafts against it.
+    if (call.visibility === 'TENANT_PRIVATE' && user.tenantId && call.tenantId && call.tenantId !== user.tenantId) {
+      return { ok: false as const, reason: 'Funding call not found' }
+    }
+    if (call.visibility === 'GLOBAL_CATALOG' && call.enrichment_level !== 'ENRICHED') {
+      return { ok: false as const, reason: 'Official guidelines for this call have not been fetched yet' }
+    }
     return { ok: true as const, call }
   }
 

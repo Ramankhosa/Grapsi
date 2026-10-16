@@ -23,7 +23,7 @@ Output JSON shape:
       "eligible_regions": ["region names"],
       "host_countries": ["country names"],
       "funder_country": "country name or null",
-      "funding_kinds": ["Research Grant|Fellowship|Travel Grant|Infrastructure|Equipment Grant|Seed Grant|Training Grant|Mobility Grant|Conference Grant|Scholarship"],
+      "funding_kinds": ["Research Grant|Fellowship|Travel Grant|Infrastructure|Equipment Grant|Seed Grant|Training Grant|Mobility Grant|Conference Grant|Scholarship|Award or Prize"],
       "institution_types": ["eligible organisation types"],
       "career_stages": ["career stages"],
       "citizenship_requirements": ["citizenship rules"],

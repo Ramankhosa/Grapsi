@@ -191,9 +191,14 @@ function buildAccessCondition(access?: RecommendationAccessScope) {
  * only ever remove imported calls.
  */
 function importedLifecycleGuard() {
+  // Scoped to imported rows on purpose: a backfill may later fill
+  // entry_closes_at on curated calls, and their open/closed rule must not
+  // change because of it.
   return Prisma.sql`(
-    source_closed_at IS NULL AND
-    (entry_closes_at IS NULL OR entry_closes_at >= CURRENT_DATE)
+    import_run_id IS NULL OR (
+      source_closed_at IS NULL AND
+      (entry_closes_at IS NULL OR entry_closes_at >= CURRENT_DATE)
+    )
   )`;
 }
 
@@ -374,6 +379,10 @@ function selectCandidateColumns() {
     COALESCE(citizenship_requirements, ARRAY[]::text[]) AS "citizenshipRequirements",
     COALESCE(residency_requirements, ARRAY[]::text[]) AS "residencyRequirements",
     COALESCE(application_languages, ARRAY[]::text[]) AS "applicationLanguages",
+    (visibility::text = 'GLOBAL_CATALOG') AS "isCatalog",
+    -- Imported catalogue calls carry facts only until enrichment fetches the
+    -- official guidelines; authoring needs them.
+    (visibility::text <> 'GLOBAL_CATALOG' OR enrichment_level = 'ENRICHED') AS "authoringReady",
     COALESCE(
       ARRAY(
         SELECT taxonomy_tag.taxonomy_area_id
@@ -925,6 +934,8 @@ function toPublicResult(
     residencyRequirements: candidate.residencyRequirements,
     applicationLanguages: candidate.applicationLanguages,
     taxonomyAreaIds: candidate.taxonomyAreaIds || [],
+    isCatalog: Boolean(candidate.isCatalog),
+    authoringReady: candidate.authoringReady !== false,
     semanticSimilarity: candidate.semanticSimilarity,
     textRank: candidate.textRank,
   };

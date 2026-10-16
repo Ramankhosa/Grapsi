@@ -43,6 +43,7 @@ import {
 import { usdEstimates } from './normalize/money'
 import { dateOnly, isoDate, matchKey } from './normalize/text'
 import { buildSeriesKey } from './normalize/titles'
+import { fieldOwner } from './provenance'
 import { readJsonLines, verifySnapshot, type SnapshotManifest } from './snapshot'
 import type { NormalizedExternalCall, NormalizedExternalFunder } from './types'
 
@@ -253,10 +254,10 @@ type ExistingCallRow = {
   createdAt: Date
 }
 
-async function loadExistingCatalogue(db: PrismaClient) {
+async function loadExistingCatalogue(db: PrismaClient, sourceKey: string, snapshotExternalIds: Set<string>) {
   // Platform catalogue calls only. Tenant-private calls and Default Grant
   // Format scaffolds are never compared, linked or shown in review.
-  const rows = await db.$queryRawUnsafe<ExistingCallRow[]>(`
+  const curated = await db.$queryRawUnsafe<ExistingCallRow[]>(`
     SELECT id, title, scheme_title, agency_name, "agencyName", source_url, "sourceUrl", official_urls,
            close_date, "deadlineAt", description, "createdAt"
     FROM funding_calls
@@ -265,7 +266,19 @@ async function loadExistingCatalogue(db: PrismaClient) {
       AND import_run_id IS NULL
       AND COALESCE(source, '') <> 'default-grant-format'
       AND COALESCE(metadata->>'kind', '') <> 'default_grant_format'`)
-  return rows
+  // Calls imported from OTHER sources, and this source's calls that are not
+  // in the current snapshot, are existing calls too: a second source must be
+  // checked against the first. They are compared, never written.
+  const imported = await db.$queryRawUnsafe<Array<ExistingCallRow & { esr_source: string | null; esr_external: string | null }>>(`
+    SELECT fc.id, fc.title, fc.scheme_title, fc.agency_name, fc."agencyName", fc.source_url, fc."sourceUrl", fc.official_urls,
+           fc.close_date, fc."deadlineAt", fc.description, fc."createdAt",
+           esr.source_key AS esr_source, esr.external_id AS esr_external
+    FROM funding_calls fc
+    LEFT JOIN external_source_records esr
+      ON esr.funding_call_id = fc.id AND esr.entity_type = 'CALL' AND esr.link_role = 'PRIMARY'
+    WHERE fc.import_run_id IS NOT NULL AND fc.catalog_status::text <> 'REJECTED'`)
+  const otherImported = imported.filter((row) => row.esr_source !== sourceKey || !row.esr_external || !snapshotExternalIds.has(row.esr_external))
+  return [...curated, ...otherImported]
 }
 
 function existingDedupCall(row: ExistingCallRow): DedupCall {
@@ -342,7 +355,7 @@ export async function runCatalogImport(options: RunImportOptions): Promise<{ run
   calls.sort((a, b) => Number(a.externalId) - Number(b.externalId))
 
   log(`Loading the existing catalogue…`)
-  const existingRows = await loadExistingCatalogue(db)
+  const existingRows = await loadExistingCatalogue(db, options.sourceKey, new Set(calls.map((call) => call.externalId)))
   const existingDedup = existingRows.map(existingDedupCall)
   const importedDedup = calls.map((call) => importedDedupCall(call, funderById))
   log(`Checking ${calls.length} records against ${existingRows.length} existing catalogue calls for duplicates…`)
@@ -789,7 +802,10 @@ async function writeCalls(
           callIdByExternal.set(call.externalId, previous.funding_call_id)
           if (previous.content_hash === hash) {
             unchanged++
-            await tx.externalSourceRecord.update({ where: { id: previous.id }, data: { last_seen_at: now, last_import_run_id: runId, availability: call.sourceUnavailable ? 'UNAVAILABLE' : 'AVAILABLE' } })
+            await tx.externalSourceRecord.update({
+              where: { id: previous.id },
+              data: { last_seen_at: now, last_import_run_id: runId, availability: call.sourceUnavailable ? 'UNAVAILABLE' : 'AVAILABLE', source_checked_at: call.fetchedAt },
+            })
             continue
           }
           if (previous.link_role !== 'PRIMARY') {
@@ -797,7 +813,7 @@ async function writeCalls(
             // call. Keep the new payload and raise a suggestion instead.
             await tx.externalSourceRecord.update({
               where: { id: previous.id },
-              data: { raw_payload: call.rawPayload as any, content_hash: hash, importer_version: IMPORTER_VERSION, last_seen_at: now, last_import_run_id: runId },
+              data: { raw_payload: call.rawPayload as any, content_hash: hash, importer_version: IMPORTER_VERSION, last_seen_at: now, last_import_run_id: runId, source_checked_at: call.fetchedAt },
             })
             continue
           }
@@ -808,6 +824,10 @@ async function writeCalls(
           const nextBase: Record<string, unknown> = { ...base }
           const conflictFields: string[] = []
           for (const [field, next] of Object.entries(values)) {
+            // A field a curator or enrichment took over is theirs: never
+            // overwritten, and not a conflict either.
+            const owner = fieldOwner(current.field_provenance, field)
+            if (owner && owner !== input.sourceKey) continue
             const was = base[field]
             const now_ = (current as Record<string, unknown>)[field]
             if (sameValue(next, was)) continue
@@ -845,7 +865,7 @@ async function writeCalls(
           }
           await tx.externalSourceRecord.update({
             where: { id: previous.id },
-            data: { raw_payload: call.rawPayload as any, imported_values: nextBase as any, content_hash: hash, importer_version: IMPORTER_VERSION, last_seen_at: now, last_import_run_id: runId, availability: call.sourceUnavailable ? 'UNAVAILABLE' : 'AVAILABLE' },
+            data: { raw_payload: call.rawPayload as any, imported_values: nextBase as any, content_hash: hash, importer_version: IMPORTER_VERSION, last_seen_at: now, last_import_run_id: runId, availability: call.sourceUnavailable ? 'UNAVAILABLE' : 'AVAILABLE', source_checked_at: call.fetchedAt },
           })
           continue
         }
@@ -870,7 +890,7 @@ async function writeCalls(
             enrichment_level: 'LITE',
             series_key: buildSeriesKey(call.funderExternalIds[0] || null, call.title),
             status_computed_at: now,
-            field_provenance: { source: input.sourceKey, verified_at: (call.fetchedAt || now).toISOString(), import_run_id: runId } as any,
+            field_provenance: { default: { source: input.sourceKey, verified_at: (call.fetchedAt || now).toISOString(), run_id: runId } } as any,
             createdByUserId: input.operatorId,
             updatedByUserId: input.operatorId,
             metadata: {
@@ -943,6 +963,7 @@ async function writeCalls(
             source_modified_at: call.sourceModifiedAt,
             first_import_run_id: runId,
             last_import_run_id: runId,
+            source_checked_at: call.fetchedAt,
         }
         if (previous) {
           // A provenance row whose call is gone (e.g. after a rollback): reuse it.

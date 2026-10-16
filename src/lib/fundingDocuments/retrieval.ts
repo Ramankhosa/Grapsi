@@ -40,14 +40,16 @@ function buildAccessCondition(access: FundingDocumentSearchRequest['access']) {
     return Prisma.sql`TRUE`;
   }
 
+  // GLOBAL_CATALOG = released imported calls; their documents appear once
+  // enrichment adds them.
   if (access?.tenantId) {
     return Prisma.sql`(
-      fc.visibility = 'GLOBAL_PUBLISHED' OR
+      fc.visibility = 'GLOBAL_PUBLISHED' OR fc.visibility = 'GLOBAL_CATALOG' OR
       (fc.visibility = 'TENANT_PRIVATE' AND fc."tenantId" = ${access.tenantId})
     )`;
   }
 
-  return Prisma.sql`fc.visibility = 'GLOBAL_PUBLISHED'`;
+  return Prisma.sql`(fc.visibility = 'GLOBAL_PUBLISHED' OR fc.visibility = 'GLOBAL_CATALOG')`;
 }
 
 function buildCallStatusCondition(status: FundingDocumentSearchRequest['callStatus'] = 'active') {

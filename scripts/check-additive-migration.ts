@@ -25,6 +25,7 @@ const DEFAULT_MIGRATIONS = [
   '20261015120200_funding_call_catalog_facts',
   '20261015120300_funding_visibility_global_catalog',
   '20261015120400_funding_visibility_catalog_check',
+  '20261016090000_external_source_checked_at',
 ]
 
 const FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [

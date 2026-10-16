@@ -14,7 +14,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   try {
     const fundingCall = await prisma.fundingCall.findFirst({
       where: {
-        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) })],
+        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor), includeCatalog: true })],
       },
     })
 

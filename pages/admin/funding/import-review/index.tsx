@@ -130,6 +130,7 @@ export default function ImportReviewPage() {
   const [state, setState] = useState<'open' | 'resolved' | 'all'>('open');
   const [variant, setVariant] = useState<'' | 'only' | 'exclude'>('');
   const [query, setQuery] = useState('');
+  const [releaseProgress, setReleaseProgress] = useState<string | null>(null);
 
   const roles = user?.roles || [];
   const permissions = user?.platformPermissions || [];
@@ -197,22 +198,30 @@ export default function ImportReviewPage() {
     }
   }
 
-  async function release(runId: string, count: number) {
+  async function release(count: number) {
     if (!window.confirm(`Release ${count} reviewed imported call${count === 1 ? '' : 's'} to researcher discovery?\n\nThis is silent: no alerts or officer notices are sent, and funding-department queues are not affected.`)) return;
     setBusy(true);
+    let total = 0;
     try {
-      const response = await fetch('/api/admin/funding/import-review/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runId }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'Release failed');
-      toast.success(`Released ${data.released} calls; ${data.blocked} still held for review`);
+      // 2,000 per request; repeat until nothing clear is left.
+      for (let round = 0; round < 50; round += 1) {
+        const response = await fetch('/api/admin/funding/import-review/release', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceKey: 'scientify', limit: 2000 }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Release failed');
+        total += data.released || 0;
+        setReleaseProgress(`Released ${total.toLocaleString()} of ${count.toLocaleString()}…`);
+        if (!data.released) break;
+      }
+      toast.success(`Released ${total.toLocaleString()} calls`);
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Release failed');
     } finally {
+      setReleaseProgress(null);
       setBusy(false);
     }
   }
@@ -231,7 +240,6 @@ export default function ImportReviewPage() {
     };
   }, [summary]);
 
-  const latestApply = summary?.runs.find((run) => run.mode === 'APPLY' && run.status === 'COMPLETED');
   const selectedIds = Array.from(selected);
   const pages = Math.max(1, Math.ceil(total / 25));
   const isDuplicateView = reason === 'POSSIBLE_DUPLICATE';
@@ -268,14 +276,14 @@ export default function ImportReviewPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href="/admin/funding/catalog" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">Funding catalog</Link>
-            {canRelease && latestApply ? (
+            {canRelease ? (
               <button
                 type="button"
                 disabled={busy || counts.clear === 0}
-                onClick={() => void release(latestApply.id, counts.clear)}
+                onClick={() => void release(counts.clear)}
                 className="inline-flex items-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm disabled:opacity-50"
               >
-                Release {counts.clear.toLocaleString()} clear calls
+                {releaseProgress || `Release ${counts.clear.toLocaleString()} clear calls`}
               </button>
             ) : null}
           </div>

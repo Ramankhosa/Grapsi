@@ -214,6 +214,10 @@ export interface RecommendationCandidate {
   applicationLanguages: string[];
   /** Two-level research-area tags on the call, shared with saved researcher areas. */
   taxonomyAreaIds?: string[];
+  /** Imported external-catalogue call (GLOBAL_CATALOG). */
+  isCatalog?: boolean;
+  /** False for imported calls whose official guidelines are not fetched yet. */
+  authoringReady?: boolean;
   semanticSimilarity: number;
   textRank: number;
 }
@@ -241,6 +245,10 @@ export interface RecommendationSearchResultItem {
   evidence?: RecommendationDocumentEvidence | null;
   /** Populated only on multi-area searches: which selected areas this call matched. */
   matchedAreas?: RecommendationAreaMatch[];
+  /** Imported external-catalogue call (GLOBAL_CATALOG). */
+  isCatalog?: boolean;
+  /** False for imported calls whose official guidelines are not fetched yet. */
+  authoringReady?: boolean;
 }
 
 export interface RecommendationDocumentEvidenceChunk {

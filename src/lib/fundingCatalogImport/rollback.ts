@@ -98,7 +98,11 @@ export async function rollbackImportRun(input: {
   // Provenance rows this run introduced whose call/funder is now gone. Call
   // and funder records are cleaned independently: a call's record keeps its
   // funder link even after the call is deleted.
-  await db.externalSourceRecord.deleteMany({ where: { first_import_run_id: input.runId, entity_type: 'CALL', funding_call_id: null } })
+  // A LINKED record (an imported copy set aside as "same as" another call) is
+  // the run's own row even though it points at a call the run did not create.
+  await db.externalSourceRecord.deleteMany({
+    where: { first_import_run_id: input.runId, entity_type: 'CALL', OR: [{ funding_call_id: null }, { link_role: 'LINKED' }] },
+  })
   await db.externalSourceRecord.deleteMany({ where: { first_import_run_id: input.runId, entity_type: 'FUNDER', funder_id: null } })
   await db.fundingImportRun.update({ where: { id: input.runId }, data: { status: 'ROLLED_BACK', finished_at: new Date() } })
   log(`Rolled back: deleted ${deleted}, archived ${archived}, reverted ${reverted} field updates, removed ${funders} funders.`)

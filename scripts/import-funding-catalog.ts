@@ -12,8 +12,9 @@
  *   node ./node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts apply --snapshot <dir> \
  *     --confirm-target <database name> [--operator-email you@x] [--full-snapshot] [--limit N]
  *
- *   # 4. Release clear calls to researcher discovery (silent), or roll a run back
- *   node ./node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts release --run <runId> [--apply]
+ *   # 4. Release clear calls to researcher discovery (silent), take them back, or roll a run back
+ *   node ./node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts release --source scientify [--limit N] [--apply]
+ *   node ./node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts unrelease --source scientify [--ids a,b] [--apply]
  *   node ./node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts rollback --run <runId> [--confirm-target <db>]
  *
  * Existing calls are never written. Take a pg_dump before any APPLY on a real
@@ -23,7 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import prisma from '../src/lib/prisma'
-import { releaseImportedCalls } from '../src/lib/fundingCatalogImport/release'
+import { releaseImportedCalls, unreleaseImportedCalls } from '../src/lib/fundingCatalogImport/release'
 import { rollbackImportRun } from '../src/lib/fundingCatalogImport/rollback'
 import { runCatalogImport, type ImportReport } from '../src/lib/fundingCatalogImport/service'
 import { freezeSnapshot } from '../src/lib/fundingCatalogImport/snapshot'
@@ -137,12 +138,15 @@ async function main() {
     if (runId) console.log(`Import run id: ${runId}`)
     return
   }
-  if (command === 'release') {
-    const runId = arg('run')
-    if (!runId) throw new Error('--run is required')
-    const result = await releaseImportedCalls({ db: prisma as any, runId, dryRun: !flag('apply'), limit: arg('limit') ? Number(arg('limit')) : undefined, log })
+  if (command === 'release' || command === 'unrelease') {
+    const sourceKey = arg('source') || 'scientify'
+    const ids = arg('ids') ? String(arg('ids')).split(',').map((id) => id.trim()).filter(Boolean) : undefined
+    const result =
+      command === 'release'
+        ? await releaseImportedCalls({ db: prisma as any, sourceKey, ids, dryRun: !flag('apply'), limit: arg('limit') ? Number(arg('limit')) : undefined, log })
+        : await unreleaseImportedCalls({ db: prisma as any, sourceKey, ids, dryRun: !flag('apply'), log })
     console.log(JSON.stringify(result))
-    if (!flag('apply')) console.log('Dry run only. Re-run with --apply to release.')
+    if (!flag('apply')) console.log(`Dry run only. Re-run with --apply to ${command}.`)
     return
   }
   if (command === 'rollback') {

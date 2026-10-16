@@ -1481,6 +1481,9 @@ model ExternalSourceRecord {
   source_modified_at  DateTime?
   first_seen_at       DateTime  @default(now())
   last_seen_at        DateTime  @default(now())
+  /// When the SOURCE last checked its page (the crawler's fetch time), updated
+  /// on every run even when nothing changed. Drives "Source last checked".
+  source_checked_at   DateTime?
   first_import_run_id String?
   last_import_run_id  String?
   created_at          DateTime  @default(now())

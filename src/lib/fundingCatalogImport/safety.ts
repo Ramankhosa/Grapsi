@@ -90,14 +90,25 @@ export async function captureSafetySnapshot(db: PrismaClient): Promise<SafetySna
   }
   let invariantViolations = 0
   if (hasImportRun) {
-    const v = await db.$queryRawUnsafe<Array<{ n: number }>>(`
+    // 1. Import-only markers must never appear on a pre-existing call.
+    const markers = await db.$queryRawUnsafe<Array<{ n: number }>>(`
       SELECT count(*)::int AS n FROM funding_calls
       WHERE import_run_id IS NULL AND (
         catalog_status::text = 'STAGED' OR visibility::text = 'GLOBAL_CATALOG'
         OR notification_policy IS NOT NULL OR review_status IS NOT NULL OR source_closed_at IS NOT NULL
-        OR entry_closes_at IS NOT NULL OR residence_scope IS NOT NULL OR citizenship_scope IS NOT NULL OR host_scope IS NOT NULL
       )`)
-    invariantViolations = v[0]?.n ?? 0
+    // 2. New fact columns on a pre-existing call are allowed only where the
+    //    existing-call backfill wrote them (and so can undo them).
+    const uncovered = await db.$queryRawUnsafe<Array<{ n: number }>>(`
+      SELECT count(*)::int AS n FROM funding_calls fc
+      WHERE fc.import_run_id IS NULL AND (
+        fc.applicant_scope IS NOT NULL OR fc.residence_scope IS NOT NULL OR fc.citizenship_scope IS NOT NULL
+        OR fc.host_scope IS NOT NULL OR fc.entry_closes_at IS NOT NULL OR fc.final_deadline_at IS NOT NULL OR fc.funder_id IS NOT NULL
+      ) AND NOT EXISTS (
+        SELECT 1 FROM funding_import_changes c JOIN funding_import_runs r ON r.id = c.run_id
+        WHERE r.mode = 'BACKFILL' AND r.status <> 'ROLLED_BACK' AND c.entity_table = 'funding_calls' AND c.entity_id = fc.id
+      )`)
+    invariantViolations = (markers[0]?.n ?? 0) + (uncovered[0]?.n ?? 0)
   }
   return {
     takenAt: new Date().toISOString(),

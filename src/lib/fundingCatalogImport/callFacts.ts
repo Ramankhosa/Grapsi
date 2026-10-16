@@ -7,6 +7,8 @@ import prisma from '@/lib/prisma'
 import { dimensionFromRow, type EligibilityDimension } from '@/lib/funding/eligibility'
 import { countryNameFor } from '@/lib/geo/countries'
 
+import { liveOpportunityStatus } from './lifecycle'
+
 export interface ImportedCallFacts {
   source: { key: string; name: string; attribution: string | null; url: string | null; lastCheckedAt: string | null; available: boolean }
   enrichmentLevel: string | null
@@ -61,7 +63,7 @@ export async function buildImportedCallFacts(call: Record<string, any>): Promise
   const [record, deadlines] = await Promise.all([
     prisma.externalSourceRecord.findFirst({
       where: { funding_call_id: call.id, entity_type: 'CALL', link_role: 'PRIMARY' },
-      select: { source_key: true, source_url: true, last_seen_at: true, availability: true },
+      select: { source_key: true, source_url: true, last_seen_at: true, availability: true, source_checked_at: true },
     }),
     prisma.fundingCallDeadline.findMany({ where: { funding_call_id: call.id }, orderBy: { due_date: 'asc' } }),
   ])
@@ -79,12 +81,13 @@ export async function buildImportedCallFacts(call: Record<string, any>): Promise
       name: registry?.display_name || record?.source_key || 'External source',
       attribution: registry?.attribution_text || null,
       url: record?.source_url || null,
-      // When the crawler last fetched the source page (not when we imported it).
-      lastCheckedAt: (call.field_provenance && typeof call.field_provenance === 'object' && call.field_provenance.verified_at) || iso(record?.last_seen_at),
+      // When the source last checked its page (not when we imported it).
+      lastCheckedAt: iso(record?.source_checked_at) || iso(record?.last_seen_at),
       available: (record?.availability || 'AVAILABLE') === 'AVAILABLE',
     },
     enrichmentLevel: call.enrichment_level || null,
-    opportunityStatus: call.opportunity_status || null,
+    // Computed now: the stored status is an import-time cache and goes stale.
+    opportunityStatus: liveOpportunityStatus(call),
     lifecycleNeedsCheck: Boolean(call.lifecycle_needs_check),
     sourceClosedAt: iso(call.source_closed_at),
     entryClosesAt: day(call.entry_closes_at),

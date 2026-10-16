@@ -184,7 +184,7 @@ export default function FinderResultCard({
       ) : null}
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {onBeginWriting || pendingActions ? (
+        {(onBeginWriting && result.authoringReady !== false) || pendingActions ? (
           <button
             type="button"
             disabled={pendingActions}

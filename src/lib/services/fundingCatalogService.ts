@@ -731,6 +731,19 @@ export class FundingCatalogService {
     }
 
     const now = new Date().toISOString();
+    // On an imported call, a curator's edit takes ownership of the fields it
+    // changed, so a later re-import keeps the edit and raises no conflict.
+    let curatorProvenance: unknown = null;
+    if (current.import_run_id) {
+      const { DRAFT_KEY_COLUMNS, stampFields } = await import('@/lib/fundingCatalogImport/provenance');
+      const changedKeys = Object.keys(input).filter(
+        (key) => JSON.stringify((currentDraftValues as unknown as Record<string, unknown>)[key] ?? null) !== JSON.stringify((nextDraftValues as unknown as Record<string, unknown>)[key] ?? null)
+      );
+      const columns = changedKeys.flatMap((key) => DRAFT_KEY_COLUMNS[key] || [key]);
+      if (columns.length > 0) {
+        curatorProvenance = stampFields(current.field_provenance, columns, { source: 'curator', by: operator.email || operator.userId });
+      }
+    }
     const updateData = buildCallWriteData(current, nextDraftValues, {
       last_catalog_update_by: operator.email,
       last_catalog_update_at: now,
@@ -750,7 +763,7 @@ export class FundingCatalogService {
     await prisma.$transaction(async (tx) => {
       await tx.fundingCall.update({
         where: { id: fundingCallId },
-        data: updateData,
+        data: curatorProvenance ? { ...updateData, field_provenance: curatorProvenance as any } : updateData,
       });
 
       if (embeddingResult) {
@@ -885,6 +898,17 @@ export class FundingCatalogService {
         );
       }
     })();
+
+    // A curated call the imported catalogue already holds gets a review item,
+    // so the imported copy can be set aside. Background, never blocking.
+    import('@/lib/fundingCatalogImport/overlap')
+      .then(({ checkCatalogOverlapForCall }) => checkCatalogOverlapForCall(fundingCallId))
+      .catch((error) => {
+        console.warn(
+          `[CATALOG-OVERLAP] Could not check call ${fundingCallId}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
 
     // Alert matched researchers in the background; a publish must never fail
     // or wait on notification fan-out. Imported lazily so the catalog module

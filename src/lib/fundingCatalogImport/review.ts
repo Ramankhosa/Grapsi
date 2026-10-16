@@ -9,6 +9,7 @@
 import type { Prisma, PrismaClient } from '@/lib/prisma-generated'
 
 import { REVIEW_RESOLUTIONS, type ReviewResolution } from './constants'
+import { liveOpportunityStatus } from './lifecycle'
 import { refreshReviewStatus } from './service'
 
 export interface ReviewFilter {
@@ -42,6 +43,9 @@ const CALL_SUMMARY = {
   eligibility_text: true,
   opportunity_status: true,
   review_status: true,
+  entry_closes_at: true,
+  final_deadline_at: true,
+  source_closed_at: true,
   createdAt: true,
 } as const
 
@@ -80,7 +84,13 @@ export async function listReviewItems(db: PrismaClient, filter: ReviewFilter, pa
       include: { subject_call: { select: CALL_SUMMARY }, candidate_call: { select: CALL_SUMMARY } },
     }),
   ])
-  return { total, page, pageSize, items }
+  const live = <T extends Record<string, any> | null>(call: T) => (call ? { ...call, opportunity_status: liveOpportunityStatus(call) } : call)
+  return {
+    total,
+    page,
+    pageSize,
+    items: items.map((item) => ({ ...item, subject_call: live(item.subject_call), candidate_call: live(item.candidate_call) })),
+  }
 }
 
 export async function reviewSummary(db: PrismaClient) {
@@ -137,11 +147,42 @@ async function setAside(tx: Prisma.TransactionClient, callId: string, survivorId
       data: { funding_call_id: survivorId, link_role: 'LINKED' },
     })
   }
-  // Other open items about the set-aside call are moot.
-  await tx.fundingImportCandidate.updateMany({
-    where: { resolution: { in: ['pending', 'deferred'] }, OR: [{ subject_call_id: callId }, { candidate_call_id: callId }] },
-    data: { resolution: 'ignored', resolution_note: 'Call set aside by another review decision', resolved_at: new Date() },
+  // Other open pairs that mention the set-aside call are re-pointed to the
+  // survivor and stay open: in a chain A~B~C, keeping A and discarding B must
+  // leave C compared against A, not quietly freed.
+  const open = await tx.fundingImportCandidate.findMany({
+    where: { resolution: { in: ['pending', 'deferred'] }, reason: 'POSSIBLE_DUPLICATE', OR: [{ subject_call_id: callId }, { candidate_call_id: callId }] },
   })
+  for (const item of open) {
+    const other = item.subject_call_id === callId ? item.candidate_call_id : item.subject_call_id
+    await tx.fundingImportCandidate.update({
+      where: { id: item.id },
+      data: { resolution: 'ignored', resolution_note: survivorId ? `Re-pointed to ${survivorId}` : 'Call set aside', resolved_at: new Date() },
+    })
+    if (!survivorId || !other || other === survivorId) continue
+    const otherCall = await tx.fundingCall.findUnique({ where: { id: other }, select: { import_run_id: true, catalog_status: true } })
+    const survivorCall = await tx.fundingCall.findUnique({ where: { id: survivorId }, select: { import_run_id: true } })
+    if (!otherCall || otherCall.catalog_status === 'REJECTED') continue
+    // The imported side is the subject; two existing calls are report-only.
+    const [subject, candidate] = otherCall.import_run_id ? [other, survivorId] : survivorCall?.import_run_id ? [survivorId, other] : [null, null]
+    if (!subject || !candidate) continue
+    const dedupeKey = `repointed:${[subject, candidate].sort().join(':')}`
+    const exists = await tx.fundingImportCandidate.findUnique({ where: { dedupe_key: dedupeKey }, select: { id: true } })
+    if (exists) continue
+    await tx.fundingImportCandidate.create({
+      data: {
+        run_id: item.run_id,
+        dedupe_key: dedupeKey,
+        reason: 'POSSIBLE_DUPLICATE',
+        tier: item.tier,
+        subject_call_id: subject,
+        candidate_call_id: candidate,
+        score: item.score,
+        signals: { ...((item.signals as Record<string, unknown>) || {}), repointedFrom: callId } as any,
+        blocks_release: item.blocks_release,
+      },
+    })
+  }
 }
 
 export async function resolveReviewItems(db: PrismaClient, input: ResolveInput) {

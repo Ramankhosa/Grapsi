@@ -54,8 +54,10 @@ const STOP_WORDS = new Set([
 ])
 
 function clampLimit(value: string | null) {
+  // Number(null) is 0, which used to clamp a missing limit to a single row.
+  if (value === null || value.trim() === '') return 20
   const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return 100
+  if (!Number.isFinite(parsed)) return 20
   return Math.max(1, Math.min(50, Math.floor(parsed)))
 }
 
