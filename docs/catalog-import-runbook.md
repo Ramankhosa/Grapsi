@@ -61,9 +61,9 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
 5. **Deploy the code** (deploy.sh). No STAGED row exists yet, so a code rollback
    is still safe. After step 7 a code rollback must be preceded by an import
    rollback (old builds cannot read STAGED / GLOBAL_CATALOG values).
-6. **Seed rates:** `npx tsx scripts/seed-currency-rates.ts` (approximate
-   reference rates dated 2025-06-01 — refresh `Seed/currency-rates.csv` first if
-   you want current estimates).
+6. **Seed rates:** `npx tsx scripts/seed-currency-rates.ts` (ECB reference
+   rates of 2026-10-15 for 27 currencies, plus the older 2025-06-01
+   approximations for the rest; the latest date per currency wins).
 7. **Import.** Copy the snapshot directory from the dev machine
    (`storage/import-snapshots/scientify-…`, ~126 MB incl. manifest) to the server.
    `npx tsx scripts/catalog-safety-check.ts capture --out ~/safety-1.json`
@@ -190,12 +190,10 @@ in error rates.
 - Per-tenant send hours for daily/weekly alert digests and reminders: the
   jobs still run on the platform schedule; only the dates inside the emails
   follow the tenant's zone and locale.
-
-- Backfilling new columns on **existing** calls (country codes, deadline rows,
-  funder links). Any write to an existing row changes its `xmin`, which the
-  match census treats as a change. Do it later, after the census work is live.
-- Funding-department access to imported calls, tenant currency /
-  timezone (Release 3), fetching official guidelines (Release 4).
+- Funding-department access to imported calls: there is no promotion path
+  yet, so DSR sees exactly the curated calls it sees today.
+- Grant Prep on catalogue calls: "Write grant" stays hidden on them until
+  authoring for enriched calls ships.
 - Starting the production scheduler is its own decision: it also starts alert,
   reminder and monitor jobs that have never run there (see the inventory's
   "published calls with no alert stamp").
