@@ -119,8 +119,19 @@ function combineConditions(conditions: Prisma.Sql[]) {
   }, Prisma.sql`TRUE`);
 }
 
+/**
+ * The forms a filter value may be stored in: as typed (lowercased) and as its
+ * normalizeKey form. normalizeKey strips punctuation, so matching only on it
+ * missed stored values that keep theirs ("Award / Prize", "Côte d'Ivoire").
+ */
+function filterMatchKeys(values: string[]) {
+  return Array.from(
+    new Set(values.flatMap((value) => [normalizeWhitespace(value).toLowerCase(), normalizeKey(value)]).filter(Boolean))
+  );
+}
+
 function buildArrayAnyCondition(columnName: string, values: string[]) {
-  const lowered = sqlLowerTextArray(values.map((value) => normalizeKey(value)));
+  const lowered = sqlLowerTextArray(filterMatchKeys(values));
   return Prisma.sql`
     EXISTS (
       SELECT 1
@@ -131,7 +142,7 @@ function buildArrayAnyCondition(columnName: string, values: string[]) {
 }
 
 function buildScalarAnyCondition(columnName: string, values: string[]) {
-  const lowered = sqlLowerTextArray(values.map((value) => normalizeKey(value)));
+  const lowered = sqlLowerTextArray(filterMatchKeys(values));
   return Prisma.sql`LOWER(COALESCE(${Prisma.raw(columnName)}, '')) = ANY(${lowered})`;
 }
 
@@ -577,8 +588,26 @@ const TOPIC_STOP_TERMS = new Set([
   'system', 'systems', 'individual', 'individuals', 'person', 'people', 'suffering', 'centric',
 ]);
 
+/**
+ * normalizeKey for topic tokens: keeps letters of every script and folds
+ * diacritics ("São" -> "sao", "Übergewicht" -> "ubergewicht"). normalizeKey
+ * keeps only [a-z0-9], which mangled accented words and turned Hebrew, CJK or
+ * Cyrillic text into no tokens at all, so the topic gate could not judge
+ * non-English calls.
+ */
+export function normalizeTopicKey(input: string): string {
+  return normalizeWhitespace(input)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeTopicToken(token: string) {
-  const normalized = normalizeKey(token);
+  const normalized = normalizeTopicKey(token);
   if (!normalized || TOPIC_STOP_TERMS.has(normalized)) {
     return '';
   }
@@ -594,8 +623,8 @@ function normalizeTopicToken(token: string) {
   return normalized;
 }
 
-function tokenizeTopicText(input: string, maxTokens = 40) {
-  const tokens = normalizeKey(input)
+export function tokenizeTopicText(input: string, maxTokens = 40) {
+  const tokens = normalizeTopicKey(input)
     .split(/\s+/)
     .map(normalizeTopicToken)
     .filter(Boolean);
