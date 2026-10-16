@@ -122,7 +122,9 @@ async function main() {
     gatePassRate: attempted > 0 ? Math.round((tally('ENRICHED') / attempted) * 1000) / 10 : null,
     llm: { calls: u.calls, inputTokens: u.input, outputTokens: u.output, costUsd: Math.round(u.cost * 10000) / 10000, byModel },
     perCallUsd: Math.round(perCall * 10000) / 10000,
-    projection: { eligibleCalls: eligible, estimatedUsd: Math.round(perCall * eligible * 100) / 100, estimatedHoursAtConcurrency: Math.round(((Date.now() - startedAt.getTime()) / Math.max(attempted, 1)) * eligible / concurrency / 36e5 * 10) / 10 },
+    // Wall time per call already reflects the workers running side by side,
+    // so it scales with the call count at the same concurrency, no division.
+    projection: { eligibleCalls: eligible, estimatedUsd: Math.round(perCall * eligible * 100) / 100, concurrency, estimatedHoursAtConcurrency: Math.round(((Date.now() - startedAt.getTime()) / Math.max(attempted, 1)) * eligible / 36e5 * 10) / 10 },
     calls: outcomes,
   }
   await prisma.fundingImportRun.update({ where: { id: run.id }, data: { status: 'COMPLETED', finished_at: new Date(), counts: report.outcomes as never, report: { llm: report.llm, projection: report.projection } as never } })

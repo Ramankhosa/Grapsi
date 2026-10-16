@@ -140,7 +140,9 @@ PLATFORM tenant.
 2. Sample: `--apply --sample --limit 20 --confirm-target <db> --operator-email <super admin>`
    — read the cost report (`storage/enrichment-reports/enrich-<run>.json`):
    LLM calls, tokens, cost, gate pass rate and the projection for all
-   eligible calls. **Decide before the full batch.**
+   eligible calls. **Decide before the full batch.** The first dev sample
+   (USD 0.0044/call) ran while a unique index rejected every linked PDF, so
+   it measured page text only; re-sample before trusting its projection.
 3. Batch: same without `--sample`, with `--limit` in chunks (calls with two
    weeks or more left go first). Resumable; failures retry with backoff.
 4. Re-embed the enriched calls: `npx tsx scripts/embed-catalog-calls.ts`
