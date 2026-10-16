@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { evaluateEligibility, buildDimension, type EligibilityDimension } from '@/lib/funding/eligibility'
+import { evaluateEligibility, buildDimension, applicantGeographyFromProfile, eligibilityVerdictForRow, type EligibilityDimension } from '@/lib/funding/eligibility'
 import { resolveCountryList } from '@/lib/geo/countries'
 import { mapScientifyGrant, normalizeFunderName } from '@/lib/fundingCatalogImport/adapters/scientify'
 import { loadScientifyCrosswalks } from '@/lib/fundingCatalogImport/crosswalks'
@@ -33,6 +33,20 @@ describe('country normaliser', () => {
     expect(r.codes).toEqual([])
     expect(r.tokens.sort()).toEqual(['ANY', 'EU', 'ONLINE'])
     expect(r.unknown).toEqual(['Narnia'])
+  })
+})
+
+describe('eligibility against a researcher profile', () => {
+  it('resolves profile country names and judges a stored row', () => {
+    const applicant = applicantGeographyFromProfile({ countryOfResidence: 'India', citizenshipCountries: ['United Kingdom'] })
+    expect(applicant).toEqual({ residence: ['IN'], citizenship: ['GB'] })
+    const usOnly = { residence_scope: 'COUNTRIES', residence_country_codes: ['US'], residence_excluded_codes: [], residence_region_codes: [] }
+    expect(eligibilityVerdictForRow(usOnly, applicant)).toBe('INELIGIBLE')
+    const ukCitizens = { citizenship_scope: 'COUNTRIES', citizenship_country_codes: ['GB'], citizenship_excluded_codes: [], citizenship_region_codes: [] }
+    expect(eligibilityVerdictForRow(ukCitizens, applicant)).toBe('ELIGIBLE')
+    // A legacy row states nothing; a profile with no country cannot be judged.
+    expect(eligibilityVerdictForRow({}, applicant)).toBe('NOT_EVALUATED')
+    expect(eligibilityVerdictForRow(usOnly, applicantGeographyFromProfile({}))).toBe('NEEDS_CHECK')
   })
 })
 

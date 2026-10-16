@@ -13,8 +13,9 @@
  * change.
  *
  * Verdicts are three-valued on purpose. Missing information is NEEDS_CHECK,
- * never a pass and never a fail: discovery may show it with a badge, but
- * alerts and "matched" counts use ELIGIBLE only.
+ * never a pass and never a fail: discovery shows it as "Check eligibility",
+ * and alerts drop only an explicit INELIGIBLE (a researcher with no country on
+ * their profile is a gap in our data, not a disqualification).
  *
  * Pure module (no database).
  */
@@ -94,6 +95,26 @@ export function evaluateEligibility(
 }
 
 type DimensionRow = Record<string, unknown>
+
+/**
+ * A researcher profile's countries, stored as names, as ISO codes for
+ * evaluateEligibility. Empty lists when the profile states no country.
+ */
+export function applicantGeographyFromProfile(profile: {
+  countryOfResidence?: string | null
+  citizenshipCountries?: string[] | null
+}): ApplicantGeography {
+  return {
+    residence: resolveCountryList(profile.countryOfResidence ? [profile.countryOfResidence] : []).codes,
+    citizenship: resolveCountryList(profile.citizenshipCountries || []).codes,
+  }
+}
+
+/** The overall verdict for a funding_calls row's stored dimensions (snake_case columns). */
+export function eligibilityVerdictForRow(row: DimensionRow, applicant: ApplicantGeography): EligibilityVerdict {
+  const call = Object.fromEntries(ELIGIBILITY_DIMENSIONS.map((key) => [key, dimensionFromRow(row, key)]))
+  return evaluateEligibility(call, applicant).overall
+}
 
 /** Reads one dimension from a funding_calls row (snake_case columns). */
 export function dimensionFromRow(row: DimensionRow, key: EligibilityDimensionKey): EligibilityDimension {

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
 import type { DirectoryFacetDimension, DirectoryFacetItem, DirectoryFacetResponse, RecommendationRawResultItem, RecommendationSearchFilters } from '../lib/recommendations/types';
+import { ELIGIBILITY_BADGE } from './funding/eligibilityBadge';
 
 type BrowseCategory = DirectoryFacetDimension | null;
 
@@ -131,6 +132,23 @@ function ExpandableCard({
           ) : null}
 
           <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {result.isCatalog ? (
+              <span
+                className="cb-badge"
+                title="From the global funding catalogue: details are as the source publishes them. Check the funder's page before applying."
+              >
+                <Globe2 className="h-3 w-3" />
+                Global catalogue
+              </span>
+            ) : null}
+            {result.eligibilityVerdict ? (
+              <span
+                className={`rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${ELIGIBILITY_BADGE[result.eligibilityVerdict].className}`}
+                title={ELIGIBILITY_BADGE[result.eligibilityVerdict].title}
+              >
+                {ELIGIBILITY_BADGE[result.eligibilityVerdict].label}
+              </span>
+            ) : null}
             {result.profileMatch?.reasons.slice(0, 1).map((reason) => (
               <span key={reason} className="cb-badge-cobalt">{reason}</span>
             ))}

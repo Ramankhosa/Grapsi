@@ -3,8 +3,12 @@ import { sendEmail, SITE_URL } from '../mailer';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
 import { filterTenantsWithFeature } from '../entitlement-service';
 import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
-import { ELIGIBILITY_DIMENSIONS, dimensionFromRow, evaluateEligibility } from '../funding/eligibility';
-import { resolveCountryList } from '../geo/countries';
+import {
+  ELIGIBILITY_DIMENSIONS,
+  applicantGeographyFromProfile,
+  dimensionFromRow,
+  eligibilityVerdictForRow,
+} from '../funding/eligibility';
 import { snapshotFundingOpportunity } from '../fundingDept/opportunitySnapshot';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
@@ -347,8 +351,7 @@ async function findAlertCandidates(
 async function ineligibleUserIds(call: AlertableCall, userIds: string[]): Promise<Set<string>> {
   const ruledOut = new Set<string>();
   const row = call as unknown as Record<string, unknown>;
-  const dimensions = Object.fromEntries(ELIGIBILITY_DIMENSIONS.map((key) => [key, dimensionFromRow(row, key)]));
-  if (userIds.length === 0 || ELIGIBILITY_DIMENSIONS.every((key) => !dimensions[key].scope)) {
+  if (userIds.length === 0 || ELIGIBILITY_DIMENSIONS.every((key) => !dimensionFromRow(row, key).scope)) {
     return ruledOut;
   }
   const profiles = await prisma.researcherProfile.findMany({
@@ -356,9 +359,11 @@ async function ineligibleUserIds(call: AlertableCall, userIds: string[]): Promis
     select: { user_id: true, country_of_residence: true, citizenship_countries: true },
   });
   for (const profile of profiles) {
-    const residence = resolveCountryList(profile.country_of_residence ? [profile.country_of_residence] : []).codes;
-    const citizenship = resolveCountryList(profile.citizenship_countries || []).codes;
-    if (evaluateEligibility(dimensions, { residence, citizenship }).overall === 'INELIGIBLE') {
+    const applicant = applicantGeographyFromProfile({
+      countryOfResidence: profile.country_of_residence,
+      citizenshipCountries: profile.citizenship_countries,
+    });
+    if (eligibilityVerdictForRow(row, applicant) === 'INELIGIBLE') {
       ruledOut.add(profile.user_id);
     }
   }

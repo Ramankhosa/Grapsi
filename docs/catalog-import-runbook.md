@@ -105,6 +105,14 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
   countries a call explicitly rules out is no longer alerted. Calls without
   evaluated eligibility (every curated call until the backfill) and profiles
   without a country behave as before.
+- **Badges.** Catalogue calls carry a "Global catalogue" badge. When a search
+  uses the researcher's profile, calls that state country eligibility show
+  Eligible / Check eligibility / Not eligible for your profile; the call page
+  shows the same for the viewer. On dev, for an India-based profile most top
+  catalogue matches were "Not eligible" (17 of 25 for "cancer research").
+- **`FINDER_RANK_CURATED_FIRST=1`** (off by default) breaks near-ties (same
+  hundredth of a score) in favour of curated, then eligible, calls. On the
+  dev sample it moved 0-3 of the top 8 results.
 - **"My areas" lists the external catalogue** (open/closed by the imported
   lifecycle as well as the deadline), and its ranking now keeps the closest
   calls rather than the lowest ids.

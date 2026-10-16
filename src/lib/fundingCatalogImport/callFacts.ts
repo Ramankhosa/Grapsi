@@ -4,7 +4,12 @@
  * stated. Read-only; used by the call detail API.
  */
 import prisma from '@/lib/prisma'
-import { dimensionFromRow, type EligibilityDimension } from '@/lib/funding/eligibility'
+import {
+  applicantGeographyFromProfile,
+  dimensionFromRow,
+  eligibilityVerdictForRow,
+  type EligibilityDimension,
+} from '@/lib/funding/eligibility'
 import { countryNameFor } from '@/lib/geo/countries'
 
 import { liveOpportunityStatus } from './lifecycle'
@@ -32,6 +37,11 @@ export interface ImportedCallFacts {
     indirectCostNote: string | null
   }
   eligibility: Array<{ dimension: 'residence' | 'citizenship' | 'host'; label: string; summary: string }>
+  /**
+   * The stated eligibility against the viewer's own profile countries; null
+   * when the call states none or the viewer's profile has no country.
+   */
+  viewerEligibility: { verdict: 'ELIGIBLE' | 'NEEDS_CHECK' | 'INELIGIBLE'; countries: string[] } | null
   requiresNomination: boolean | null
   nominationNote: string | null
   requiredQualifications: string[]
@@ -59,13 +69,39 @@ function summarize(dimension: EligibilityDimension): string | null {
 const iso = (value: Date | null | undefined) => (value ? value.toISOString() : null)
 const day = (value: Date | null | undefined) => (value ? value.toISOString().slice(0, 10) : null)
 
-export async function buildImportedCallFacts(call: Record<string, any>): Promise<ImportedCallFacts> {
-  const [record, deadlines] = await Promise.all([
+async function viewerEligibilityFor(
+  call: Record<string, any>,
+  viewerUserId: string | null | undefined
+): Promise<ImportedCallFacts['viewerEligibility']> {
+  if (!viewerUserId) return null
+  const profile = await prisma.researcherProfile.findUnique({
+    where: { user_id: viewerUserId },
+    select: { country_of_residence: true, citizenship_countries: true },
+  })
+  if (!profile) return null
+  const countries = [profile.country_of_residence, ...(profile.citizenship_countries || [])].filter(
+    (value, index, list): value is string => Boolean(value) && list.indexOf(value) === index
+  )
+  const applicant = applicantGeographyFromProfile({
+    countryOfResidence: profile.country_of_residence,
+    citizenshipCountries: profile.citizenship_countries,
+  })
+  if (!applicant.residence?.length && !applicant.citizenship?.length) return null
+  const verdict = eligibilityVerdictForRow(call, applicant)
+  return verdict === 'NOT_EVALUATED' ? null : { verdict, countries }
+}
+
+export async function buildImportedCallFacts(
+  call: Record<string, any>,
+  options: { viewerUserId?: string | null } = {}
+): Promise<ImportedCallFacts> {
+  const [record, deadlines, viewerEligibility] = await Promise.all([
     prisma.externalSourceRecord.findFirst({
       where: { funding_call_id: call.id, entity_type: 'CALL', link_role: 'PRIMARY' },
       select: { source_key: true, source_url: true, last_seen_at: true, availability: true, source_checked_at: true },
     }),
     prisma.fundingCallDeadline.findMany({ where: { funding_call_id: call.id }, orderBy: { due_date: 'asc' } }),
+    viewerEligibilityFor(call, options.viewerUserId),
   ])
   const registry = record
     ? await prisma.fundingSourceRegistry.findUnique({ where: { source_key: record.source_key } })
@@ -107,6 +143,7 @@ export async function buildImportedCallFacts(call: Record<string, any>): Promise
       indirectCostNote: call.indirect_cost_note || null,
     },
     eligibility,
+    viewerEligibility,
     requiresNomination: call.requires_nomination ?? null,
     nominationNote: call.nomination_note || null,
     requiredQualifications: call.required_qualifications || [],

@@ -6,6 +6,8 @@
  */
 import { ExternalLink, Info } from 'lucide-react'
 
+import { ELIGIBILITY_BADGE } from './eligibilityBadge'
+
 export type ImportedCallFactsView = {
   source: { key: string; name: string; attribution: string | null; url: string | null; lastCheckedAt: string | null; available: boolean }
   enrichmentLevel: string | null
@@ -29,6 +31,7 @@ export type ImportedCallFactsView = {
     indirectCostNote: string | null
   }
   eligibility: Array<{ dimension: string; label: string; summary: string }>
+  viewerEligibility?: { verdict: 'ELIGIBLE' | 'NEEDS_CHECK' | 'INELIGIBLE'; countries: string[] } | null
   requiresNomination: boolean | null
   nominationNote: string | null
   requiredQualifications: string[]
@@ -176,6 +179,20 @@ export function ImportedCallFacts({ facts }: { facts: ImportedCallFactsView }) {
         <div className="md:col-span-2">
           <div className="cb-eyebrow mb-2">Who can apply</div>
           <dl className="space-y-1.5 text-[13px]">
+            {facts.viewerEligibility ? (
+              <div className="grid gap-1 sm:grid-cols-[11rem_1fr]">
+                <dt className="text-muted">For your profile</dt>
+                <dd className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${ELIGIBILITY_BADGE[facts.viewerEligibility.verdict].className}`}
+                    title={ELIGIBILITY_BADGE[facts.viewerEligibility.verdict].title}
+                  >
+                    {ELIGIBILITY_BADGE[facts.viewerEligibility.verdict].label}
+                  </span>
+                  <span className="text-[12px] text-muted">based on {facts.viewerEligibility.countries.join(', ')}</span>
+                </dd>
+              </div>
+            ) : null}
             {facts.eligibility.map((row) => (
               <div key={row.dimension} className="grid gap-1 sm:grid-cols-[11rem_1fr]">
                 <dt className="text-muted">{row.label}</dt>

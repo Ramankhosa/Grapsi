@@ -232,6 +232,8 @@ export interface RecommendationCandidate {
   isCatalog?: boolean;
   /** False for imported calls whose official guidelines are not fetched yet. */
   authoringReady?: boolean;
+  /** The call's stored eligibility dimensions (snake_case), when any is evaluated. */
+  eligibilityDimensions?: Record<string, unknown> | null;
   semanticSimilarity: number;
   textRank: number;
 }
@@ -263,7 +265,14 @@ export interface RecommendationSearchResultItem {
   isCatalog?: boolean;
   /** False for imported calls whose official guidelines are not fetched yet. */
   authoringReady?: boolean;
+  /**
+   * The call's stated country eligibility against the user's profile, when the
+   * search used the profile and the call states any; otherwise null.
+   */
+  eligibilityVerdict?: RecommendationEligibilityVerdict | null;
 }
+
+export type RecommendationEligibilityVerdict = 'ELIGIBLE' | 'NEEDS_CHECK' | 'INELIGIBLE';
 
 export interface RecommendationDocumentEvidenceChunk {
   chunkId: string;

@@ -13,6 +13,7 @@ import {
 import { extractJsonObject } from '../recommendations/conversationUtils';
 import { sanitizeExternalUrls } from '../urlSafety';
 import { withVectorSearchSettings } from '../vectorSearch';
+import { applicantGeographyFromProfile, eligibilityVerdictForRow, type ApplicantGeography } from '../funding/eligibility';
 import type {
   RecommendationDirectoryRequest,
   RecommendationDirectoryResponse,
@@ -517,6 +518,17 @@ function selectCandidateColumns() {
     -- Imported catalogue calls carry facts only until enrichment fetches the
     -- official guidelines; authoring needs them.
     (visibility::text <> 'GLOBAL_CATALOG' OR enrichment_level = 'ENRICHED') AS "authoringReady",
+    CASE WHEN COALESCE(applicant_scope, residence_scope, citizenship_scope, host_scope) IS NULL THEN NULL
+    ELSE jsonb_build_object(
+      'applicant_scope', applicant_scope, 'applicant_country_codes', applicant_country_codes,
+      'applicant_excluded_codes', applicant_excluded_codes, 'applicant_region_codes', applicant_region_codes,
+      'residence_scope', residence_scope, 'residence_country_codes', residence_country_codes,
+      'residence_excluded_codes', residence_excluded_codes, 'residence_region_codes', residence_region_codes,
+      'citizenship_scope', citizenship_scope, 'citizenship_country_codes', citizenship_country_codes,
+      'citizenship_excluded_codes', citizenship_excluded_codes, 'citizenship_region_codes', citizenship_region_codes,
+      'host_scope', host_scope, 'host_country_codes', host_country_codes,
+      'host_excluded_codes', host_excluded_codes, 'host_region_codes', host_region_codes
+    ) END AS "eligibilityDimensions",
     COALESCE(
       ARRAY(
         SELECT taxonomy_tag.taxonomy_area_id
@@ -1051,7 +1063,8 @@ function toPublicResult(
   candidate: RecommendationCandidate,
   score: number,
   normalized: NormalizedRecommendationSearchRequest,
-  profileMatch: RecommendationProfileMatch | null = null
+  profileMatch: RecommendationProfileMatch | null = null,
+  applicant: ApplicantGeography | null = null
 ): RecommendationSearchResultItem & InternalRecommendationSearchResponse['rawResults'][number] {
   return {
     id: candidate.id,
@@ -1088,6 +1101,7 @@ function toPublicResult(
     taxonomyAreaIds: candidate.taxonomyAreaIds || [],
     isCatalog: Boolean(candidate.isCatalog),
     authoringReady: candidate.authoringReady !== false,
+    eligibilityVerdict: eligibilityVerdictFor(candidate, applicant),
     semanticSimilarity: candidate.semanticSimilarity,
     textRank: candidate.textRank,
   };
@@ -1268,9 +1282,54 @@ function scoreCandidate(
   return Math.min(1, baseScore * 0.86 + profileMatch.score * 0.14);
 }
 
+/**
+ * The user's profile countries, when the search uses the profile and the
+ * profile states any. Calls are only judged against a profile the user chose
+ * to apply.
+ */
+function applicantFromProfile(profile: RecommendationProfileSnapshot | null): ApplicantGeography | null {
+  if (!profile) return null;
+  const applicant = applicantGeographyFromProfile(profile);
+  return applicant.residence?.length || applicant.citizenship?.length ? applicant : null;
+}
+
+function eligibilityVerdictFor(
+  candidate: RecommendationCandidate,
+  applicant: ApplicantGeography | null
+): RecommendationSearchResultItem['eligibilityVerdict'] {
+  if (!applicant || !candidate.eligibilityDimensions) return null;
+  const verdict = eligibilityVerdictForRow(candidate.eligibilityDimensions, applicant);
+  return verdict === 'NOT_EVALUATED' ? null : verdict;
+}
+
+const ELIGIBILITY_ORDER = { ELIGIBLE: 0, NEEDS_CHECK: 1, INELIGIBLE: 2 } as const;
+
+/**
+ * FINDER_RANK_CURATED_FIRST=1: among calls scoring within the same hundredth,
+ * curated calls come before imported catalogue calls, and calls the user's
+ * profile is eligible for before those to check or excluded. Off by default:
+ * a tie-break only, never a reason to bury a clearly better match.
+ */
+function curatedFirstTieBreak<T extends { candidate: RecommendationCandidate; score: number }>(
+  left: T,
+  right: T,
+  applicant: ApplicantGeography | null
+): number {
+  const band = Math.round(right.score * 100) - Math.round(left.score * 100);
+  if (band !== 0) return band;
+  const catalog = Number(Boolean(left.candidate.isCatalog)) - Number(Boolean(right.candidate.isCatalog));
+  if (catalog !== 0) return catalog;
+  const rank = (item: T) => {
+    const verdict = eligibilityVerdictFor(item.candidate, applicant);
+    return verdict ? ELIGIBILITY_ORDER[verdict] : ELIGIBILITY_ORDER.NEEDS_CHECK;
+  };
+  return rank(left) - rank(right);
+}
+
 function sortCandidates<T extends { candidate: RecommendationCandidate; score: number }>(
   candidates: T[],
-  normalized: NormalizedRecommendationSearchRequest
+  normalized: NormalizedRecommendationSearchRequest,
+  applicant: ApplicantGeography | null = null
 ): T[] {
   if (normalized.filters.sort === 'deadline_soonest') {
     const allRolling = candidates.every((item) => item.candidate.isRolling || !item.candidate.closeDate);
@@ -1297,6 +1356,14 @@ function sortCandidates<T extends { candidate: RecommendationCandidate; score: n
     });
   }
 
+  if (process.env.FINDER_RANK_CURATED_FIRST === '1') {
+    return candidates.sort(
+      (left, right) =>
+        curatedFirstTieBreak(left, right, applicant) ||
+        right.score - left.score ||
+        left.candidate.schemeTitle.localeCompare(right.candidate.schemeTitle)
+    );
+  }
   return candidates.sort((left, right) => right.score - left.score || left.candidate.schemeTitle.localeCompare(right.candidate.schemeTitle));
 }
 
@@ -1673,7 +1740,8 @@ export class RecommendationSearchService {
           score: scoreCandidate(candidate, normalized, profileMatch),
         };
       }),
-      normalized
+      normalized,
+      applicantFromProfile(profileContext)
     );
 
     const displayableScored = scored.filter((item) => hasRequiredTopicRelevance(item.candidate, normalized));
@@ -1994,8 +2062,9 @@ Rules:
       relaxationSuggestions = buildRelaxationSuggestions(normalized, noResultsReason);
     }
 
+    const applicant = applicantFromProfile(profileContext);
     let rawResults = filteredScored.map(({ candidate, score, profileMatch }) =>
-      toPublicResult(candidate, score, normalized, profileMatch)
+      toPublicResult(candidate, score, normalized, profileMatch, applicant)
     );
     if (isFeatureEnabled('ENABLE_FUNDING_DOC_INTELLIGENCE')) {
       rawResults = await enrichRecommendationResultsWithDocumentEvidence(rawResults, {
@@ -2737,11 +2806,12 @@ Rules:
       const score = hasQuery || profileMatch ? scoreCandidate(candidate, normalized, profileMatch) : 0;
       return { candidate, score, profileMatch };
     });
+    const applicant = applicantFromProfile(profileContext);
     const orderedRows = normalized.filters.sort === 'best_match'
-      ? sortCandidates(scoredRows, normalized)
+      ? sortCandidates(scoredRows, normalized, applicant)
       : scoredRows;
     const results = orderedRows.map(({ candidate, score, profileMatch }) => {
-      const mapped = toPublicResult(candidate, score, normalized, profileMatch);
+      const mapped = toPublicResult(candidate, score, normalized, profileMatch, applicant);
       return {
         ...mapped,
         score: Number(score.toFixed(4)),

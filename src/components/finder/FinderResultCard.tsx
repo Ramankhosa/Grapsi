@@ -1,7 +1,8 @@
 import React from 'react';
-import { FileText, MapPin } from 'lucide-react';
+import { FileText, Globe2, MapPin } from 'lucide-react';
 
 import type { RecommendationRawResultItem } from '../../lib/recommendations/types';
+import { ELIGIBILITY_BADGE } from '../funding/eligibilityBadge';
 
 interface FinderResultCardProps {
   result: RecommendationRawResultItem;
@@ -98,6 +99,7 @@ export default function FinderResultCard({
   // Only populated on multi-area searches — shows which of the user's areas found this call.
   const matchedAreas = result.matchedAreas || [];
   const detailsHref = getCallDetailsHref?.(result.id) || `/finder/calls/${encodeURIComponent(result.id)}`;
+  const eligibilityBadge = result.eligibilityVerdict ? ELIGIBILITY_BADGE[result.eligibilityVerdict] : null;
 
   return (
     <div className="cb-card p-3 transition hover:border-cobalt-300 sm:p-3.5">
@@ -107,6 +109,15 @@ export default function FinderResultCard({
               default min-width:auto resolves to the un-wrapped text width, which
               would push the whole card wider than its column on narrow screens. */}
           <span className="min-w-0 truncate text-[11.5px] text-muted">{result.agencyName}</span>
+          {result.isCatalog ? (
+            <span
+              className="cb-badge shrink-0"
+              title="From the global funding catalogue: details are as the source publishes them. Check the funder's page before applying."
+            >
+              <Globe2 className="h-3 w-3" />
+              Global catalogue
+            </span>
+          ) : null}
           {hasDocumentEvidence ? (
             <span
               className="cb-badge shrink-0"
@@ -136,6 +147,14 @@ export default function FinderResultCard({
           </span>
           <span className="text-[11px] font-medium text-muted">{matchPercent}% match</span>
         </span>
+        {eligibilityBadge ? (
+          <span
+            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${eligibilityBadge.className}`}
+            title={eligibilityBadge.title}
+          >
+            {eligibilityBadge.label}
+          </span>
+        ) : null}
         {amount ? <span className="cb-badge">{amount}</span> : null}
         {result.fundingKinds.slice(0, 2).map((kind) => (
           <span key={kind} className="cb-badge">{kind}</span>

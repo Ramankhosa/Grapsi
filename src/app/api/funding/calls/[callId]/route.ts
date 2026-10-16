@@ -229,7 +229,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         uploadedBy: sanitizeText(call.uploaded_by),
         rawTextAvailable: Boolean(call.raw_text),
         normalizedTextAvailable: Boolean(call.normalized_text),
-        catalogImport: call.import_run_id ? await buildImportedCallFacts(call) : null,
+        catalogImport: call.import_run_id ? await buildImportedCallFacts(call, { viewerUserId: auth.actor.id }) : null,
       },
       templateWorkspace: summarizeTemplateBundle(templateBundle),
       guidelineWorkspace: summarizeGuidelineBundle(guidelineBundle),
