@@ -32,6 +32,13 @@ export const CATALOG_IMPORT_COLUMNS = new Set([
   'sdg_goals', 'challenge_tags', 'programme_framework', 'source_disciplines', 'content_language', 'title_native', 'series_key',
 ])
 
+/**
+ * Pre-existing columns that are derived, not content: ts_document is rebuilt
+ * by its trigger from columns that are fingerprinted, and the existing-call
+ * backfill widens it on purpose. Excluded so a fingerprint means content.
+ */
+export const DERIVED_COLUMNS = new Set(['ts_document'])
+
 /** Tables the import itself owns; rows in them are not "existing data". */
 export const IMPORT_OWNED_TABLES = new Set(['funding_call_deadlines', 'funding_import_candidates', 'external_source_records'])
 
@@ -74,7 +81,7 @@ export async function captureSafetySnapshot(db: PrismaClient): Promise<SafetySna
   const columnRows = await db.$queryRawUnsafe<Array<{ column_name: string }>>(
     `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'funding_calls' ORDER BY ordinal_position`
   )
-  const columns = columnRows.map((r) => r.column_name).filter((c) => !CATALOG_IMPORT_COLUMNS.has(c))
+  const columns = columnRows.map((r) => r.column_name).filter((c) => !CATALOG_IMPORT_COLUMNS.has(c) && !DERIVED_COLUMNS.has(c))
   const hasImportRun = await columnExists(db, 'funding_calls', 'import_run_id')
   const expr = columns.map((c) => `coalesce("${c}"::text, '<null>')`).join(` || '|' || `)
   const rows = await db.$queryRawUnsafe<Array<{ id: string; fp: string; updated: string }>>(

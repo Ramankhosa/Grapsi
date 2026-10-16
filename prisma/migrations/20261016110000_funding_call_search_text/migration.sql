@@ -3,14 +3,15 @@
 --
 -- 1. update_funding_call_ts_document() also indexes title_native, summary,
 --    source_disciplines, challenge_tags, programme_framework and
---    target_groups, for IMPORTED rows only (import_run_id IS NOT NULL).
---    Legacy calls keep exactly the document they have today, including after
---    a curator edit: summary is an older column curated calls already fill,
---    and indexing it would change their finder results outside the Phase E
---    parity window. Phase E lifts the gate. No row is recomputed here (no
---    UPDATE in a migration): scripts/refresh-catalog-search-text.ts recomputes
---    imported rows, and any later write recomputes a row through the trigger
---    as before.
+--    target_groups, for imported rows (import_run_id IS NOT NULL) and rows
+--    the existing-call backfill has processed (description_source IS NOT
+--    NULL). Other legacy calls keep exactly the document they have today,
+--    including after a curator edit: summary is an older column curated calls
+--    already fill, and indexing it would change their finder results outside
+--    the backfill's parity window. The backfill sets description_source, so
+--    its own UPDATE recomputes the row; its undo clears it again. No row is
+--    recomputed here (no UPDATE in a migration):
+--    scripts/refresh-catalog-search-text.ts recomputes imported rows.
 -- 2. A GIN expression index on the taxonomy text of
 --    funding_call_research_area_taxonomies. An expression index rather than a
 --    generated column: adding a STORED column would rewrite every mapping row.
@@ -40,7 +41,7 @@ BEGIN
     setweight(to_tsvector('english', coalesce(NEW."expected_deliverables_text", '')), 'C') ||
     setweight(to_tsvector('english', coalesce(NEW."contact_info", '')), 'C') ||
     setweight(to_tsvector('english', coalesce(NEW."agency_name", '')), 'D');
-  IF NEW."import_run_id" IS NOT NULL THEN
+  IF NEW."import_run_id" IS NOT NULL OR NEW."description_source" IS NOT NULL THEN
     NEW."ts_document" := NEW."ts_document" ||
       -- Native-language titles use 'english' like every other field: the
       -- finder's query is english-stemmed, and a 'simple' lexeme

@@ -92,6 +92,36 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    (the finder's UNION text match against the old OR-EXISTS form);
    `FINDER_FTS_UNION=0` switches back to the old form without a deploy.
 
+## Existing-call backfill (only after the match-census work is live)
+
+Gives curated calls the facts imported calls carry (applicant eligibility,
+deadline rows, currency + USD estimates, funder links, provenance) and widens
+their search text with their summary. New columns only, `updatedAt` kept,
+every value logged under a BACKFILL run and reversible. Any write changes a
+call's `xmin`, which the census treats as a change and re-scores, so do not
+run it before the census ships.
+
+1. `npx tsx scripts/backfill-existing-calls.ts --out ~/backfill-plan.json` —
+   read the per-call notes: country names recovered from intake, names that
+   did not resolve (stored as UNSPECIFIED = "check eligibility", never as a
+   shorter list), currencies without a rate, funders linked vs created.
+2. `pg_dump` backup.
+3. `npx tsx scripts/catalog-safety-check.ts capture --out ~/safety-bf.json`
+   and `npx tsx scripts/finder-parity.ts capture --out ~/parity-bf.json`
+4. `npx tsx scripts/backfill-existing-calls.ts --apply --confirm-target <db> --operator-email <you>`
+5. `catalog-safety-check.ts compare --before ~/safety-bf.json` must PASS
+   (0 silent changes; new facts are covered by the BACKFILL change log), and
+   `finder-parity.ts compare --before ~/parity-bf.json` must PASS (no legacy
+   call drops out of a text match, filter totals and My areas unchanged;
+   text matches may grow).
+6. Undo if anything looks wrong:
+   `npx tsx scripts/backfill-existing-calls.ts --undo <runId> --confirm-target <db>`
+   (restores every value it wrote unless someone has changed it since; on dev
+   the legacy search-text hash returned to its original value byte for byte).
+
+After it, curated calls' stated country eligibility also gates alerts and
+shows badges, and the funder filter matches them by funder link.
+
 ## Behaviour changes to announce
 
 - **Funding alerts reach more institutions.** A global call used to be matched
