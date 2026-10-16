@@ -84,6 +84,13 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    vector column and embedding metadata of imported rows, never `updatedAt`,
    and is resumable: re-run after a provider error. Re-run it after every
    re-import or release; it re-embeds only calls whose text changed.
+   Search text needs no step here: the import runs after migration
+   `20261016110000`, so the trigger already indexes the imported fields. Only
+   if calls were imported *before* that migration, run
+   `npx tsx scripts/refresh-catalog-search-text.ts --apply` (imported rows only).
+   `npx tsx scripts/benchmark-call-text-search.ts` must report `0 differing`
+   (the finder's UNION text match against the old OR-EXISTS form);
+   `FINDER_FTS_UNION=0` switches back to the old form without a deploy.
 
 ## Stop conditions and rollback
 

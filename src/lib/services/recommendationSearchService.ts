@@ -146,7 +146,44 @@ function buildTaxonomyAreaCondition(areaIds: string[]) {
   `;
 }
 
+/**
+ * The taxonomy text of a call's research-area mappings, as a tsvector. Must
+ * stay identical to the expression of the GIN index
+ * funding_call_research_area_taxonomies_text_idx (migration
+ * 20261016110000), or that index is not used.
+ */
+function taxonomyTextVectorSql(alias: string) {
+  const column = (name: string) => Prisma.raw(`${alias}."${name}"`);
+  return Prisma.sql`to_tsvector(
+    'english',
+    coalesce(${column('taxonomy_level1_code')}, '') || ' ' || coalesce(${column('taxonomy_level1_name')}, '') || ' ' ||
+    coalesce(${column('taxonomy_level2_code')}, '') || ' ' || coalesce(${column('taxonomy_level2_name')}, '')
+  )`;
+}
+
+/**
+ * A call matches a text query when its own document or one of its taxonomy
+ * mappings does. Written as a UNION of ids so both halves use their GIN
+ * index; the OR-EXISTS form it replaces (FINDER_FTS_UNION=0) recomputed
+ * to_tsvector for every mapping row of every candidate call. Same rows by
+ * construction; verified with scripts/benchmark-call-text-search.ts.
+ */
 function buildFundingCallTextSearchCondition(fullTextQuery: string) {
+  if (process.env.FINDER_FTS_UNION === '0') {
+    return legacyFundingCallTextSearchCondition(fullTextQuery);
+  }
+  return Prisma.sql`funding_calls.id IN (
+    SELECT text_call.id
+    FROM funding_calls text_call
+    WHERE text_call.ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
+    UNION
+    SELECT taxonomy_text.funding_call_id
+    FROM funding_call_research_area_taxonomies taxonomy_text
+    WHERE ${taxonomyTextVectorSql('taxonomy_text')} @@ websearch_to_tsquery('english', ${fullTextQuery})
+  )`;
+}
+
+export function legacyFundingCallTextSearchCondition(fullTextQuery: string) {
   return Prisma.sql`(
     ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
     OR EXISTS (
@@ -166,6 +203,8 @@ function buildFundingCallTextSearchCondition(fullTextQuery: string) {
     )
   )`;
 }
+
+export { buildFundingCallTextSearchCondition };
 
 function buildAccessCondition(access?: RecommendationAccessScope) {
   if (access?.isSuperAdmin) {
