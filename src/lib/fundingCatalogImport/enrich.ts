@@ -10,10 +10,11 @@
  *     it links to, registered and processed one at a time;
  *  3. a description from the page (provenance official_page, so a re-import
  *     never overwrites it) and guidelines extracted from the documents.
- * A quality gate decides the outcome. Pass: enrichment_level ENRICHED (the
- * extracted guidelines stay in needs_review for a curator; Grant Prep already
- * works from call facts until they are approved). Fail: an ENRICHMENT_REVIEW
- * item and the call stays LITE. A generic funder home page fails on the title
+ * A quality gate decides the outcome. Pass: enrichment_level ENRICHED, with
+ * the guidelines as guideline extraction saved them (approved when it is
+ * confident, as for curated intake). Fail: the attempt's documents and
+ * guidelines are deleted, an ENRICHMENT_REVIEW item records the page and the
+ * reasons, and the call stays LITE. A generic funder home page fails on the title
  * check, a script-rendered portal on page length.
  *
  * Never calls intake jobs, persistDraft, publish or classification, and only
@@ -238,6 +239,22 @@ export async function enrichImportedCall(input: {
   const before = Object.fromEntries(ENRICH_CALL_COLUMNS.map((column) => [column, (call as Record<string, unknown>)[column] ?? null]))
   const inserted = async (table: string, id: string) =>
     db.fundingImportChange.create({ data: { run_id: runId, entity_table: table, entity_id: id, operation: 'INSERT' } })
+  const created = { documents: [] as string[], guidelines: [] as string[], guidelineRuns: [] as string[] }
+  // A failed attempt keeps nothing: the page may be about another call, so
+  // its documents must not answer chat questions and its guidelines must not
+  // read as approved. The review item keeps the page and the reasons.
+  const discardAttempt = async () => {
+    await db.fundingCall.update({
+      where: { id: callId },
+      data: { guideline_status: before.guideline_status as never, active_guideline_id: before.active_guideline_id as never },
+    })
+    await db.fundingCallGuidelineRun.deleteMany({ where: { id: { in: created.guidelineRuns } } })
+    await db.fundingCallGuideline.deleteMany({ where: { id: { in: created.guidelines } } })
+    await db.fundingCallDocument.deleteMany({ where: { id: { in: created.documents } } })
+    const ids = [...created.guidelineRuns, ...created.guidelines, ...created.documents]
+    if (ids.length > 0) await db.fundingImportChange.deleteMany({ where: { run_id: runId, entity_id: { in: ids } } })
+    await db.fundingImportChange.deleteMany({ where: { run_id: runId, entity_id: callId, field: { in: ['guideline_status', 'active_guideline_id'] } } })
+  }
 
   try {
     if (!(await politeFetchGate(pageUrl))) {
@@ -261,7 +278,10 @@ export async function enrichImportedCall(input: {
         deferProcessing: true,
         operator: { userId: operator.userId, email: operator.email, tenantId: operator.tenantId ?? null },
       })
-      if (!pageDoc.duplicate) await inserted('funding_call_documents', pageDoc.document.id)
+      if (!pageDoc.duplicate) {
+        await inserted('funding_call_documents', pageDoc.document.id)
+        created.documents.push(pageDoc.document.id)
+      }
       documentIds.push(pageDoc.document.id)
     }
     const html = await fetchHtml(finalUrl)
@@ -269,7 +289,10 @@ export async function enrichImportedCall(input: {
       try {
         if (!(await politeFetchGate(link))) continue
         const document = await ingestFundingDocumentFromUrl(callId, link, operator, { documentKind: 'guideline_document', deferProcessing: true })
-        if (!document.duplicate) await inserted('funding_call_documents', document.documentId)
+        if (!document.duplicate) {
+          await inserted('funding_call_documents', document.documentId)
+          created.documents.push(document.documentId)
+        }
         documentIds.push(document.documentId)
         linkedDocuments += 1
       } catch (error) {
@@ -319,9 +342,15 @@ export async function enrichImportedCall(input: {
     const runRow = run
       ? await db.fundingCallGuidelineRun.findUnique({ where: { id: (run as { id: string }).id } }).catch(() => null)
       : latestRun && latestRun.created_at >= new Date(Date.now() - 30 * 60_000) ? latestRun : null
-    if (runRow) await inserted('funding_call_guideline_runs', runRow.id)
+    if (runRow) {
+      await inserted('funding_call_guideline_runs', runRow.id)
+      created.guidelineRuns.push(runRow.id)
+    }
     for (const guideline of await db.fundingCallGuideline.findMany({ where: { fundingCallId: callId }, select: { id: true } })) {
-      if (!guidelinesBefore.some((existing) => existing.id === guideline.id)) await inserted('funding_call_guidelines', guideline.id)
+      if (!guidelinesBefore.some((existing) => existing.id === guideline.id)) {
+        await inserted('funding_call_guidelines', guideline.id)
+        created.guidelines.push(guideline.id)
+      }
     }
     outcome.guidelineItems = guidelineItemCount(runRow?.guideline_pack_json)
 
@@ -350,6 +379,7 @@ export async function enrichImportedCall(input: {
     }
 
     if (outcome.reasons.length > 0) {
+      await discardAttempt()
       await db.fundingImportCandidate.upsert({
         where: { dedupe_key: `enrich:${callId}` },
         update: { run_id: runId, signals: { reasons: outcome.reasons, page: finalUrl, documents: outcome.documents, guidelineItems: outcome.guidelineItems } as never, resolution: 'pending' },
@@ -394,6 +424,7 @@ export async function enrichImportedCall(input: {
     return { ...outcome, status: 'ENRICHED', descriptionUpdated: Boolean(description) }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    await discardAttempt().catch((cleanupError) => log(`    cleanup failed: ${String(cleanupError).slice(0, 120)}`))
     // The site refuses automated access: retrying will not change that.
     if (/status code (401|403)/.test(message)) {
       const reasons = [`official site refused automated access (${message.match(/40[13]/)?.[0]})`]
