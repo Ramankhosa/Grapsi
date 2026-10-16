@@ -41,6 +41,7 @@ import {
   MAX_SELECTED_RESEARCH_AREAS,
   MULTI_AREA_MATCH_BONUS,
   MULTI_AREA_MIN_SLOTS_PER_AREA,
+  SDG_GOAL_LABELS,
 } from '../recommendations/constants';
 import { resolveCountryList } from '../geo/countries';
 import {
@@ -67,11 +68,11 @@ const QUERY_EMBEDDING_CACHE_VERSION_PREFIX = 'funding-query-v1';
 const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
   ['taxonomyAreaIds'],
-  ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages'],
+  ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sdgGoals', 'programmeFrameworks'],
   ['hostCountries', 'eligibleRegions', 'geographyScope', 'funderCountries'],
   ['eligibleCountries'],
-  ['fundingKinds'],
-  ['deadlineFrom', 'deadlineTo', 'rollingOnly', 'amountMin', 'amountMax'],
+  ['fundingKinds', 'funderIds'],
+  ['deadlineFrom', 'deadlineTo', 'rollingOnly', 'amountMin', 'amountMax', 'amountCurrency', 'includeUnknownAmount'],
 ];
 
 type SearchExecutionResult = {
@@ -132,6 +133,73 @@ function buildArrayAnyCondition(columnName: string, values: string[]) {
 function buildScalarAnyCondition(columnName: string, values: string[]) {
   const lowered = sqlLowerTextArray(values.map((value) => normalizeKey(value)));
   return Prisma.sql`LOWER(COALESCE(${Prisma.raw(columnName)}, '')) = ANY(${lowered})`;
+}
+
+/**
+ * One side of an amount filter. 'min': the call's largest amount must reach
+ * the bound; 'max': its smallest must not exceed it.
+ *
+ * Without amountCurrency the call's own numbers are compared whatever its
+ * currency (the original behaviour). With it, a call in that currency
+ * compares its own numbers, and any other call compares its USD estimate
+ * against the bound converted at the latest stored rate. A call that cannot be
+ * compared (no amount, or another currency and no estimate) passes only with
+ * includeUnknownAmount.
+ */
+function buildAmountBoundCondition(
+  filters: Required<RecommendationSearchFilters>,
+  side: 'min' | 'max',
+  value: number
+) {
+  const raw = side === 'min' ? Prisma.sql`COALESCE(amount_max, amount_min)` : Prisma.sql`COALESCE(amount_min, amount_max)`;
+  const usd =
+    side === 'min'
+      ? Prisma.sql`COALESCE(amount_max_usd_est, amount_min_usd_est)`
+      : Prisma.sql`COALESCE(amount_min_usd_est, amount_max_usd_est)`;
+  const op = side === 'min' ? Prisma.sql`>=` : Prisma.sql`<=`;
+
+  if (!filters.amountCurrency) {
+    const known = Prisma.sql`(${raw} IS NOT NULL AND ${raw} ${op} ${value})`;
+    return filters.includeUnknownAmount ? Prisma.sql`(${raw} IS NULL OR ${known})` : known;
+  }
+
+  const code = filters.amountCurrency;
+  const sameCurrency = Prisma.sql`(UPPER(COALESCE(currency_code, currency, '')) = ${code})`;
+  const usdPerUnit = Prisma.sql`(SELECT usd_per_unit FROM currency_rates WHERE currency = ${code} ORDER BY as_of DESC LIMIT 1)`;
+  const comparableHere = Prisma.sql`(${sameCurrency} AND ${raw} IS NOT NULL)`;
+  const comparableInUsd = Prisma.sql`(NOT ${sameCurrency} AND ${usd} IS NOT NULL)`;
+  const passes = Prisma.sql`(
+    (${comparableHere} AND ${raw} ${op} ${value}) OR
+    (${comparableInUsd} AND ${usd} ${op} ${value} * ${usdPerUnit})
+  )`;
+  return filters.includeUnknownAmount
+    ? Prisma.sql`(${passes} OR NOT (${comparableHere} OR ${comparableInUsd}))`
+    : passes;
+}
+
+/**
+ * Calls of the chosen funders. Calls with no funder link (curated calls until
+ * the Phase E backfill links them) match when their agency name is the
+ * funder's name, acronym or an alias.
+ */
+function buildFunderCondition(funderIds: string[]) {
+  const ids = sqlTextArray(funderIds);
+  return Prisma.sql`(
+    funder_id = ANY(${ids})
+    OR (
+      funder_id IS NULL
+      AND COALESCE(NULLIF(TRIM(agency_name), ''), NULLIF(TRIM("agencyName"), '')) IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM funders funder_filter
+        WHERE funder_filter.id = ANY(${ids})
+          AND LOWER(COALESCE(NULLIF(TRIM(agency_name), ''), TRIM("agencyName"))) IN (
+            SELECT LOWER(TRIM(name_option))
+            FROM unnest(ARRAY[funder_filter.name, funder_filter.acronym] || funder_filter.aliases) AS name_option
+            WHERE COALESCE(TRIM(name_option), '') <> ''
+          )
+      )
+    )
+  )`;
 }
 
 function buildTaxonomyAreaCondition(areaIds: string[]) {
@@ -306,15 +374,11 @@ function buildBaseConditions(
   }
 
   if (filters.amountMin !== null) {
-    conditions.push(
-      Prisma.sql`COALESCE(amount_max, amount_min) IS NOT NULL AND COALESCE(amount_max, amount_min) >= ${filters.amountMin}`
-    );
+    conditions.push(buildAmountBoundCondition(filters, 'min', filters.amountMin));
   }
 
   if (filters.amountMax !== null) {
-    conditions.push(
-      Prisma.sql`COALESCE(amount_min, amount_max) IS NOT NULL AND COALESCE(amount_min, amount_max) <= ${filters.amountMax}`
-    );
+    conditions.push(buildAmountBoundCondition(filters, 'max', filters.amountMax));
   }
 
   if (filters.geographyScope.length > 0) {
@@ -339,6 +403,25 @@ function buildBaseConditions(
 
   if (filters.taxonomyAreaIds.length > 0) {
     conditions.push(buildTaxonomyAreaCondition(filters.taxonomyAreaIds));
+  }
+
+  if (filters.funderIds.length > 0) {
+    conditions.push(buildFunderCondition(filters.funderIds));
+  }
+
+  if (filters.sdgGoals.length > 0) {
+    conditions.push(
+      Prisma.sql`sdg_goals && ARRAY[${Prisma.join(filters.sdgGoals.map((goal) => Prisma.sql`${Number(goal)}`))}]::int[]`
+    );
+  }
+
+  if (filters.programmeFrameworks.length > 0) {
+    // Prefix match on the "›" path, so a programme also matches its clusters.
+    conditions.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM unnest(${sqlTextArray(filters.programmeFrameworks)}) AS programme
+      WHERE LOWER(programme_framework) = LOWER(programme)
+         OR starts_with(LOWER(programme_framework), LOWER(programme) || ' › ')
+    )`);
   }
 
   if (filters.applicationLanguages.length > 0) {
@@ -1043,6 +1126,9 @@ function cloneFilters(filters: Required<RecommendationSearchFilters>): Required<
     applicationLanguages: [...filters.applicationLanguages],
     sponsorTypes: [...filters.sponsorTypes],
     taxonomyAreaIds: [...filters.taxonomyAreaIds],
+    funderIds: [...filters.funderIds],
+    sdgGoals: [...filters.sdgGoals],
+    programmeFrameworks: [...filters.programmeFrameworks],
   };
 }
 
@@ -1064,7 +1150,16 @@ function clearFilterKey(
     case 'applicationLanguages':
     case 'sponsorTypes':
     case 'taxonomyAreaIds':
+    case 'funderIds':
+    case 'sdgGoals':
+    case 'programmeFrameworks':
       filters[key] = [] as never;
+      break;
+    case 'amountCurrency':
+      filters[key] = '' as never;
+      break;
+    case 'includeUnknownAmount':
+      filters[key] = false as never;
       break;
     case 'deadlineFrom':
     case 'deadlineTo':
@@ -2378,7 +2473,7 @@ Rules:
     const rows = await prisma.$queryRaw<FacetRow[]>(Prisma.sql`
         WITH matched AS MATERIALIZED (
           SELECT id, disciplines, eligible_countries, funding_kinds, career_stages, sponsor_type,
-                 eligible_regions, institution_types
+                 eligible_regions, institution_types, funder_id, programme_framework, sdg_goals
           FROM funding_calls
           WHERE ${where}
         )
@@ -2464,6 +2559,38 @@ Rules:
           FROM matched, unnest(matched.institution_types) AS val
           GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) it
+        UNION ALL
+        SELECT * FROM (
+          SELECT 'funder' AS dimension, funder.id AS value, funder.name AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
+          FROM matched
+          INNER JOIN funders funder ON funder.id = matched.funder_id
+          GROUP BY funder.id, funder.name ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
+        ) fu
+        UNION ALL
+        SELECT * FROM (
+          -- The programme and its first sub-level ("Horizon Europe",
+          -- "Horizon Europe › Cluster 5"); the filter matches by prefix.
+          SELECT 'programmeFramework' AS dimension, prefix AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name",
+                 COUNT(DISTINCT matched.id)::int AS count
+          FROM matched,
+               unnest(ARRAY[
+                 split_part(matched.programme_framework, ' › ', 1),
+                 CASE WHEN split_part(matched.programme_framework, ' › ', 2) <> ''
+                      THEN split_part(matched.programme_framework, ' › ', 1) || ' › ' || split_part(matched.programme_framework, ' › ', 2)
+                 END
+               ]) AS prefix
+          WHERE matched.programme_framework IS NOT NULL AND COALESCE(prefix, '') <> ''
+          GROUP BY prefix ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
+        ) pf
+        UNION ALL
+        SELECT * FROM (
+          SELECT 'sdgGoal' AS dimension, goal::text AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
+          FROM matched, unnest(matched.sdg_goals) AS goal
+          GROUP BY goal ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
+        ) sd
       `);
     const totalRow = rows.filter((row) => row.dimension === 'total');
     const facetRows = rows.filter((row) => row.dimension !== 'total');
@@ -2478,6 +2605,9 @@ Rules:
       sponsorType: [],
       region: [],
       institutionType: [],
+      funder: [],
+      programmeFramework: [],
+      sdgGoal: [],
     };
 
     for (const row of facetRows) {
@@ -2485,7 +2615,9 @@ Rules:
       if (facets[dim] && row.value) {
         facets[dim].push({
           value: row.value,
-          label: row.label || undefined,
+          label:
+            row.label ||
+            (dim === 'sdgGoal' && SDG_GOAL_LABELS[row.value] ? `SDG ${row.value} · ${SDG_GOAL_LABELS[row.value]}` : undefined),
           level1Code: row.level1Code || undefined,
           level1Name: row.level1Name || undefined,
           level2Code: row.level2Code || undefined,

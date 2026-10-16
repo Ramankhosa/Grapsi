@@ -39,6 +39,30 @@ export const RECOMMENDATION_CAREER_STAGE_OPTIONS = [
 
 export const RECOMMENDATION_SORT_OPTIONS = ['best_match', 'deadline_soonest'] as const;
 
+/** UN Sustainable Development Goals, by number (filter values are the numbers as strings). */
+export const SDG_GOAL_LABELS: Record<string, string> = {
+  '1': 'No poverty',
+  '2': 'Zero hunger',
+  '3': 'Good health and well-being',
+  '4': 'Quality education',
+  '5': 'Gender equality',
+  '6': 'Clean water and sanitation',
+  '7': 'Affordable and clean energy',
+  '8': 'Decent work and economic growth',
+  '9': 'Industry, innovation and infrastructure',
+  '10': 'Reduced inequalities',
+  '11': 'Sustainable cities and communities',
+  '12': 'Responsible consumption and production',
+  '13': 'Climate action',
+  '14': 'Life below water',
+  '15': 'Life on land',
+  '16': 'Peace, justice and strong institutions',
+  '17': 'Partnerships for the goals',
+};
+
+/** Currencies offered for amount filters (others are accepted by the API). */
+export const RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'INR', 'CAD', 'AUD', 'CHF', 'JPY', 'SEK'] as const;
+
 export const RESEARCH_AREA_EXPANSIONS: Record<string, string[]> = {
   ai: ['artificial intelligence', 'machine learning'],
   'artificial intelligence': ['machine learning', 'data science'],

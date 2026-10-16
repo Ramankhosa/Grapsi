@@ -36,11 +36,16 @@ const defaultFilters: Required<RecommendationSearchFilters> = {
   applicationLanguages: [],
   sponsorTypes: [],
   taxonomyAreaIds: [],
+  funderIds: [],
+  sdgGoals: [],
+  programmeFrameworks: [],
   deadlineFrom: '',
   deadlineTo: '',
   rollingOnly: false,
   amountMin: null,
   amountMax: null,
+  amountCurrency: '',
+  includeUnknownAmount: false,
   includeExpired: false,
   limit: 10,
   sort: 'best_match',
@@ -218,6 +223,15 @@ export default function FinderPage() {
           break;
         case 'institutionType':
           filters.institutionTypes = [...(filters.institutionTypes || []), sel.value];
+          break;
+        case 'funder':
+          filters.funderIds = [...(filters.funderIds || []), sel.value];
+          break;
+        case 'programmeFramework':
+          filters.programmeFrameworks = [...(filters.programmeFrameworks || []), sel.value];
+          break;
+        case 'sdgGoal':
+          filters.sdgGoals = [...(filters.sdgGoals || []), sel.value];
           break;
       }
     }

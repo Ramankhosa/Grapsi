@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Clock, Globe2, SlidersHorizontal, Search, Wallet, X } from 'lucide-react';
 import type { RecommendationSearchFilters } from '../lib/recommendations/types';
+import { useAuth } from '../lib/auth-context';
+import { rememberFunderNames, useFunderNames } from '../hooks/useFunderNames';
 import {
+  RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS,
   RECOMMENDATION_APPLICATION_LANGUAGE_OPTIONS,
   RECOMMENDATION_CAREER_STAGE_OPTIONS,
   RECOMMENDATION_FUNDING_KIND_OPTIONS,
@@ -10,6 +13,7 @@ import {
   RECOMMENDATION_REGION_OPTIONS,
   RECOMMENDATION_SORT_OPTIONS,
   RECOMMENDATION_SPONSOR_TYPE_OPTIONS,
+  SDG_GOAL_LABELS,
 } from '../lib/recommendations/constants';
 
 type FilterCategoryKey = 'geography' | 'funding' | 'eligibility' | 'timing' | 'search';
@@ -41,11 +45,13 @@ function FilterChips({
   values,
   options,
   onToggle,
+  labelFor,
 }: {
   label: string;
   values: string[] | undefined;
   options: readonly string[];
   onToggle: (nextValue: string) => void;
+  labelFor?: (option: string) => string;
 }) {
   return (
     <div>
@@ -60,7 +66,7 @@ function FilterChips({
               onClick={() => onToggle(option)}
               className={`cb-chip ${active ? 'cb-chip-active' : ''}`}
             >
-              {option}
+              {labelFor ? labelFor(option) : option}
             </button>
           );
         })}
@@ -93,6 +99,112 @@ function TextArrayField({
     </label>
   );
 }
+
+type FunderOption = { id: string; name: string; acronym: string | null; countryCode: string | null; callCount: number };
+
+/** Funder filter: search by name, acronym or alias; the filter keeps funder ids. */
+function FunderPicker({ values, onChange }: { values: string[] | undefined; onChange: (ids: string[]) => void }) {
+  const { authFetch } = useAuth();
+  const selected = values || [];
+  const names = useFunderNames(selected);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<FunderOption[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+    let live = true;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      authFetch(`/api/recommendations/funders?q=${encodeURIComponent(q)}`)
+        .then((response) => (response.ok ? response.json() : { funders: [] }))
+        .then((data: { funders?: FunderOption[] }) => {
+          if (!live) return;
+          rememberFunderNames(data.funders || []);
+          setResults(data.funders || []);
+        })
+        .catch(() => {
+          if (live) setResults([]);
+        })
+        .finally(() => {
+          if (live) setLoading(false);
+        });
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [query, authFetch]);
+
+  return (
+    <div>
+      <div className="cb-label">Funder</div>
+      {selected.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {selected.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onChange(selected.filter((value) => value !== id))}
+              className="cb-chip cb-chip-active"
+              title="Remove this funder"
+            >
+              {names[id]}
+              <X className="h-3 w-3" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <input
+        type="search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search funders: NIH, Wellcome, European Research Council"
+        className="cb-input mt-2"
+      />
+      {loading ? <p className="mt-1.5 text-[12px] text-muted">Searching…</p> : null}
+      {!loading && query.trim().length >= 2 && results.length === 0 ? (
+        <p className="mt-1.5 text-[12px] text-muted">No funder with published calls matches that.</p>
+      ) : null}
+      {results.length > 0 ? (
+        <ul className="mt-1.5 max-h-56 overflow-y-auto rounded-lg border border-hairline">
+          {results.map((funder) => {
+            const chosen = selected.includes(funder.id);
+            return (
+              <li key={funder.id} className="border-b border-hairline last:border-b-0">
+                <button
+                  type="button"
+                  disabled={chosen}
+                  onClick={() => {
+                    onChange([...selected, funder.id]);
+                    setQuery('');
+                  }}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[13px] text-ink hover:bg-inset disabled:cursor-default disabled:opacity-50"
+                >
+                  <span className="min-w-0 truncate">
+                    {funder.name}
+                    {funder.acronym && !funder.name.includes(funder.acronym) ? ` (${funder.acronym})` : ''}
+                    {funder.countryCode ? <span className="text-muted"> · {funder.countryCode}</span> : null}
+                  </span>
+                  <span className="shrink-0 text-[12px] text-muted">
+                    {chosen ? 'Added' : `${funder.callCount} ${funder.callCount === 1 ? 'call' : 'calls'}`}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+const SDG_OPTIONS = Object.keys(SDG_GOAL_LABELS);
 
 const filterCategories: Array<{ key: FilterCategoryKey; label: string; icon: JSX.Element }> = [
   { key: 'geography', label: 'Geography', icon: <Globe2 className="h-4 w-4" /> },
@@ -213,6 +325,20 @@ export default function FundingChatFilterDrawer({
                   options={RECOMMENDATION_SPONSOR_TYPE_OPTIONS}
                   onToggle={(value) => update({ sponsorTypes: toggleListValue(filters.sponsorTypes, value) })}
                 />
+                <FunderPicker values={filters.funderIds} onChange={(funderIds) => update({ funderIds })} />
+                <TextArrayField
+                  label="Programme"
+                  placeholder="Horizon Europe, Horizon Europe › Cluster 5"
+                  values={filters.programmeFrameworks}
+                  onChange={(value) => update({ programmeFrameworks: value })}
+                />
+                <FilterChips
+                  label="Sustainable Development Goals"
+                  values={filters.sdgGoals}
+                  options={SDG_OPTIONS}
+                  labelFor={(goal) => `${goal} · ${SDG_GOAL_LABELS[goal]}`}
+                  onToggle={(value) => update({ sdgGoals: toggleListValue(filters.sdgGoals, value) })}
+                />
               </div>
             ) : null}
 
@@ -295,7 +421,34 @@ export default function FundingChatFilterDrawer({
                     />
                   </label>
                 </div>
+                <label className="block md:max-w-sm">
+                  <div className="cb-label">Amount currency</div>
+                  <select
+                    value={filters.amountCurrency || ''}
+                    onChange={(event) => update({ amountCurrency: event.target.value || undefined })}
+                    className="cb-select mt-2"
+                  >
+                    <option value="">Any (compare each call&apos;s own figures)</option>
+                    {RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-[12px] leading-5 text-muted">
+                    Calls in other currencies are compared by an approximate conversion.
+                  </p>
+                </label>
                 <div className="grid gap-2 md:grid-cols-2">
+                  <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-hairline bg-ground px-3 py-2.5 text-[13px] text-ink-soft md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(filters.includeUnknownAmount)}
+                      onChange={(event) => update({ includeUnknownAmount: event.target.checked })}
+                      className="h-4 w-4 rounded border-hairline text-cobalt-600 focus:ring-cobalt-500"
+                    />
+                    Keep calls that state no amount when filtering by amount
+                  </label>
                   <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-hairline bg-ground px-3 py-2.5 text-[13px] text-ink-soft">
                     <input
                       type="checkbox"

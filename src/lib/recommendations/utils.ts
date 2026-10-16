@@ -442,6 +442,24 @@ function normalizeDateString(value?: string): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : undefined;
 }
 
+/** "13", "SDG 13", "sdg13" → "13"; null if any value is not a goal 1-17. */
+export function normalizeSdgGoalList(values: string[]): string[] | null {
+  const out: string[] = [];
+  for (const value of values) {
+    const match = /^(?:sdg\s*)?(\d{1,2})$/i.exec(normalizeWhitespace(String(value)));
+    const goal = match ? Number(match[1]) : NaN;
+    if (!Number.isInteger(goal) || goal < 1 || goal > 17) return null;
+    if (!out.includes(String(goal))) out.push(String(goal));
+  }
+  return out;
+}
+
+/** ISO 4217 shape check only ("usd" → "USD"); whether a rate exists is the query's business. */
+export function normalizeCurrencyCode(value: unknown): string | null {
+  const code = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  return /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
 export function normalizeRecommendationSearchRequest(
   request: RecommendationSearchRequest
 ): NormalizedRecommendationSearchRequest {
@@ -473,11 +491,16 @@ export function normalizeRecommendationSearchRequest(
       normalizeApplicationLanguageList(clampArray(filters.applicationLanguages || [], 20)) || [],
     sponsorTypes: normalizeSponsorTypeList(clampArray(filters.sponsorTypes || [], 20)) || [],
     taxonomyAreaIds: clampArray(filters.taxonomyAreaIds || [], 50),
+    funderIds: clampArray(filters.funderIds || [], 20).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id)),
+    sdgGoals: normalizeSdgGoalList(clampArray(filters.sdgGoals || [], 17)) || [],
+    programmeFrameworks: clampArray(filters.programmeFrameworks || [], 10).map((value) => value.slice(0, 160)),
     deadlineFrom: normalizeDateString(filters.deadlineFrom) || '',
     deadlineTo: normalizeDateString(filters.deadlineTo) || '',
     rollingOnly: Boolean(filters.rollingOnly),
     amountMin: typeof filters.amountMin === 'number' ? filters.amountMin : null,
     amountMax: typeof filters.amountMax === 'number' ? filters.amountMax : null,
+    amountCurrency: normalizeCurrencyCode(filters.amountCurrency) || '',
+    includeUnknownAmount: Boolean(filters.includeUnknownAmount),
     includeExpired: Boolean(filters.includeExpired),
     limit: Math.min(Math.max(filters.limit || 10, 1), 25),
     sort: filters.sort === 'deadline_soonest' ? 'deadline_soonest' : 'best_match',
@@ -551,6 +574,12 @@ export function validateNormalizedControlledFilters(filters: RecommendationSearc
   if (filters.funderCountries && normalizeCountryList(filters.funderCountries) === null) {
     return 'Unknown funderCountries value. Use recognizable country names or ISO country codes.';
   }
+  if (filters.sdgGoals && normalizeSdgGoalList(filters.sdgGoals) === null) {
+    return 'Unknown sdgGoals value. Use goal numbers 1-17.';
+  }
+  if (filters.amountCurrency && normalizeCurrencyCode(filters.amountCurrency) === null) {
+    return 'Unknown amountCurrency value. Use an ISO 4217 code such as USD, EUR or INR.';
+  }
   return null;
 }
 
@@ -569,6 +598,10 @@ export function summarizeFilters(filters: RecommendationSearchFilters): string {
     filters.careerStages?.length ? `careerStages=${filters.careerStages.length}` : '',
     filters.sponsorTypes?.length ? `sponsorTypes=${filters.sponsorTypes.length}` : '',
     filters.taxonomyAreaIds?.length ? `taxonomyAreaIds=${filters.taxonomyAreaIds.length}` : '',
+    filters.funderIds?.length ? `funderIds=${filters.funderIds.length}` : '',
+    filters.sdgGoals?.length ? `sdgGoals=${filters.sdgGoals.length}` : '',
+    filters.programmeFrameworks?.length ? `programmeFrameworks=${filters.programmeFrameworks.length}` : '',
+    filters.amountCurrency ? `amountCurrency=${filters.amountCurrency}` : '',
     filters.deadlineFrom ? 'deadlineFrom=1' : '',
     filters.deadlineTo ? 'deadlineTo=1' : '',
     filters.rollingOnly ? 'rollingOnly=1' : '',

@@ -1,6 +1,7 @@
 import type { FinderFilterSuggestionChip, RecommendationFilterMode } from './chatTypes';
 import type { RecommendationSearchFilters } from './types';
 import { createDefaultFilters } from './conversationUtils';
+import { SDG_GOAL_LABELS } from './constants';
 
 export const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
   geographyScope: 'Geography scope',
@@ -16,12 +17,28 @@ export const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, st
   applicationLanguages: 'Application languages',
   sponsorTypes: 'Sponsor types',
   taxonomyAreaIds: 'Research taxonomy',
+  funderIds: 'Funders',
+  sdgGoals: 'SDGs',
+  programmeFrameworks: 'Programmes',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
   amountMin: 'Minimum amount',
   amountMax: 'Maximum amount',
+  amountCurrency: 'Amount currency',
+  includeUnknownAmount: 'Unknown amounts',
 };
+
+/** How a filter value reads on a chip: funder ids as names, SDG numbers as goals. */
+export function filterValueLabel(
+  key: keyof RecommendationSearchFilters,
+  value: string,
+  funderNames: Record<string, string> = {}
+): string {
+  if (key === 'funderIds') return funderNames[value] || 'Selected funder';
+  if (key === 'sdgGoals') return SDG_GOAL_LABELS[value] ? `SDG ${value} · ${SDG_GOAL_LABELS[value]}` : `SDG ${value}`;
+  return value;
+}
 
 const ARRAY_FILTER_KEYS = [
   'geographyScope',
@@ -37,6 +54,9 @@ const ARRAY_FILTER_KEYS = [
   'applicationLanguages',
   'sponsorTypes',
   'taxonomyAreaIds',
+  'funderIds',
+  'sdgGoals',
+  'programmeFrameworks',
 ] as const;
 
 type ArrayFilterKey = (typeof ARRAY_FILTER_KEYS)[number];
@@ -50,6 +70,8 @@ const SEARCH_SPACE_FILTER_KEYS: Array<keyof RecommendationSearchFilters> = [
   'rollingOnly',
   'amountMin',
   'amountMax',
+  'amountCurrency',
+  'includeUnknownAmount',
   'includeExpired',
 ];
 
@@ -62,7 +84,7 @@ export function normalizeFilterMode(value: unknown): RecommendationFilterMode {
 export function cloneRequiredFilters(filters: Required<RecommendationSearchFilters>): Required<RecommendationSearchFilters> {
   const next = { ...filters };
   for (const key of ARRAY_FILTER_KEYS) {
-    next[key] = [...filters[key]];
+    next[key] = [...(filters[key] || [])];
   }
   return next;
 }
@@ -92,6 +114,14 @@ export function formatFilterDescription(
       return filters.amountMin !== null ? `${label}: ${filters.amountMin}` : null;
     case 'amountMax':
       return filters.amountMax !== null ? `${label}: ${filters.amountMax}` : null;
+    case 'amountCurrency':
+      return filters.amountCurrency ? `${label}: ${filters.amountCurrency}` : null;
+    case 'includeUnknownAmount':
+      return filters.includeUnknownAmount ? 'Including calls with unknown amounts' : null;
+    case 'sdgGoals':
+      return filters.sdgGoals.length ? `${label}: ${filters.sdgGoals.slice(0, 3).map((goal) => filterValueLabel('sdgGoals', goal)).join(', ')}` : null;
+    case 'funderIds':
+      return filters.funderIds.length ? `${label}: ${filters.funderIds.length} selected` : null;
     default: {
       const value = filters[key];
       if (!Array.isArray(value) || value.length === 0) {

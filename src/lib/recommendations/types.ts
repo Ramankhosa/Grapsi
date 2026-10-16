@@ -22,11 +22,25 @@ export interface RecommendationSearchFilters {
   applicationLanguages?: string[];
   sponsorTypes?: string[];
   taxonomyAreaIds?: string[];
+  /** Funder ids (funders table). Calls with no funder link match on agency name. */
+  funderIds?: string[];
+  /** UN Sustainable Development Goal numbers, as strings '1'..'17'. */
+  sdgGoals?: string[];
+  /** Programme prefixes: "Horizon Europe" also matches "Horizon Europe › Cluster 5 › Pillar II". */
+  programmeFrameworks?: string[];
   deadlineFrom?: string;
   deadlineTo?: string;
   rollingOnly?: boolean;
   amountMin?: number | null;
   amountMax?: number | null;
+  /**
+   * ISO 4217 code amountMin/amountMax are in. When set, calls in another
+   * currency are compared through their USD estimate; '' compares raw numbers
+   * whatever the currency (the original behaviour).
+   */
+  amountCurrency?: string;
+  /** With an amount filter: keep calls whose amount is unknown or cannot be compared. */
+  includeUnknownAmount?: boolean;
   includeExpired?: boolean;
   limit?: number;
   sort?: RecommendationSort;
@@ -327,7 +341,10 @@ export type DirectoryFacetDimension =
   | 'discipline'
   | 'sponsorType'
   | 'region'
-  | 'institutionType';
+  | 'institutionType'
+  | 'funder'
+  | 'programmeFramework'
+  | 'sdgGoal';
 
 export interface DirectoryFacetItem {
   value: string;

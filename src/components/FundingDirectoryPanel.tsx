@@ -7,10 +7,12 @@ import {
   FlaskConical,
   GraduationCap,
   Globe2,
+  Landmark,
   Layers,
   MapPin,
   Search,
   SlidersHorizontal,
+  Target,
   Wallet,
   X,
 } from 'lucide-react';
@@ -35,11 +37,14 @@ const CATEGORY_META: Record<DirectoryFacetDimension, { label: string; icon: Reac
   sponsorType: { label: 'Sponsor', icon: <Factory className="h-4 w-4" /> },
   region: { label: 'Region', icon: <MapPin className="h-4 w-4" /> },
   institutionType: { label: 'Institution', icon: <Building2 className="h-4 w-4" /> },
+  funder: { label: 'Funder', icon: <Landmark className="h-4 w-4" /> },
+  programmeFramework: { label: 'Programme', icon: <Layers className="h-4 w-4" /> },
+  sdgGoal: { label: 'SDG', icon: <Target className="h-4 w-4" /> },
 };
 
 const DIMENSION_ORDER: DirectoryFacetDimension[] = [
   'taxonomyArea', 'researchArea', 'country', 'fundingKind', 'careerStage',
-  'discipline', 'sponsorType', 'region', 'institutionType',
+  'discipline', 'sponsorType', 'region', 'institutionType', 'funder', 'programmeFramework', 'sdgGoal',
 ];
 
 function formatAmount(result: RecommendationRawResultItem) {

@@ -2,7 +2,8 @@ import React from 'react';
 import { Undo2, X } from 'lucide-react';
 
 import type { RecommendationSearchFilters } from '../../lib/recommendations/types';
-import { FILTER_LABELS } from '../../lib/recommendations/filterChips';
+import { FILTER_LABELS, filterValueLabel } from '../../lib/recommendations/filterChips';
+import { useFunderNames } from '../../hooks/useFunderNames';
 
 interface FinderSidebarFiltersProps {
   filters: Required<RecommendationSearchFilters>;
@@ -28,6 +29,9 @@ const ARRAY_FILTER_KEYS: Array<keyof RecommendationSearchFilters> = [
   'applicationLanguages',
   'sponsorTypes',
   'taxonomyAreaIds',
+  'funderIds',
+  'sdgGoals',
+  'programmeFrameworks',
 ];
 
 /**
@@ -43,6 +47,7 @@ export default function FinderSidebarFilters({
   onUndo,
   disabled = false,
 }: FinderSidebarFiltersProps) {
+  const funderNames = useFunderNames(filters.funderIds || []);
   const groups = ARRAY_FILTER_KEYS
     .map((key) => ({ key, label: FILTER_LABELS[key] || String(key), values: (filters[key] as string[]) || [] }))
     .filter((group) => group.values.length > 0);
@@ -56,8 +61,10 @@ export default function FinderSidebarFilters({
   }
   if (filters.rollingOnly) scalarChips.push({ key: 'rollingOnly', label: 'Rolling only' });
   if (filters.includeExpired) scalarChips.push({ key: 'includeExpired', label: 'Include expired' });
-  if (filters.amountMin !== null) scalarChips.push({ key: 'amountMin', label: `Min amount: ${filters.amountMin}` });
-  if (filters.amountMax !== null) scalarChips.push({ key: 'amountMax', label: `Max amount: ${filters.amountMax}` });
+  const amountUnit = filters.amountCurrency ? ` ${filters.amountCurrency}` : '';
+  if (filters.amountMin !== null) scalarChips.push({ key: 'amountMin', label: `Min amount: ${filters.amountMin.toLocaleString()}${amountUnit}` });
+  if (filters.amountMax !== null) scalarChips.push({ key: 'amountMax', label: `Max amount: ${filters.amountMax.toLocaleString()}${amountUnit}` });
+  if (filters.includeUnknownAmount) scalarChips.push({ key: 'includeUnknownAmount', label: 'Include unknown amounts' });
 
   const totalActive = groups.reduce((sum, group) => sum + group.values.length, 0) + scalarChips.length;
 
@@ -98,10 +105,10 @@ export default function FinderSidebarFilters({
                     type="button"
                     onClick={() => onRemoveArrayValue(group.key, value)}
                     disabled={disabled}
-                    title={`Remove ${value}`}
+                    title={`Remove ${filterValueLabel(group.key, value, funderNames)}`}
                     className="group inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-cobalt-200 bg-cobalt-50 px-2 text-[12px] text-cobalt-800 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {value}
+                    {filterValueLabel(group.key, value, funderNames)}
                     <X className="h-3 w-3 opacity-60 group-hover:opacity-100" />
                   </button>
                 ))}

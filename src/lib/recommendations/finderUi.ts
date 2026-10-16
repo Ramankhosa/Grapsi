@@ -79,10 +79,15 @@ export function buildClearedScalarFilters(
   key: keyof RecommendationSearchFilters
 ) {
   const nextFilters = cloneRequiredFilters(filters);
-  if (key === 'rollingOnly' || key === 'includeExpired') {
+  if (key === 'rollingOnly' || key === 'includeExpired' || key === 'includeUnknownAmount') {
     nextFilters[key] = false as never;
   } else if (key === 'amountMin' || key === 'amountMax') {
     nextFilters[key] = null as never;
+    // The currency only qualifies an amount bound; drop it with the last one.
+    const other = key === 'amountMin' ? 'amountMax' : 'amountMin';
+    if (nextFilters[other] === null) nextFilters.amountCurrency = '';
+  } else if (key === 'amountCurrency') {
+    nextFilters.amountCurrency = '';
   } else if (key === 'deadlineFrom' || key === 'deadlineTo') {
     nextFilters[key] = '' as never;
   }
