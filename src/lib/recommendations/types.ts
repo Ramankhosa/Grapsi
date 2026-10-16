@@ -341,19 +341,22 @@ export interface RecommendationDirectoryResponse {
   hasPreviousPage: boolean;
 }
 
+/**
+ * Directory facets. Countries are not a facet: "open to applicants from" is an
+ * eligibility reading (worldwide calls count), not a list of countries a call
+ * names, so the directory offers a country picker instead of counts.
+ */
 export type DirectoryFacetDimension =
   | 'taxonomyArea'
-  | 'researchArea'
-  | 'country'
   | 'fundingKind'
   | 'careerStage'
-  | 'discipline'
-  | 'sponsorType'
-  | 'region'
   | 'institutionType'
+  | 'sponsorType'
   | 'funder'
+  | 'sdgGoal'
   | 'programmeFramework'
-  | 'sdgGoal';
+  | 'region'
+  | 'geographyScope';
 
 export interface DirectoryFacetItem {
   value: string;
@@ -372,6 +375,7 @@ export interface DirectoryFacetRequest {
 }
 
 export interface DirectoryFacetResponse {
+  /** Calls matching every filter and the search text: the result count. */
   totalPublished: number;
   facets: Record<DirectoryFacetDimension, DirectoryFacetItem[]>;
 }

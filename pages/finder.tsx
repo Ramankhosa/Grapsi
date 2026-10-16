@@ -12,7 +12,6 @@ import { useEntitlements } from '@/hooks/useEntitlements';
 import { useFinderChat } from '@/hooks/useFinderChat';
 import type { ResearcherFinderContext } from '@/lib/researcherProfile/types';
 import type {
-  DirectoryFacetDimension,
   DirectoryFacetResponse,
   RecommendationDirectoryResponse,
   RecommendationRawResultItem,
@@ -70,7 +69,41 @@ async function apiRequest<T>(
   return payload as T;
 }
 
-type DirectorySelection = { dimension: DirectoryFacetDimension; value: string; label?: string };
+type DirectoryFilters = Required<RecommendationSearchFilters>;
+const DIRECTORY_URL_KEYS = ['tab', 'q', 'f', 'page'];
+
+/** The filters that differ from the defaults, for the address bar (null when none). */
+function encodeDirectoryFilters(filters: DirectoryFilters): string | null {
+  const changed = Object.fromEntries(
+    Object.entries(filters).filter(
+      ([key, value]) => key !== 'limit' && JSON.stringify(value) !== JSON.stringify(manualDefaultFilters[key as keyof DirectoryFilters])
+    )
+  );
+  return Object.keys(changed).length > 0 ? JSON.stringify(changed) : null;
+}
+
+/** Filters from a shared link: unknown keys and wrongly typed values are ignored. */
+function decodeDirectoryFilters(raw: unknown): DirectoryFilters {
+  if (typeof raw !== 'string') return manualDefaultFilters;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return manualDefaultFilters;
+    const out: Record<string, unknown> = { ...manualDefaultFilters };
+    for (const [key, fallback] of Object.entries(manualDefaultFilters)) {
+      if (!(key in parsed) || key === 'limit') continue;
+      const value = parsed[key];
+      const ok = Array.isArray(fallback)
+        ? Array.isArray(value) && value.every((item) => typeof item === 'string')
+        : fallback === null
+          ? value === null || (typeof value === 'number' && Number.isFinite(value))
+          : typeof value === typeof fallback;
+      if (ok) out[key] = value;
+    }
+    return out as DirectoryFilters;
+  } catch {
+    return manualDefaultFilters;
+  }
+}
 
 export default function FinderPage() {
   const { user, isLoading, authFetch } = useAuth();
@@ -85,9 +118,10 @@ export default function FinderPage() {
   const [finderContext, setFinderContext] = useState<ResearcherFinderContext | null>(null);
   const [manualQuery, setManualQuery] = useState('');
   const [manualActiveQuery, setManualActiveQuery] = useState('');
-  const [manualFilters, setManualFilters] = useState<Required<RecommendationSearchFilters>>(manualDefaultFilters);
-  const [manualFilterDraft, setManualFilterDraft] = useState<RecommendationSearchFilters>(manualDefaultFilters);
-  const [manualFilterDrawerOpen, setManualFilterDrawerOpen] = useState(false);
+  // One filter state drives the results, the facet counts and the address
+  // bar; facets, pickers and chips all edit it, so no control can drop
+  // another's filters.
+  const [manualFilters, setManualFilters] = useState<DirectoryFilters>(manualDefaultFilters);
   const [manualResults, setManualResults] = useState<RecommendationRawResultItem[]>([]);
   const [manualLoading, setManualLoading] = useState(false);
   const [manualPage, setManualPage] = useState(1);
@@ -95,10 +129,11 @@ export default function FinderPage() {
   const [manualTotalResults, setManualTotalResults] = useState(0);
   const [manualHasNextPage, setManualHasNextPage] = useState(false);
   const [manualHasPreviousPage, setManualHasPreviousPage] = useState(false);
-  const [manualLastUndoFilters, setManualLastUndoFilters] = useState<Required<RecommendationSearchFilters> | null>(null);
   const [directoryFacets, setDirectoryFacets] = useState<DirectoryFacetResponse | null>(null);
   const [directoryFacetsLoading, setDirectoryFacetsLoading] = useState(false);
-  const [directorySelections, setDirectorySelections] = useState<DirectorySelection[]>([]);
+  const [facetLabels, setFacetLabels] = useState<Record<string, string>>({});
+  const directorySeq = useRef(0);
+  const directoryBootRef = useRef(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   // Grant Studio is plan-gated. When the tenant's plan excludes it, the
   // "begin writing" affordances are hidden rather than 403-ing on click.
@@ -154,199 +189,151 @@ export default function FinderPage() {
       .catch(() => undefined);
   }, [authFetch, user]);
 
-  async function loadManualDirectory(
-    nextQuery = manualQuery,
-    nextFilters = manualFilters,
-    nextPage = manualPage,
-    nextPreferences = preferences
+  function writeDirectoryUrl(query: string, filters: DirectoryFilters, page: number) {
+    const kept = Object.fromEntries(Object.entries(router.query).filter(([key]) => !DIRECTORY_URL_KEYS.includes(key)));
+    const encoded = encodeDirectoryFilters(filters);
+    const next = {
+      ...kept,
+      tab: 'directory',
+      ...(query ? { q: query } : {}),
+      ...(encoded ? { f: encoded } : {}),
+      ...(page > 1 ? { page: String(page) } : {}),
+    };
+    router.replace({ pathname: router.pathname, query: next }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
+  }
+
+  /**
+   * Loads the directory for a query, filters and page. Facets are reloaded
+   * unless only the page or the order changed. A newer request wins: a
+   * response that arrives after a later click is dropped.
+   */
+  async function runDirectory(
+    options: { query?: string; filters?: DirectoryFilters; page?: number; prefs?: FinderPreferenceValues; facets?: boolean; syncUrl?: boolean } = {}
   ) {
+    const query = options.query ?? manualActiveQuery;
+    const filters = options.filters ?? manualFilters;
+    const page = options.page ?? 1;
+    const prefs = options.prefs ?? preferences;
+    const withFacets = options.facets ?? true;
+    const seq = ++directorySeq.current;
+
+    setManualActiveQuery(query);
+    setManualFilters(filters);
     setManualLoading(true);
+    if (withFacets) setDirectoryFacetsLoading(true);
     setError(null);
+    if (options.syncUrl !== false) writeDirectoryUrl(query, filters, page);
+
+    const listing = apiRequest<RecommendationDirectoryResponse>(authFetch, '/api/recommendations/manual-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        page,
+        filters,
+        useEligibilityProfile: prefs.useEligibilityProfile,
+        usePublicationContext: prefs.usePublicationContext,
+      }),
+    });
+    const facetRequest = withFacets
+      ? apiRequest<DirectoryFacetResponse>(authFetch, '/api/recommendations/directory/facets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: query || undefined, filters }),
+        })
+      : null;
+
     try {
-      const response = await apiRequest<RecommendationDirectoryResponse>(authFetch, '/api/recommendations/manual-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: nextQuery,
-          page: nextPage,
-          filters: nextFilters,
-          useEligibilityProfile: nextPreferences.useEligibilityProfile,
-          usePublicationContext: nextPreferences.usePublicationContext,
-        }),
-      });
+      const response = await listing;
+      if (seq !== directorySeq.current) return;
       setManualResults(response.results);
-      setManualFilters(response.appliedFilters);
-      setManualFilterDraft(response.appliedFilters);
-      setManualActiveQuery(response.query);
       setManualPage(response.page);
       setManualTotalPages(response.totalPages);
       setManualTotalResults(response.totalResults);
       setManualHasNextPage(response.hasNextPage);
       setManualHasPreviousPage(response.hasPreviousPage);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load funding directory');
+      if (seq === directorySeq.current) setError(err instanceof Error ? err.message : 'Failed to load funding directory');
     } finally {
-      setManualLoading(false);
-    }
-  }
-
-  function buildFiltersFromSelections(
-    selections: DirectorySelection[],
-    baseFilters: Required<RecommendationSearchFilters>
-  ): { query: string; filters: Required<RecommendationSearchFilters> } {
-    const filters = { ...baseFilters };
-    const queryParts: string[] = [];
-
-    for (const sel of selections) {
-      switch (sel.dimension) {
-        case 'taxonomyArea':
-          filters.taxonomyAreaIds = [...(filters.taxonomyAreaIds || []), sel.value];
-          break;
-        case 'researchArea':
-        case 'discipline':
-          queryParts.push(sel.value);
-          break;
-        case 'country':
-          filters.eligibleCountries = [...(filters.eligibleCountries || []), sel.value];
-          break;
-        case 'fundingKind':
-          filters.fundingKinds = [...(filters.fundingKinds || []), sel.value];
-          break;
-        case 'careerStage':
-          filters.careerStages = [...(filters.careerStages || []), sel.value];
-          break;
-        case 'sponsorType':
-          filters.sponsorTypes = [...(filters.sponsorTypes || []), sel.value];
-          break;
-        case 'region':
-          filters.eligibleRegions = [...(filters.eligibleRegions || []), sel.value];
-          break;
-        case 'institutionType':
-          filters.institutionTypes = [...(filters.institutionTypes || []), sel.value];
-          break;
-        case 'funder':
-          filters.funderIds = [...(filters.funderIds || []), sel.value];
-          break;
-        case 'programmeFramework':
-          filters.programmeFrameworks = [...(filters.programmeFrameworks || []), sel.value];
-          break;
-        case 'sdgGoal':
-          filters.sdgGoals = [...(filters.sdgGoals || []), sel.value];
-          break;
-      }
+      if (seq === directorySeq.current) setManualLoading(false);
     }
 
-    return { query: queryParts.join(' '), filters };
-  }
-
-  async function loadDirectoryFacets(
-    selections: DirectorySelection[] = directorySelections,
-    extraQuery = manualQuery
-  ) {
-    setDirectoryFacetsLoading(true);
+    if (!facetRequest) return;
     try {
-      const { query: selQuery, filters } = buildFiltersFromSelections(selections, manualDefaultFilters);
-      const combinedQuery = [extraQuery, selQuery].filter(Boolean).join(' ');
-      const response = await apiRequest<DirectoryFacetResponse>(authFetch, '/api/recommendations/directory/facets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: combinedQuery || undefined, filters }),
-      });
+      const response = await facetRequest;
+      if (seq !== directorySeq.current) return;
       setDirectoryFacets(response);
+      // Remember labels, so a chosen research area or funder keeps its name
+      // in the chips after it drops out of the facet list.
+      const learned: Record<string, string> = {};
+      for (const [dimension, items] of Object.entries(response.facets)) {
+        for (const item of items) {
+          const label = dimension === 'taxonomyArea' ? item.level2Name || item.level1Name || item.label : item.label;
+          if (label) learned[`${dimension}:${item.value}`] = label;
+        }
+      }
+      setFacetLabels((previous) => ({ ...previous, ...learned }));
     } catch {
-      // facets are non-critical — silently degrade
+      // Facets are non-critical: the results are still right without counts.
     } finally {
-      setDirectoryFacetsLoading(false);
+      if (seq === directorySeq.current) setDirectoryFacetsLoading(false);
     }
   }
 
-  async function loadDirectoryWithSelections(
-    selections: DirectorySelection[],
-    searchQuery = manualQuery,
-    nextPage = 1,
-    nextPreferences = preferences
-  ) {
-    const { query: selQuery, filters } = buildFiltersFromSelections(selections, manualDefaultFilters);
-    const combinedQuery = [searchQuery, selQuery].filter(Boolean).join(' ');
-    await Promise.all([
-      loadManualDirectory(combinedQuery, filters, nextPage, nextPreferences),
-      loadDirectoryFacets(selections, searchQuery),
-    ]);
-  }
-
+  // First load: the address bar may carry a shared search (?tab=directory&q=…&f=…).
   useEffect(() => {
-    if (user) {
-      loadManualDirectory('', manualDefaultFilters, 1).catch(() => undefined);
-      loadDirectoryFacets([], '').catch(() => undefined);
-    }
+    if (!user || !router.isReady || directoryBootRef.current) return;
+    directoryBootRef.current = true;
+    const fromLink = router.query.tab === 'directory';
+    if (fromLink) setFinderTab('manual');
+    const query = typeof router.query.q === 'string' ? router.query.q.slice(0, 300) : '';
+    const page = Number(router.query.page) > 1 ? Math.floor(Number(router.query.page)) : 1;
+    setManualQuery(query);
+    runDirectory({ query, filters: decodeDirectoryFilters(router.query.f), page, syncUrl: false }).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, router.isReady]);
 
-  async function handleApplyManualFilters() {
-    setManualFilterDrawerOpen(false);
-    const previousFilters = manualFilters;
-    const advancedFilters = {
-      ...manualFilterDraft,
-      limit: manualFilterDraft.limit || manualDefaultFilters.limit,
-      sort: manualFilterDraft.sort || manualDefaultFilters.sort,
-    } as Required<RecommendationSearchFilters>;
-    const { query: selQuery } = buildFiltersFromSelections(directorySelections, advancedFilters);
-    const combinedQuery = [manualQuery, selQuery].filter(Boolean).join(' ');
-    await loadManualDirectory(combinedQuery, advancedFilters, 1);
-    if (JSON.stringify(previousFilters) !== JSON.stringify(manualFilterDraft)) {
-      setManualLastUndoFilters(previousFilters);
+  function handleSelectTab(tab: FinderTab) {
+    setFinderTab(tab);
+    if (tab === 'manual') {
+      writeDirectoryUrl(manualActiveQuery, manualFilters, manualPage);
+    } else {
+      const kept = Object.fromEntries(Object.entries(router.query).filter(([key]) => !DIRECTORY_URL_KEYS.includes(key)));
+      router.replace({ pathname: router.pathname, query: kept }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
     }
-    loadDirectoryFacets(directorySelections, manualQuery).catch(() => undefined);
   }
 
-  async function handleManualGoToPage(page: number) {
-    if (page === manualPage) return;
-    await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, page);
+  function handleDirectoryFiltersChange(next: DirectoryFilters) {
+    const withoutOrder = (filters: DirectoryFilters) => JSON.stringify({ ...filters, sort: '' });
+    runDirectory({ filters: next, facets: withoutOrder(next) !== withoutOrder(manualFilters) }).catch(() => undefined);
   }
 
-  async function handleSelectFacet(dimension: DirectoryFacetDimension, value: string, label?: string) {
-    const exists = directorySelections.some((s) => s.dimension === dimension && s.value === value);
-    if (exists) return;
-    const next = [...directorySelections, { dimension, value, label }];
-    setDirectorySelections(next);
-    await loadDirectoryWithSelections(next, manualQuery, 1);
+  function handleDirectoryClearFilters() {
+    runDirectory({ filters: { ...manualDefaultFilters, sort: manualFilters.sort } }).catch(() => undefined);
   }
 
-  async function handleRemoveFacet(dimension: DirectoryFacetDimension, value: string) {
-    const next = directorySelections.filter((s) => !(s.dimension === dimension && s.value === value));
-    setDirectorySelections(next);
-    await loadDirectoryWithSelections(next, manualQuery, 1);
+  function handleManualGoToPage(page: number) {
+    if (page === manualPage || page < 1 || page > manualTotalPages) return;
+    runDirectory({ page, facets: false }).catch(() => undefined);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  async function handleClearAllSelections() {
-    setDirectorySelections([]);
-    await loadDirectoryWithSelections([], manualQuery, 1);
+  function handleDirectorySearch() {
+    runDirectory({ query: manualQuery.trim() }).catch(() => undefined);
   }
 
-  async function handleDirectorySearch() {
-    await loadDirectoryWithSelections(directorySelections, manualQuery, 1);
-  }
-
-  async function handleDirectoryClearQuery() {
+  function handleDirectoryClearQuery() {
     setManualQuery('');
-    await loadDirectoryWithSelections(directorySelections, '', 1);
+    runDirectory({ query: '' }).catch(() => undefined);
   }
 
   async function handlePreferenceChange(value: FinderPreferenceValues) {
     setPreferences(value);
+    // Preferences rank and badge the results; they never change what
+    // matches, so the facet counts stay as they are.
     if (finderTab === 'manual') {
-      await loadDirectoryWithSelections(directorySelections, manualQuery, 1, value);
+      await runDirectory({ prefs: value, page: manualPage, facets: false });
     }
-  }
-
-  async function handleDirectoryNextPage() {
-    if (!manualHasNextPage) return;
-    await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, manualPage + 1);
-  }
-
-  async function handleDirectoryPreviousPage() {
-    if (!manualHasPreviousPage) return;
-    await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, manualPage - 1);
   }
 
   function buildFundingCallDetailHref(fundingCallId: string) {
@@ -419,7 +406,7 @@ export default function FinderPage() {
               type="button"
               role="tab"
               aria-selected={finderTab === 'ai'}
-              onClick={() => setFinderTab('ai')}
+              onClick={() => handleSelectTab('ai')}
               className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'ai' ? 'cb-tab-active' : ''}`}
             >
               <MessageSquare className="h-4 w-4" />
@@ -429,7 +416,7 @@ export default function FinderPage() {
               type="button"
               role="tab"
               aria-selected={finderTab === 'manual'}
-              onClick={() => setFinderTab('manual')}
+              onClick={() => handleSelectTab('manual')}
               className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'manual' ? 'cb-tab-active' : ''}`}
             >
               <LibraryBig className="h-4 w-4" />
@@ -454,6 +441,7 @@ export default function FinderPage() {
         {finderTab === 'manual' ? (
           <FundingDirectoryPanel
             query={manualQuery}
+            activeQuery={manualActiveQuery}
             filters={manualFilters}
             facets={directoryFacets}
             facetsLoading={directoryFacetsLoading}
@@ -464,17 +452,14 @@ export default function FinderPage() {
             totalPages={manualTotalPages}
             hasNextPage={manualHasNextPage}
             hasPreviousPage={manualHasPreviousPage}
+            facetLabels={facetLabels}
+            profileCountry={finderContext?.profile?.countryOfResidence || null}
             onQueryChange={setManualQuery}
             onRunSearch={handleDirectorySearch}
             onClearQuery={handleDirectoryClearQuery}
-            onSelectFacet={handleSelectFacet}
-            onRemoveFacet={handleRemoveFacet}
-            onClearAllSelections={handleClearAllSelections}
-            onPreviousPage={handleDirectoryPreviousPage}
-            onNextPage={handleDirectoryNextPage}
+            onFiltersChange={handleDirectoryFiltersChange}
+            onClearFilters={handleDirectoryClearFilters}
             onGoToPage={handleManualGoToPage}
-            activeSelections={directorySelections}
-            onOpenAdvancedFilters={() => setManualFilterDrawerOpen(true)}
             onBeginWriting={canUseGrantStudio ? (result) => handleBeginWritingFromCall(result.id) : undefined}
             getCallDetailsHref={(result) => buildFundingCallDetailHref(result.id)}
             preferences={preferences}
@@ -499,16 +484,6 @@ export default function FinderPage() {
           onApply={chat.handleApplyFilters}
           onClearAll={() => chat.setFilterDraft({ ...defaultFilters })}
           onClose={() => chat.setFilterDrawerOpen(false)}
-        />
-      ) : null}
-
-      {manualFilterDrawerOpen ? (
-        <FundingChatFilterDrawer
-          filters={manualFilterDraft}
-          onChange={setManualFilterDraft}
-          onApply={handleApplyManualFilters}
-          onClearAll={() => setManualFilterDraft({ ...manualDefaultFilters })}
-          onClose={() => setManualFilterDrawerOpen(false)}
         />
       ) : null}
 

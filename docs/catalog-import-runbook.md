@@ -92,6 +92,13 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    `npx tsx scripts/benchmark-call-text-search.ts` must report `0 differing`
    (the finder's UNION text match against the old OR-EXISTS form);
    `FINDER_FTS_UNION=0` switches back to the old form without a deploy.
+10. **Verify the directory filters.**
+    `npx tsx scripts/verify-directory-filters.ts --combos 300` (read-only) must
+    end `All directory filter checks pass.` It checks every filter alone, several
+    values in one filter (any of them), random combinations (all must hold), the
+    search box (all words required; `or`, `-word`, "phrases"), and that each
+    facet's count is what choosing it gives. Its `NOTE` line lists stored values
+    outside the filter vocabulary: no filter reaches those calls, so clean them.
 
 ## Existing-call backfill (only after the match-census work is live)
 

@@ -45,12 +45,19 @@ import {
   SDG_GOAL_LABELS,
 } from '../recommendations/constants';
 import { resolveCountryList } from '../geo/countries';
+import { FACET_DIMENSION_FIELD, FACET_FILTER_FIELDS, type FacetFilterField } from '../recommendations/directorySelections';
 import {
   buildCountryMatchKeys,
   createRequestHash,
   formatFundingAmount,
+  normalizeCareerStageList,
+  normalizeFundingKindList,
+  normalizeGeographyScopeList,
+  normalizeInstitutionTypeList,
   normalizeKey,
   normalizeRecommendationSearchRequest,
+  normalizeRegionList,
+  normalizeSponsorTypeList,
   normalizeWhitespace,
 } from '../recommendations/utils';
 
@@ -214,13 +221,13 @@ function buildFunderCondition(funderIds: string[]) {
   )`;
 }
 
-function buildTaxonomyAreaCondition(areaIds: string[]) {
+function buildTaxonomyAreaCondition(areaIds: string[], callId: Prisma.Sql = Prisma.raw('funding_calls.id')) {
   const ids = sqlTextArray(areaIds);
   return Prisma.sql`
     EXISTS (
       SELECT 1
       FROM funding_call_research_area_taxonomies taxonomy_filter
-      WHERE taxonomy_filter.funding_call_id = funding_calls.id
+      WHERE taxonomy_filter.funding_call_id = ${callId}
         AND taxonomy_filter.taxonomy_area_id = ANY(${ids})
     )
   `;
@@ -323,33 +330,53 @@ function importedLifecycleGuard() {
 }
 
 /**
- * Per-dimension country match for imported calls. Legacy rows keep the
- * name-list match unchanged; an imported row passes when every evaluated
- * dimension (residence, citizenship) is open to any country, unspecified, a
- * region with no member list, or names one of the requested countries.
+ * Imported calls open to applicants from at least one of the countries: for
+ * some requested country, every listed dimension (residence, citizenship, or
+ * host) admits it. This is the eligibility badge's rule (evaluateDimension in
+ * lib/funding/eligibility: anything but INELIGIBLE), so a filter and the badge
+ * cannot disagree. Per country, so "India or Kenya" does not pass a call that
+ * takes residents of India only if they are Kenyan citizens.
  */
 export function importedDimensionCountryCondition(dimensions: Array<'residence' | 'citizenship' | 'host'>, codes: string[]) {
   const codeArray = Prisma.sql`ARRAY[${Prisma.join(codes.map((code) => Prisma.sql`${code}`))}]::text[]`;
-  const parts = dimensions.map((dimension) => {
+  const admits = (dimension: 'residence' | 'citizenship' | 'host') => {
     const scope = Prisma.raw(`${dimension}_scope`);
     const list = Prisma.raw(`${dimension}_country_codes`);
     const excluded = Prisma.raw(`${dimension}_excluded_codes`);
-    // Mirrors evaluateDimension in lib/funding/eligibility: a requested
-    // country counts only if the call does not rule it out. A source
-    // exclusion is explicit ("worldwide except Iran"), so without this the
-    // call comes back from a filter for Iran and its own badge then reads
-    // "Not eligible for your profile" — the same data, two answers.
-    const notExcluded = Prisma.sql`EXISTS (SELECT 1 FROM unnest(${codeArray}) code WHERE code <> ALL(${excluded}))`;
-    const openToAny = Prisma.sql`(
-      ${scope} IS NULL OR ${scope} IN ('ANY', 'UNSPECIFIED') OR
-      (${scope} = 'REGIONS' AND cardinality(${list}) = 0)
+    // A source exclusion is explicit ("worldwide except Iran"): the call does
+    // not come back for Iran, or its own badge would then read "Not eligible".
+    return Prisma.sql`(
+      requested.code <> ALL(${excluded}) AND (
+        ${scope} IS NULL OR ${scope} IN ('ANY', 'UNSPECIFIED') OR
+        (${scope} = 'REGIONS' AND cardinality(${list}) = 0) OR
+        requested.code = ANY(${list})
+      )
     )`;
-    const listed = Prisma.sql`EXISTS (
-      SELECT 1 FROM unnest(${codeArray}) code WHERE code = ANY(${list}) AND code <> ALL(${excluded})
-    )`;
-    return Prisma.sql`((${openToAny} AND ${notExcluded}) OR ${listed})`;
-  });
-  return Prisma.sql`(import_run_id IS NOT NULL AND ${Prisma.join(parts, ' AND ')})`;
+  };
+  return Prisma.sql`(import_run_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM unnest(${codeArray}) AS requested(code)
+    WHERE ${Prisma.join(dimensions.map(admits), ' AND ')}
+  ))`;
+}
+
+/**
+ * Curated calls open to applicants from one of the countries: their country
+ * list names it, or their evaluated applicant dimension (the existing-call
+ * backfill) makes them eligible, a worldwide call above all, which the list
+ * match alone missed while its badge said "Eligible". Before the backfill the
+ * dimension is NULL and only the list counts, as before.
+ */
+function curatedCountryCondition(names: string[], codes: string[]) {
+  const listed = buildArrayAnyCondition('eligible_countries', buildCountryMatchKeys(names));
+  if (codes.length === 0) return Prisma.sql`(import_run_id IS NULL AND ${listed})`;
+  const codeArray = Prisma.sql`ARRAY[${Prisma.join(codes.map((code) => Prisma.sql`${code}`))}]::text[]`;
+  return Prisma.sql`(import_run_id IS NULL AND (${listed} OR EXISTS (
+    SELECT 1 FROM unnest(${codeArray}) AS requested(code)
+    WHERE requested.code <> ALL(applicant_excluded_codes) AND (
+      applicant_scope = 'ANY' OR
+      (applicant_scope IN ('COUNTRIES', 'REGIONS') AND requested.code = ANY(applicant_country_codes))
+    )
+  )))`;
 }
 
 function countryCodesForFilter(values: string[]) {
@@ -368,6 +395,70 @@ function countryCodesForFilter(values: string[]) {
  * that still decides, and this only breaks the tie.
  */
 const CURATED_FIRST_SQL = Prisma.sql`(import_run_id IS NULL) DESC`;
+
+/**
+ * The condition of one facet-able filter (values are alternatives), or null
+ * when nothing is chosen. Reads unqualified columns, so the directory facets
+ * can apply it to their materialized row set; callId names the row's id there.
+ */
+function facetFilterCondition(
+  field: FacetFilterField,
+  filters: Required<RecommendationSearchFilters>,
+  callId: Prisma.Sql = Prisma.raw('funding_calls.id')
+): Prisma.Sql | null {
+  const values = filters[field];
+  if (!values || values.length === 0) return null;
+  switch (field) {
+    case 'geographyScope':
+      return buildScalarAnyCondition('geography_scope', values);
+    case 'fundingKinds':
+      return buildArrayAnyCondition('funding_kinds', values);
+    case 'institutionTypes':
+      return buildArrayAnyCondition('institution_types', values);
+    case 'careerStages':
+      return buildArrayAnyCondition('career_stages', values);
+    case 'sponsorTypes':
+      return buildScalarAnyCondition('sponsor_type', values);
+    case 'eligibleRegions':
+      return buildArrayAnyCondition('eligible_regions', values);
+    case 'taxonomyAreaIds':
+      return buildTaxonomyAreaCondition(values, callId);
+    case 'funderIds':
+      return buildFunderCondition(values);
+    case 'sdgGoals':
+      return Prisma.sql`sdg_goals && ARRAY[${Prisma.join(values.map((goal) => Prisma.sql`${Number(goal)}`))}]::int[]`;
+    case 'programmeFrameworks':
+      // Prefix match on the "›" path, so a programme also matches its clusters.
+      return Prisma.sql`EXISTS (
+        SELECT 1 FROM unnest(${sqlTextArray(values)}) AS programme
+        WHERE LOWER(programme_framework) = LOWER(programme)
+           OR starts_with(LOWER(programme_framework), LOWER(programme) || ' › ')
+      )`;
+  }
+}
+
+/** Facets whose values come from a controlled vocabulary (normalizer per facet). */
+const FACET_VOCABULARY: Partial<Record<DirectoryFacetDimension, (values: string[]) => string[] | null>> = {
+  fundingKind: normalizeFundingKindList,
+  careerStage: normalizeCareerStageList,
+  institutionType: normalizeInstitutionTypeList,
+  sponsorType: normalizeSponsorTypeList,
+  region: normalizeRegionList,
+  geographyScope: normalizeGeographyScopeList,
+};
+
+/**
+ * The directory's search box: the words as typed, in web-search syntax. All
+ * words are required; `or` between words offers alternatives, `-word`
+ * excludes and "quoted words" are a phrase. No synonym expansion: that is the
+ * AI advisor's job, and OR-ing every word made "climate change india" return
+ * anything mentioning "change". A query of stop words only filters nothing.
+ */
+function directoryTextCondition(rawQuery: string) {
+  return Prisma.sql`(
+    numnode(websearch_to_tsquery('english', ${rawQuery})) = 0 OR ${buildFundingCallTextSearchCondition(rawQuery)}
+  )`;
+}
 
 function buildBaseConditions(
   normalized: NormalizedRecommendationSearchRequest,
@@ -416,64 +507,22 @@ function buildBaseConditions(
     conditions.push(buildAmountBoundCondition(filters, 'max', filters.amountMax));
   }
 
-  if (filters.geographyScope.length > 0) {
-    conditions.push(buildScalarAnyCondition('geography_scope', filters.geographyScope));
-  }
-
-  if (filters.fundingKinds.length > 0) {
-    conditions.push(buildArrayAnyCondition('funding_kinds', filters.fundingKinds));
-  }
-
-  if (filters.institutionTypes.length > 0) {
-    conditions.push(buildArrayAnyCondition('institution_types', filters.institutionTypes));
-  }
-
-  if (filters.careerStages.length > 0) {
-    conditions.push(buildArrayAnyCondition('career_stages', filters.careerStages));
-  }
-
-  if (filters.sponsorTypes.length > 0) {
-    conditions.push(buildScalarAnyCondition('sponsor_type', filters.sponsorTypes));
-  }
-
-  if (filters.taxonomyAreaIds.length > 0) {
-    conditions.push(buildTaxonomyAreaCondition(filters.taxonomyAreaIds));
-  }
-
-  if (filters.funderIds.length > 0) {
-    conditions.push(buildFunderCondition(filters.funderIds));
-  }
-
-  if (filters.sdgGoals.length > 0) {
-    conditions.push(
-      Prisma.sql`sdg_goals && ARRAY[${Prisma.join(filters.sdgGoals.map((goal) => Prisma.sql`${Number(goal)}`))}]::int[]`
-    );
-  }
-
-  if (filters.programmeFrameworks.length > 0) {
-    // Prefix match on the "›" path, so a programme also matches its clusters.
-    conditions.push(Prisma.sql`EXISTS (
-      SELECT 1 FROM unnest(${sqlTextArray(filters.programmeFrameworks)}) AS programme
-      WHERE LOWER(programme_framework) = LOWER(programme)
-         OR starts_with(LOWER(programme_framework), LOWER(programme) || ' › ')
-    )`);
+  for (const field of FACET_FILTER_FIELDS) {
+    const condition = facetFilterCondition(field, filters);
+    if (condition) conditions.push(condition);
   }
 
   if (filters.applicationLanguages.length > 0) {
     conditions.push(buildArrayAnyCondition('application_languages', filters.applicationLanguages));
   }
 
-  if (filters.eligibleRegions.length > 0) {
-    conditions.push(buildArrayAnyCondition('eligible_regions', filters.eligibleRegions));
-  }
-
   if (filters.eligibleCountries.length > 0) {
-    const legacy = buildArrayAnyCondition('eligible_countries', buildCountryMatchKeys(filters.eligibleCountries));
     const codes = countryCodesForFilter(filters.eligibleCountries);
+    const curated = curatedCountryCondition(filters.eligibleCountries, codes);
     conditions.push(
       codes.length > 0
-        ? Prisma.sql`((import_run_id IS NULL AND ${legacy}) OR ${importedDimensionCountryCondition(['residence', 'citizenship'], codes)})`
-        : legacy
+        ? Prisma.sql`(${curated} OR ${importedDimensionCountryCondition(['residence', 'citizenship'], codes)})`
+        : curated
     );
   }
 
@@ -2597,17 +2646,33 @@ Rules:
   }
 
   async getDirectoryFacets(request: DirectoryFacetRequest): Promise<DirectoryFacetResponse> {
+    const rawQuery = normalizeWhitespace(request.query || '').slice(0, 300);
     const normalized = normalizeRecommendationSearchRequest({
       inputMode: 'research_area',
-      query: { researchArea: normalizeWhitespace(request.query || '') || 'funding opportunities' },
+      query: { researchArea: rawQuery || 'funding opportunities' },
       filters: request.filters,
     });
-    const baseConditions = buildBaseConditions(normalized, false, request.access);
-    const hasQuery = Boolean(request.query?.trim()) && Boolean(normalized.normalizedQuery.fullTextQuery);
+    const filters = normalized.filters;
+
+    // Every filter that is not a facet, and the search text, narrow the row
+    // set once. Facet filters are then applied per facet: a facet's counts
+    // use every chosen facet except its own (values inside one facet are
+    // alternatives), so with "Fellowship" chosen, "Research Grant" shows the
+    // calls choosing it as well would give, not the calls that are both.
+    const withoutFacetFilters = {
+      ...normalized,
+      filters: { ...filters, ...Object.fromEntries(FACET_FILTER_FIELDS.map((field) => [field, []])) },
+    } as NormalizedRecommendationSearchRequest;
     const where = combineConditions([
-      ...baseConditions,
-      hasQuery ? buildFundingCallTextSearchCondition(normalized.normalizedQuery.fullTextQuery) : Prisma.sql`TRUE`,
+      ...buildBaseConditions(withoutFacetFilters, false, request.access),
+      rawQuery ? directoryTextCondition(rawQuery) : Prisma.sql`TRUE`,
     ]);
+    const dimensions = Object.keys(FACET_DIMENSION_FIELD) as DirectoryFacetDimension[];
+    const chosen = dimensions
+      .map((dimension) => ({ dimension, condition: facetFilterCondition(FACET_DIMENSION_FIELD[dimension], filters, Prisma.raw('matched.id')) }))
+      .filter((entry): entry is { dimension: DirectoryFacetDimension; condition: Prisma.Sql } => entry.condition !== null);
+    const exceptOwn = (dimension: DirectoryFacetDimension) =>
+      combineConditions(chosen.filter((entry) => entry.dimension !== dimension).map((entry) => entry.condition));
 
     type FacetRow = {
       dimension: string;
@@ -2620,21 +2685,37 @@ Rules:
       count: number;
     };
     const FACET_LIMIT = 30;
+    // All 53 research areas fit; funders beyond the top 30 come from the funder search.
+    const TAXONOMY_LIMIT = 80;
+    const noLevels = Prisma.sql`NULL::text AS "level1Code", NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name"`;
+    const tag = (dimension: DirectoryFacetDimension) => Prisma.raw(`'${dimension}'`);
+    const listFacet = (dimension: DirectoryFacetDimension, column: string) => Prisma.sql`
+      SELECT * FROM (
+        SELECT ${tag(dimension)} AS dimension, val AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
+        FROM matched, unnest(matched.${Prisma.raw(column)}) AS val
+        WHERE ${exceptOwn(dimension)}
+        GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
+      ) ${Prisma.raw(`facet_${dimension}`)}`;
+    const scalarFacet = (dimension: DirectoryFacetDimension, column: string) => Prisma.sql`
+      SELECT * FROM (
+        SELECT ${tag(dimension)} AS dimension, matched.${Prisma.raw(column)} AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
+        FROM matched
+        WHERE matched.${Prisma.raw(column)} IS NOT NULL AND ${exceptOwn(dimension)}
+        GROUP BY matched.${Prisma.raw(column)} ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
+      ) ${Prisma.raw(`facet_${dimension}`)}`;
 
-    // One statement: the filter (base conditions + text match) runs once into
-    // a materialized set that the total and all nine facets read. It used to
-    // run ten times, once per facet query.
+    // One statement: the shared filter runs once into a materialized set
+    // that the total and every facet read.
     const rows = await prisma.$queryRaw<FacetRow[]>(Prisma.sql`
         WITH matched AS MATERIALIZED (
-          SELECT id, disciplines, eligible_countries, funding_kinds, career_stages, sponsor_type,
-                 eligible_regions, institution_types, funder_id, programme_framework, sdg_goals
+          SELECT id, funding_kinds, career_stages, institution_types, sponsor_type, eligible_regions, geography_scope,
+                 funder_id, agency_name, "agencyName", programme_framework, sdg_goals
           FROM funding_calls
           WHERE ${where}
         )
-        SELECT 'total' AS dimension, NULL::text AS value, NULL::text AS label, NULL::text AS "level1Code",
-               NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name",
-               COUNT(*)::int AS count
+        SELECT 'total' AS dimension, NULL::text AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
         FROM matched
+        WHERE ${combineConditions(chosen.map((entry) => entry.condition))}
         UNION ALL
         SELECT * FROM (
           SELECT
@@ -2648,85 +2729,34 @@ Rules:
             taxonomy.taxonomy_level1_name AS "level1Name",
             taxonomy.taxonomy_level2_code AS "level2Code",
             taxonomy.taxonomy_level2_name AS "level2Name",
-            COUNT(*)::int AS count
+            COUNT(DISTINCT matched.id)::int AS count
           FROM matched
           INNER JOIN funding_call_research_area_taxonomies taxonomy
             ON taxonomy.funding_call_id = matched.id
+          WHERE ${exceptOwn('taxonomyArea')}
           GROUP BY taxonomy.taxonomy_area_id, taxonomy.taxonomy_level1_code, taxonomy.taxonomy_level1_name,
                    taxonomy.taxonomy_level2_code, taxonomy.taxonomy_level2_name
-          ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) tx
+          ORDER BY count DESC, value ASC LIMIT ${TAXONOMY_LIMIT}
+        ) facet_taxonomy
+        UNION ALL ${listFacet('fundingKind', 'funding_kinds')}
+        UNION ALL ${listFacet('careerStage', 'career_stages')}
+        UNION ALL ${listFacet('institutionType', 'institution_types')}
+        UNION ALL ${scalarFacet('sponsorType', 'sponsor_type')}
+        UNION ALL ${listFacet('region', 'eligible_regions')}
+        UNION ALL ${scalarFacet('geographyScope', 'geography_scope')}
         UNION ALL
         SELECT * FROM (
-          SELECT 'researchArea' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.disciplines) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) ra
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'country' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.eligible_countries) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) co
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'fundingKind' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.funding_kinds) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) fk
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'careerStage' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.career_stages) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) cs
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'discipline' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.disciplines) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) ds
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'sponsorType' AS dimension, sponsor_type AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched
-          WHERE sponsor_type IS NOT NULL
-          GROUP BY sponsor_type ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) sp
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'region' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.eligible_regions) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) rg
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'institutionType' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM matched, unnest(matched.institution_types) AS val
-          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) it
-        UNION ALL
-        SELECT * FROM (
-          SELECT 'funder' AS dimension, funder.id AS value, funder.name AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
+          SELECT 'funder' AS dimension, funder.id AS value, funder.name AS label, ${noLevels}, COUNT(*)::int AS count
           FROM matched
           INNER JOIN funders funder ON funder.id = matched.funder_id
+          WHERE ${exceptOwn('funder')}
           GROUP BY funder.id, funder.name ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) fu
+        ) facet_funder
         UNION ALL
         SELECT * FROM (
           -- The programme and its first sub-level ("Horizon Europe",
           -- "Horizon Europe › Cluster 5"); the filter matches by prefix.
-          SELECT 'programmeFramework' AS dimension, prefix AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name",
+          SELECT 'programmeFramework' AS dimension, prefix AS value, NULL::text AS label, ${noLevels},
                  COUNT(DISTINCT matched.id)::int AS count
           FROM matched,
                unnest(ARRAY[
@@ -2735,54 +2765,51 @@ Rules:
                       THEN split_part(matched.programme_framework, ' › ', 1) || ' › ' || split_part(matched.programme_framework, ' › ', 2)
                  END
                ]) AS prefix
-          WHERE matched.programme_framework IS NOT NULL AND COALESCE(prefix, '') <> ''
+          WHERE matched.programme_framework IS NOT NULL AND COALESCE(prefix, '') <> '' AND ${exceptOwn('programmeFramework')}
           GROUP BY prefix ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) pf
+        ) facet_programme
         UNION ALL
         SELECT * FROM (
-          SELECT 'sdgGoal' AS dimension, goal::text AS value, NULL::text AS label, NULL::text AS "level1Code",
-                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
+          SELECT 'sdgGoal' AS dimension, goal::text AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
           FROM matched, unnest(matched.sdg_goals) AS goal
+          WHERE ${exceptOwn('sdgGoal')}
           GROUP BY goal ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
-        ) sd
+        ) facet_sdg
       `);
-    const totalRow = rows.filter((row) => row.dimension === 'total');
-    const facetRows = rows.filter((row) => row.dimension !== 'total');
 
-    const facets: Record<DirectoryFacetDimension, DirectoryFacetItem[]> = {
-      taxonomyArea: [],
-      researchArea: [],
-      country: [],
-      fundingKind: [],
-      careerStage: [],
-      discipline: [],
-      sponsorType: [],
-      region: [],
-      institutionType: [],
-      funder: [],
-      programmeFramework: [],
-      sdgGoal: [],
-    };
-
-    for (const row of facetRows) {
-      const dim = row.dimension as DirectoryFacetDimension;
-      if (facets[dim] && row.value) {
-        facets[dim].push({
-          value: row.value,
-          label:
-            row.label ||
-            (dim === 'sdgGoal' && SDG_GOAL_LABELS[row.value] ? `SDG ${row.value} · ${SDG_GOAL_LABELS[row.value]}` : undefined),
-          level1Code: row.level1Code || undefined,
-          level1Name: row.level1Name || undefined,
-          level2Code: row.level2Code || undefined,
-          level2Name: row.level2Name || undefined,
-          count: row.count,
-        });
+    const facets = Object.fromEntries(dimensions.map((dimension) => [dimension, [] as DirectoryFacetItem[]])) as Record<
+      DirectoryFacetDimension,
+      DirectoryFacetItem[]
+    >;
+    let total = 0;
+    for (const row of rows) {
+      if (row.dimension === 'total') {
+        total = row.count;
+        continue;
       }
+      const dim = row.dimension as DirectoryFacetDimension;
+      if (!facets[dim] || !row.value) continue;
+      // Controlled vocabularies: offer only values a filter can name. A stored
+      // spelling outside the vocabulary ("Think Tank") would be refused by
+      // the API, and a synonym ("Company") would filter on its canonical
+      // value ("Corporate") and show another count.
+      const canonical = FACET_VOCABULARY[dim];
+      if (canonical && canonical([row.value])?.[0] !== row.value) continue;
+      facets[dim].push({
+        value: row.value,
+        label:
+          row.label ||
+          (dim === 'sdgGoal' && SDG_GOAL_LABELS[row.value] ? `SDG ${row.value} · ${SDG_GOAL_LABELS[row.value]}` : undefined),
+        level1Code: row.level1Code || undefined,
+        level1Name: row.level1Name || undefined,
+        level2Code: row.level2Code || undefined,
+        level2Name: row.level2Name || undefined,
+        count: row.count,
+      });
     }
 
     return {
-      totalPublished: totalRow[0]?.count || 0,
+      totalPublished: total,
       facets,
     };
   }
@@ -2800,10 +2827,13 @@ Rules:
       filters: request.filters,
     }), profileContext);
     const baseConditions = buildBaseConditions(normalized, false, request.access);
-    const hasQuery = Boolean(rawQuery) && Boolean(normalized.normalizedQuery.fullTextQuery);
+    // The search box matches the words as typed; the expanded query (and any
+    // profile terms) only rank, so preferences never change what matches.
+    const textQuery = rawQuery.slice(0, 300);
+    const hasQuery = Boolean(textQuery);
     const where = combineConditions([
       ...baseConditions,
-      hasQuery ? buildFundingCallTextSearchCondition(normalized.normalizedQuery.fullTextQuery) : Prisma.sql`TRUE`,
+      hasQuery ? directoryTextCondition(textQuery) : Prisma.sql`TRUE`,
     ]);
     const page = Math.max(request.page || 1, 1);
     const pageSize = normalized.filters.limit;
@@ -2827,7 +2857,7 @@ Rules:
             SELECT
               ${selectCandidateColumns()},
               0::float AS "semanticSimilarity",
-              ts_rank_cd(ts_document, websearch_to_tsquery('english', ${normalized.normalizedQuery.fullTextQuery})) AS "textRank"
+              ts_rank_cd(ts_document, websearch_to_tsquery('english', ${textQuery})) AS "textRank"
             FROM funding_calls
             WHERE ${where}
             ORDER BY ${
