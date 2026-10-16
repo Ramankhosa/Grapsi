@@ -944,11 +944,16 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   applicationLanguages: 'Application languages',
   sponsorTypes: 'Sponsor types',
   taxonomyAreaIds: 'Research taxonomy',
+  funderIds: 'Funders',
+  sdgGoals: 'SDGs',
+  programmeFrameworks: 'Programmes',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
   amountMin: 'Minimum amount',
   amountMax: 'Maximum amount',
+  amountCurrency: 'Amount currency',
+  includeUnknownAmount: 'Unknown amounts',
 };
 
 const TOPIC_PIVOT_STOP_WORDS = new Set([
@@ -984,6 +989,15 @@ function formatFilterDescription(
       return filters.amountMin !== null ? `${label}: ${filters.amountMin}` : null;
     case 'amountMax':
       return filters.amountMax !== null ? `${label}: ${filters.amountMax}` : null;
+    case 'amountCurrency':
+      return filters.amountCurrency ? `${label}: ${filters.amountCurrency}` : null;
+    case 'includeUnknownAmount':
+      return filters.includeUnknownAmount ? 'Including calls with unknown amounts' : null;
+    // Funder ids mean nothing to a reader, so the count is the honest summary.
+    case 'funderIds':
+      return filters.funderIds.length ? `${label}: ${filters.funderIds.length} selected` : null;
+    case 'sdgGoals':
+      return filters.sdgGoals.length ? `${label}: ${filters.sdgGoals.map((goal) => `SDG ${goal}`).slice(0, 3).join(', ')}` : null;
     default: {
       const value = filters[key];
       if (!Array.isArray(value) || value.length === 0) {
@@ -1012,10 +1026,19 @@ function describeActiveFilters(
     'taxonomyAreaIds',
     'geographyScope',
     'funderCountries',
+    // Filters the sidebar can set that the chat cannot infer. Without them the
+    // chat said "Searching with: Country: India" while a funder, programme,
+    // SDG or currency filter was also narrowing the results, and the reader
+    // had no way to see what was cutting them down.
+    'funderIds',
+    'programmeFrameworks',
+    'sdgGoals',
     'deadlineFrom',
     'rollingOnly',
     'amountMin',
     'amountMax',
+    'amountCurrency',
+    'includeUnknownAmount',
   ];
   const seen = new Set<string>();
   const descriptions: string[] = [];

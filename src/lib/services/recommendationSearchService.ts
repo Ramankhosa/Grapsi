@@ -328,16 +328,26 @@ function importedLifecycleGuard() {
  * dimension (residence, citizenship) is open to any country, unspecified, a
  * region with no member list, or names one of the requested countries.
  */
-function importedDimensionCountryCondition(dimensions: Array<'residence' | 'citizenship' | 'host'>, codes: string[]) {
+export function importedDimensionCountryCondition(dimensions: Array<'residence' | 'citizenship' | 'host'>, codes: string[]) {
   const codeArray = Prisma.sql`ARRAY[${Prisma.join(codes.map((code) => Prisma.sql`${code}`))}]::text[]`;
   const parts = dimensions.map((dimension) => {
     const scope = Prisma.raw(`${dimension}_scope`);
     const list = Prisma.raw(`${dimension}_country_codes`);
-    return Prisma.sql`(
+    const excluded = Prisma.raw(`${dimension}_excluded_codes`);
+    // Mirrors evaluateDimension in lib/funding/eligibility: a requested
+    // country counts only if the call does not rule it out. A source
+    // exclusion is explicit ("worldwide except Iran"), so without this the
+    // call comes back from a filter for Iran and its own badge then reads
+    // "Not eligible for your profile" — the same data, two answers.
+    const notExcluded = Prisma.sql`EXISTS (SELECT 1 FROM unnest(${codeArray}) code WHERE code <> ALL(${excluded}))`;
+    const openToAny = Prisma.sql`(
       ${scope} IS NULL OR ${scope} IN ('ANY', 'UNSPECIFIED') OR
-      (${scope} = 'REGIONS' AND cardinality(${list}) = 0) OR
-      ${list} && ${codeArray}
+      (${scope} = 'REGIONS' AND cardinality(${list}) = 0)
     )`;
+    const listed = Prisma.sql`EXISTS (
+      SELECT 1 FROM unnest(${codeArray}) code WHERE code = ANY(${list}) AND code <> ALL(${excluded})
+    )`;
+    return Prisma.sql`((${openToAny} AND ${notExcluded}) OR ${listed})`;
   });
   return Prisma.sql`(import_run_id IS NOT NULL AND ${Prisma.join(parts, ' AND ')})`;
 }
@@ -345,6 +355,19 @@ function importedDimensionCountryCondition(dimensions: Array<'residence' | 'citi
 function countryCodesForFilter(values: string[]) {
   return resolveCountryList(values).codes;
 }
+
+/**
+ * Curated calls before imported catalogue calls, for the browse listing.
+ *
+ * Every imported call is inserted in one run, so all ~10,000 carry that day's
+ * `updatedAt` — newer than almost every curated call. Ordering the browse
+ * listing by recency alone put the first curated call on page 105 of the dev
+ * catalogue (2,096th of 2,104 open calls): an institution's own published
+ * calls became unreachable by browsing. It is a sort key here, not a score:
+ * where the listing has a stronger signal (a text rank, a nearer deadline)
+ * that still decides, and this only breaks the tie.
+ */
+const CURATED_FIRST_SQL = Prisma.sql`(import_run_id IS NULL) DESC`;
 
 function buildBaseConditions(
   normalized: NormalizedRecommendationSearchRequest,
@@ -1328,16 +1351,41 @@ function curatedFirstTieBreak<T extends { candidate: RecommendationCandidate; sc
   return rank(left) - rank(right);
 }
 
-function sortCandidates<T extends { candidate: RecommendationCandidate; score: number }>(
+/**
+ * Calls the viewer's own profile is explicitly ruled out of go last.
+ *
+ * Only a stated exclusion counts (the call names its countries and none of
+ * them is the viewer's) and only when the search applies the profile, which
+ * the viewer turns on. On the dev catalogue an India-based profile searching
+ * "cancer research" got 17 "Not eligible" calls in its top 25: without this
+ * the imported catalogue pushes calls nobody at the institution can apply for
+ * onto the first page. NEEDS_CHECK is never demoted — missing information is
+ * not a disqualification. FINDER_DEMOTE_INELIGIBLE=0 turns it off.
+ */
+function ineligibleDemotion<T extends { candidate: RecommendationCandidate }>(
+  item: T,
+  applicant: ApplicantGeography | null
+): number {
+  if (!applicant || process.env.FINDER_DEMOTE_INELIGIBLE === '0') return 0;
+  return eligibilityVerdictFor(item.candidate, applicant) === 'INELIGIBLE' ? 1 : 0;
+}
+
+export function sortCandidates<T extends { candidate: RecommendationCandidate; score: number }>(
   candidates: T[],
   normalized: NormalizedRecommendationSearchRequest,
   applicant: ApplicantGeography | null = null
 ): T[] {
+  const demote = (left: T, right: T) => ineligibleDemotion(left, applicant) - ineligibleDemotion(right, applicant);
   if (normalized.filters.sort === 'deadline_soonest') {
     const allRolling = candidates.every((item) => item.candidate.isRolling || !item.candidate.closeDate);
     return candidates.sort((left, right) => {
       const leftDate = parseDateValue(left.candidate.closeDate);
       const rightDate = parseDateValue(right.candidate.closeDate);
+
+      const demoted = demote(left, right);
+      if (demoted !== 0) {
+        return demoted;
+      }
 
       if (!allRolling) {
         if (leftDate && rightDate) {
@@ -1361,12 +1409,18 @@ function sortCandidates<T extends { candidate: RecommendationCandidate; score: n
   if (process.env.FINDER_RANK_CURATED_FIRST === '1') {
     return candidates.sort(
       (left, right) =>
+        demote(left, right) ||
         curatedFirstTieBreak(left, right, applicant) ||
         right.score - left.score ||
         left.candidate.schemeTitle.localeCompare(right.candidate.schemeTitle)
     );
   }
-  return candidates.sort((left, right) => right.score - left.score || left.candidate.schemeTitle.localeCompare(right.candidate.schemeTitle));
+  return candidates.sort(
+    (left, right) =>
+      demote(left, right) ||
+      right.score - left.score ||
+      left.candidate.schemeTitle.localeCompare(right.candidate.schemeTitle)
+  );
 }
 
 function buildResearchAreaEnrichmentCacheInput(
@@ -2778,8 +2832,8 @@ Rules:
             WHERE ${where}
             ORDER BY ${
               normalized.filters.sort === 'deadline_soonest'
-                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, "textRank" DESC, scheme_title ASC`
-                : Prisma.sql`"textRank" DESC, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
+                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, ${CURATED_FIRST_SQL}, "textRank" DESC, scheme_title ASC`
+                : Prisma.sql`"textRank" DESC, ${CURATED_FIRST_SQL}, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
             }
             LIMIT ${pageSize}
             OFFSET ${safeOffset}
@@ -2795,8 +2849,8 @@ Rules:
             WHERE ${where}
             ORDER BY ${
               normalized.filters.sort === 'deadline_soonest'
-                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, "updatedAt" DESC NULLS LAST, scheme_title ASC`
-                : Prisma.sql`"updatedAt" DESC NULLS LAST, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
+                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, ${CURATED_FIRST_SQL}, "updatedAt" DESC NULLS LAST, scheme_title ASC`
+                : Prisma.sql`${CURATED_FIRST_SQL}, "updatedAt" DESC NULLS LAST, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
             }
             LIMIT ${pageSize}
             OFFSET ${safeOffset}
