@@ -221,16 +221,25 @@ export function buildMaintainedValues(call: NormalizedExternalCall, ctx: { funde
  * Hash of everything an import would write, minus the values that depend on
  * today's date (lifecycle status, next deadline): those are display copies a
  * refresh recomputes, and including them would make every daily re-run look
- * like a change. Mapping-rule versions are included on purpose.
+ * like a change. Mapping-rule versions are included on purpose, and so is the
+ * FX rate the call's USD estimate uses: a refreshed rate re-processes exactly
+ * the calls in that currency. Calls with no rate hash as they always did.
  */
-function changeHash(call: NormalizedExternalCall, versions: Record<string, string>): string {
+function changeHash(call: NormalizedExternalCall, versions: Record<string, string>, fx?: string | null): string {
   const { rawPayload: _raw, lifecycle, ...rest } = call
   const { status: _status, nextDeadline: _next, ...stableLifecycle } = lifecycle
   return crypto
     .createHash('sha256')
-    .update(stableJson({ normalized: { ...rest, lifecycle: stableLifecycle }, importer: IMPORTER_VERSION, versions }))
+    .update(stableJson({ normalized: { ...rest, lifecycle: stableLifecycle }, importer: IMPORTER_VERSION, versions, ...(fx ? { fx } : {}) }))
     .digest('hex')
 }
+
+/**
+ * Columns recomputed from reference data (FX rates), not from the source. A
+ * change to these alone is not an edit of the call, so it keeps its updatedAt
+ * (an FX refresh must not make 7k calls "recently updated").
+ */
+const DERIVED_FIELDS = new Set(['amount_min_usd_est', 'amount_max_usd_est', 'fx_rate_used', 'fx_as_of'])
 
 async function resolveOperator(db: PrismaClient, email: string | null | undefined) {
   if (!email) return { id: 'system:catalog-import', email: null as string | null }
@@ -792,9 +801,9 @@ async function writeCalls(
   async function writeCallBatch(batch: NormalizedExternalCall[]) {
     await db.$transaction(async (tx) => {
       for (const call of batch) {
-        const hash = changeHash(call, input.versions)
         const funderId = call.funderExternalIds[0] ? input.funderIdByExternal.get(call.funderExternalIds[0]) || null : null
         const rate = call.amount.currency ? rates.get(call.amount.currency) : undefined
+        const hash = changeHash(call, input.versions, rate ? `${rate.asOf}:${rate.usdPerUnit}` : null)
         const values = buildMaintainedValues(call, { funderId, usdPerUnit: rate?.usdPerUnit ?? null, fxAsOf: rate?.asOf ?? null })
         const previous = priorByExternal.get(call.externalId)
 
@@ -844,7 +853,12 @@ async function writeCalls(
             }
           }
           if (Object.keys(data).length > 0) {
-            await tx.fundingCall.update({ where: { id: current.id }, data: { ...(data as any), updatedByUserId: input.operatorId } })
+            const derivedOnly = Object.keys(data).every((field) => DERIVED_FIELDS.has(field))
+            await tx.fundingCall.update({
+              where: { id: current.id },
+              // An explicit updatedAt is kept as given by Prisma's @updatedAt.
+              data: derivedOnly ? { ...(data as any), updatedAt: current.updatedAt } : { ...(data as any), updatedByUserId: input.operatorId },
+            })
             updated++
           }
           if (conflictFields.length > 0) {
