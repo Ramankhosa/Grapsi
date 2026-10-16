@@ -95,14 +95,32 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-/** Up to MAX_DOCUMENTS PDF/DOCX links on the same site as the page. */
-export function findDocumentLinks(html: string, pageUrl: string): string[] {
+/** Site furniture, not call material: legal pages, corporate reports, policies. */
+const IRRELEVANT_DOCUMENT = /(privacy|cookie|terms[-_ ]?of[-_ ]?(use|service)|legal|imprint|impressum|disclaimer|transparency|supply[-_ ]?chain|modern[-_ ]?slavery|annual[-_ ]?report|financial[-_ ]?statement|press|media[-_ ]?kit|brochure|accessibility|code[-_ ]?of[-_ ]?conduct|\bmsa\b|attestation|sustainability[-_ ]?report)/i
+/** What call documents are called, in the languages the catalogue carries. */
+const CALL_DOCUMENT = /(guideline|guidance|call|application|apply|applicant|programme|program|rules|regulation|terms[-_ ]?of[-_ ]?reference|\btor\b|handbook|manual|faq|form|template|eligib|instruction|announcement|criteria|ausschreibung|richtlinie|bekanntmachung|leitfaden|merkblatt|appel|reglement|r[eè]glement|convocatoria|bases|edital|chamada|regulamento|utlysning|oproep)/i
+
+/**
+ * Up to MAX_DOCUMENTS PDF/DOCX links on the same site as the page that look
+ * like this call's material: never footer/navigation links or legal and
+ * corporate documents, and only links whose text or address reads like call
+ * documents (or names the call). A funder site's footer PDFs ("Transparency
+ * in Supply Chains Act") would otherwise become the call's "guidelines".
+ */
+export function findDocumentLinks(html: string, pageUrl: string, title = ''): string[] {
   const page = new URL(pageUrl)
   const $ = cheerio.load(html)
+  const titleWords = new Set(words(title.replace(/\([^)]*\)/g, ' ')))
   const links: string[] = []
   $('a[href]').each((_, element) => {
     if (links.length >= MAX_DOCUMENTS) return
+    if ($(element).closest('footer, nav, header, [role="contentinfo"], [role="navigation"], [role="banner"]').length > 0) return
+    const label = `${$(element).text()} ${$(element).attr('title') || ''} ${$(element).attr('aria-label') || ''}`
     const href = String($(element).attr('href') || '').trim()
+    const describes = `${label} ${decodeURIComponent(href.split('?')[0] || '')}`
+    if (IRRELEVANT_DOCUMENT.test(describes)) return
+    const namesCall = words(describes).some((word) => titleWords.has(word))
+    if (!CALL_DOCUMENT.test(describes) && !namesCall) return
     if (!href || href.startsWith('#') || href.startsWith('mailto:')) return
     let target: URL
     try {
@@ -246,14 +264,14 @@ export async function enrichImportedCall(input: {
       documentIds.push(pageDoc.document.id)
     }
     const html = await fetchHtml(finalUrl)
-    for (const link of html ? findDocumentLinks(html, finalUrl) : []) {
+    for (const link of html ? findDocumentLinks(html, finalUrl, outcome.title) : []) {
       try {
         if (!(await politeFetchGate(link))) continue
         const document = await ingestFundingDocumentFromUrl(callId, link, operator, { documentKind: 'guideline_document', deferProcessing: true })
         if (!document.duplicate) await inserted('funding_call_documents', document.documentId)
         documentIds.push(document.documentId)
       } catch (error) {
-        log(`    document skipped (${link}): ${error instanceof Error ? error.message.slice(0, 120) : error}`)
+        log(`    document skipped (${link}): ${error instanceof Error ? error.message.replace(/\s+/g, ' ').slice(-240) : error}`)
       }
     }
     for (const documentId of documentIds) {
@@ -263,6 +281,19 @@ export async function enrichImportedCall(input: {
       await fundingDocumentService.embedDocumentChunks(documentId).catch(() => undefined)
     }
     outcome.documents = documentIds.length
+
+    // Nothing to read (a script-rendered portal, a login wall): the gate would
+    // fail anyway, so spend no LLM calls on it.
+    if (pageText.length < 200 && documentIds.length === 0) {
+      outcome.reasons = [`page text too short (${pageText.length} chars) and no documents`]
+      await db.fundingImportCandidate.upsert({
+        where: { dedupe_key: `enrich:${callId}` },
+        update: { run_id: runId, signals: { reasons: outcome.reasons, page: finalUrl } as never, resolution: 'pending' },
+        create: { run_id: runId, dedupe_key: `enrich:${callId}`, reason: 'ENRICHMENT_REVIEW', tier: 'INFO', subject_call_id: callId, signals: { reasons: outcome.reasons, page: finalUrl } as never, blocks_release: false },
+      })
+      await mergeEnrichmentMetadata(db, callId, { status: 'needs_review', at: new Date().toISOString(), run_id: runId, reasons: outcome.reasons })
+      return { ...outcome, status: 'NEEDS_REVIEW' }
+    }
 
     const llmContext = { tenantId: operator.tenantId ?? null, userId: operator.userId }
     let description: string | null = null

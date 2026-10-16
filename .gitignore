@@ -99,3 +99,5 @@ restore-*.js
 # LLM seed scripts (already in Seed folder)
 scripts/seed-llm-models.ts
 scripts/test-*.ts
+
+storage/enrichment-reports/

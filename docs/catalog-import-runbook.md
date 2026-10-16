@@ -126,6 +126,28 @@ lists unresolved names) then `--apply`. Profile saves keep them in step after.
 After it, curated calls' stated country eligibility also gates alerts and
 shows badges, and the funder filter matches them by funder link.
 
+## Enrichment (official guidelines for catalogue calls)
+
+`scripts/enrich-catalog-calls.ts` fetches each eligible call's official page
+(robots.txt respected, one request per funder site every 6 s) and up to four
+call documents linked from it, extracts a description and guidelines, and
+gates the result. Pass: `enrichment_level = ENRICHED`, description owned by
+`official_page` (re-imports never overwrite it). Fail: an `ENRICHMENT_REVIEW`
+item in the import review, call stays LITE. LLM cost is logged to the
+PLATFORM tenant.
+
+1. `npx tsx scripts/enrich-catalog-calls.ts --dry-run --sample --limit 20`
+2. Sample: `--apply --sample --limit 20 --confirm-target <db> --operator-email <super admin>`
+   — read the cost report (`storage/enrichment-reports/enrich-<run>.json`):
+   LLM calls, tokens, cost, gate pass rate and the projection for all
+   eligible calls. **Decide before the full batch.**
+3. Batch: same without `--sample`, with `--limit` in chunks (calls with two
+   weeks or more left go first). Resumable; failures retry with backoff.
+4. Re-embed the enriched calls: `npx tsx scripts/embed-catalog-calls.ts`
+   (their description changed).
+5. Undo a run: `--rollback <runId> --confirm-target <db>` (deletes its
+   documents, guidelines and review items, restores the call columns).
+
 ## Behaviour changes to announce
 
 - **Funding alerts reach more institutions.** A global call used to be matched
