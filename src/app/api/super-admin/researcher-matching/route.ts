@@ -3,6 +3,17 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { researcherSearchService } from '@/lib/services/researcherSearchService'
 import { prisma } from '@/lib/prisma'
 
+/**
+ * The curated catalog only.
+ *
+ * The imported external catalogue (GLOBAL_CATALOG, ~10,000 calls, all created
+ * in one run) would otherwise fill this picker — it is ordered by updatedAt —
+ * and the stat tile would count it as published platform calls. Matching a
+ * catalogue call here would also spend reranker budget on a call nobody has
+ * curated and that never alerts anyone.
+ */
+const CURATED_ONLY = { NOT: { visibility: 'GLOBAL_CATALOG' as const } }
+
 async function verifySuperAdmin(request: NextRequest) {
   const authResult = await authenticateUser(request)
   if (!authResult.user) {
@@ -37,7 +48,7 @@ export async function GET(request: NextRequest) {
       prisma.researcherProfile.count(),
       prisma.$queryRaw<[{ count: bigint }]>`SELECT COUNT(*) as count FROM researcher_saved_research_areas`,
       prisma.referenceLibrary.count({ where: { tags: { has: 'my-publication' }, isActive: true } }),
-      prisma.fundingCall.count({ where: { status: 'PUBLISHED' } }),
+      prisma.fundingCall.count({ where: { status: 'PUBLISHED', ...CURATED_ONLY } }),
     ])
 
     const [profilesWithEmbedding, areasWithEmbedding, pubsWithEmbedding] = await Promise.all([
@@ -71,7 +82,7 @@ export async function GET(request: NextRequest) {
   const q = searchParams.get('q') || ''
   const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
 
-  const where: any = { status: 'PUBLISHED' }
+  const where: any = { status: 'PUBLISHED', ...CURATED_ONLY }
   if (q) {
     where.OR = [
       { title: { contains: q, mode: 'insensitive' } },

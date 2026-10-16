@@ -55,6 +55,8 @@ export interface CatalogWipeImpact {
   publishedCalls: number;
   draftCalls: number;
   archivedCalls: number;
+  /** Rows created by a catalogue import run; a wipe destroys them too. */
+  importedCalls: number;
   otherCalls: number;
   grantSessions: number;
   grantPrepSessionsDetached: number;
@@ -454,6 +456,16 @@ export class FundingCatalogService {
     return getFundingCallEmbeddingHealth();
   }
 
+  /**
+   * Embedding coverage of the curated catalog.
+   *
+   * The imported external catalogue is excluded for the same reason
+   * `listCallsNeedingEmbedding` excludes it: it is embedded in bulk by
+   * scripts/embed-catalog-calls.ts, 128 documents per request. Counted here it
+   * would report thousands of calls as missing an embedding that the repair
+   * path deliberately will not touch, so the one number on the dashboard that
+   * should mean "act on this" would never return to zero.
+   */
   async getEmbeddingCoverageSummary(): Promise<FundingEmbeddingCoverageSummary> {
     const currentEmbeddingVersion = getFundingCallEmbeddingVersion();
     const rows = await prisma.$queryRaw<
@@ -469,10 +481,12 @@ export class FundingCatalogService {
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
+            AND visibility::text <> 'GLOBAL_CATALOG'
         ) AS "publishedActiveTotal",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
+            AND visibility::text <> 'GLOBAL_CATALOG'
             AND ${fundingCallEmbeddingColumnSql()} IS NOT NULL
             AND COALESCE(metadata ->> 'embedding_status', '') = 'generated'
             AND COALESCE(metadata ->> 'embedding_version', '') = ${currentEmbeddingVersion}
@@ -480,16 +494,19 @@ export class FundingCatalogService {
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
+            AND visibility::text <> 'GLOBAL_CATALOG'
             AND ${fundingCallEmbeddingColumnSql()} IS NULL
         ) AS "publishedActiveMissingEmbedding",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
+            AND visibility::text <> 'GLOBAL_CATALOG'
             AND COALESCE(metadata ->> 'embedding_status', '') = 'failed'
         ) AS "publishedActiveFailedEmbedding",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
+            AND visibility::text <> 'GLOBAL_CATALOG'
             AND ${fundingCallEmbeddingColumnSql()} IS NOT NULL
             AND (
               COALESCE(metadata ->> 'embedding_status', '') <> 'generated'
@@ -1090,12 +1107,16 @@ export class FundingCatalogService {
    * numbers before the operator types the arming phrase.
    */
   async getCatalogWipeImpact(): Promise<CatalogWipeImpact> {
-    const [totalCalls, publishedCalls, draftCalls, archivedCalls, grantSessions, grantPrepSessionsDetached, intakeJobs, intakeBatches, callDocuments] =
+    const [totalCalls, publishedCalls, draftCalls, archivedCalls, importedCalls, grantSessions, grantPrepSessionsDetached, intakeJobs, intakeBatches, callDocuments] =
       await Promise.all([
         prisma.fundingCall.count(),
         prisma.fundingCall.count({ where: { catalog_status: 'PUBLISHED' } }),
         prisma.fundingCall.count({ where: { catalog_status: 'DRAFT' } }),
         prisma.fundingCall.count({ where: { catalog_status: 'ARCHIVED' } }),
+        // The wipe deletes the imported external catalogue as well, and an
+        // import rollback cannot bring it back once the rows are gone. The
+        // operator has to see that number before typing the arming phrase.
+        prisma.fundingCall.count({ where: { import_run_id: { not: null } } }),
         prisma.grantSession.count(),
         prisma.grantPrepSession.count({ where: { funding_call_id: { not: null } } }),
         prisma.fundingIntakeJob.count(),
@@ -1108,6 +1129,7 @@ export class FundingCatalogService {
       publishedCalls,
       draftCalls,
       archivedCalls,
+      importedCalls,
       otherCalls: Math.max(0, totalCalls - publishedCalls - draftCalls - archivedCalls),
       grantSessions,
       grantPrepSessionsDetached,

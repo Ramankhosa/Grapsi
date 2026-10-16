@@ -88,6 +88,7 @@ type WipeImpact = {
   publishedCalls: number;
   draftCalls: number;
   archivedCalls: number;
+  importedCalls: number;
   otherCalls: number;
   grantSessions: number;
   grantPrepSessionsDetached: number;
@@ -1557,6 +1558,12 @@ export default function FundingIntakeAdminPage() {
                     {wipeImpact.publishedCalls} published · {wipeImpact.draftCalls} draft · {wipeImpact.archivedCalls} archived
                     {wipeImpact.otherCalls > 0 ? ` · ${wipeImpact.otherCalls} other` : ''}
                   </div>
+                  {wipeImpact.importedCalls > 0 ? (
+                    <div className="mt-1 text-xs font-semibold text-rose-900">
+                      Includes {wipeImpact.importedCalls.toLocaleString()} imported external-catalogue calls. Deleting them
+                      cannot be undone by an import rollback; the snapshot has to be imported again.
+                    </div>
+                  ) : null}
                 </div>
                 <div className="rounded-xl bg-rose-50 p-4">
                   <div className="text-xs uppercase tracking-[0.18em] text-rose-700">Grant sessions deleted</div>
