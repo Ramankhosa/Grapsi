@@ -242,6 +242,31 @@ function buildSearchableDocument(values: FundingDraftValues): string {
     .join('\n');
 }
 
+/**
+ * What a funding call's stored embedding is built from and where it goes, for
+ * bulk jobs (scripts/embed-catalog-calls.ts) that must produce exactly what a
+ * publish would: same text, same title hint, same version, same column.
+ */
+export function fundingCallEmbeddingInput(call: PrismaFundingCall): { text: string; title: string } {
+  const values = buildDraftValuesFromCall(call);
+  return {
+    text: buildSearchableDocument(values),
+    title: [values.scheme_title, values.agency_name].filter(Boolean).join(' - '),
+  };
+}
+
+export function fundingCallEmbeddingTarget() {
+  const health = getFundingCallEmbeddingHealth();
+  return {
+    version: getFundingCallEmbeddingVersion(),
+    column: getFundingCallEmbeddingColumn() as 'embedding' | 'embedding_voyage_1024',
+    provider: health.provider,
+    modelName: health.modelName,
+    outputDimensionality: health.outputDimensionality,
+    taskType: FUNDING_CALL_EMBEDDING_TASK_TYPE,
+  };
+}
+
 function getFundingCallEmbeddingVersion() {
   const health = getFundingCallEmbeddingHealth();
   return `${FUNDING_CALL_EMBEDDING_VERSION_PREFIX}:${health.provider}:${health.modelName}:${FUNDING_CALL_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
@@ -552,12 +577,18 @@ export class FundingCatalogService {
         FROM funding_calls
         WHERE catalog_status = 'PUBLISHED'
           AND COALESCE(is_active, true) = true
+          -- The imported catalogue is embedded in bulk by
+          -- scripts/embed-catalog-calls.ts, not one request at a time here.
+          AND visibility::text <> 'GLOBAL_CATALOG'
           AND (
             ${fundingCallEmbeddingColumnSql()} IS NULL
             OR COALESCE(metadata ->> 'embedding_status', '') = 'failed'
             OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
           )
-        ORDER BY "updatedAt" DESC
+        -- Least recently attempted first. Ordering by updatedAt let calls
+        -- that just failed (their metadata write bumps updatedAt) jump the
+        -- queue on every run and starve the rest.
+        ORDER BY COALESCE(metadata ->> 'embedding_updated_at', '') ASC, id ASC
         LIMIT ${Math.max(1, Math.min(limit, 100))}
       `
     );

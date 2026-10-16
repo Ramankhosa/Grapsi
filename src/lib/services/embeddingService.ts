@@ -447,6 +447,81 @@ export class EmbeddingService {
   }
   
   /**
+   * Embeds many DOCUMENTS in one provider request (Voyage `input[]`, Google
+   * `batchEmbedContents`). Used by bulk jobs such as embedding the imported
+   * catalogue, where one request per call would take hours. Returns vectors
+   * in input order; on failure returns `error` and no vectors, so the caller
+   * can stop and resume later. Honours the kill switch, circuit breaker and
+   * throttle like single requests. Not metered: platform jobs only.
+   */
+  async generateDocumentEmbeddingsBatch(
+    items: Array<{ text: string; title?: string | null }>,
+    options: EmbeddingGenerationOptions = {}
+  ): Promise<{ embeddings: number[][]; modelName?: string; outputDimensionality?: number; provider: EmbeddingProvider; error?: string }> {
+    const provider = this.provider
+    if (items.length === 0) return { embeddings: [], provider }
+    if (this.isGenerationDisabled()) return { embeddings: [], provider, error: 'Embedding generation is disabled by EMBEDDING_GENERATION_ENABLED=false' }
+    if (this.isCircuitOpen()) return { embeddings: [], provider, error: 'Embedding provider circuit is temporarily open' }
+    const documentOptions: EmbeddingGenerationOptions = { ...options, taskType: 'RETRIEVAL_DOCUMENT', inputType: 'document' }
+    const modelName = this.resolveModelName(documentOptions)
+    const outputDimensionality = options.outputDimensionality || this.outputDimensionality
+    try {
+      await this.waitForThrottleSlot()
+      let embeddings: number[][] = []
+      if (provider === 'voyage') {
+        if (!this.voyageApiKey) return { embeddings: [], provider, error: 'Voyage API key not configured' }
+        const response = await axios.post(
+          this.voyageApiUrl,
+          {
+            input: items.map((item) => item.text),
+            model: modelName,
+            input_type: 'document',
+            output_dimension: outputDimensionality,
+            output_dtype: 'float',
+            truncation: true,
+          },
+          { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.voyageApiKey}` }, timeout: EMBEDDING_REQUEST_TIMEOUT_MS * 3 }
+        )
+        const data: Array<{ index?: number; embedding?: number[] }> = Array.isArray(response.data?.data) ? response.data.data : []
+        embeddings = new Array(items.length)
+        data.forEach((row, position) => {
+          embeddings[typeof row.index === 'number' ? row.index : position] = row.embedding || []
+        })
+      } else {
+        if (!this.apiKey) return { embeddings: [], provider, error: 'API key not configured' }
+        const response = await axios.post(
+          `${this.apiUrl}/${modelName}:batchEmbedContents`,
+          {
+            requests: items.map((item) => {
+              const title = normalizeTitle(item.title)
+              return {
+                model: `models/${modelName}`,
+                content: { parts: [{ text: item.text }] },
+                taskType: 'RETRIEVAL_DOCUMENT',
+                ...(title ? { title } : {}),
+                outputDimensionality,
+              }
+            }),
+          },
+          { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey }, timeout: EMBEDDING_REQUEST_TIMEOUT_MS * 3 }
+        )
+        embeddings = (Array.isArray(response.data?.embeddings) ? response.data.embeddings : []).map((row: { values?: number[] }) => row.values || [])
+      }
+      if (embeddings.length !== items.length || embeddings.some((vector) => !Array.isArray(vector) || vector.length === 0)) {
+        const message = `Batch embedding returned ${embeddings.filter((v) => v && v.length).length} of ${items.length} vectors`
+        this.registerFailure(message)
+        return { embeddings: [], provider, error: message }
+      }
+      this.registerSuccess()
+      return { embeddings, modelName, outputDimensionality, provider }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.registerFailure(message)
+      return { embeddings: [], provider, error: message }
+    }
+  }
+
+  /**
    * Generate embeddings for a batch of texts (for efficiency)
    * 
    * @param texts - Array of texts to generate embeddings for
