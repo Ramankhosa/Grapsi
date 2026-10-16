@@ -28,6 +28,8 @@ import { MAX_SELECTED_RESEARCH_AREAS } from '../recommendations/constants';
 import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 import { fundingPublicationService } from '../researcherProfile/funding-publications';
+import { countryNameFor, resolveCountryList } from '@/lib/geo/countries';
+import { getTenantLocale } from '@/lib/tenant/locale';
 
 const embeddingService = new EmbeddingService();
 const RESEARCH_AREA_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
@@ -346,15 +348,29 @@ async function queryResearcherProfileEmbeddingByUserId(userId: string): Promise<
   return rows[0] || null;
 }
 
-function buildProfileDefaultFilters(profile: ResearcherProfileRecord): RecommendationSearchFilters {
+/** The user's organization country as a name ("India"), for profile defaults. */
+async function organizationCountryName(userId: string): Promise<string | null> {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true } });
+    if (!user?.tenantId) return null;
+    return countryNameFor((await getTenantLocale(user.tenantId)).countryCode);
+  } catch {
+    return null;
+  }
+}
+
+function buildProfileDefaultFilters(profile: ResearcherProfileRecord, fallbackCountry: string | null = null): RecommendationSearchFilters {
   const filters: RecommendationSearchFilters = {
     includeExpired: false,
     limit: 10,
     sort: 'best_match',
   };
 
+  // A profile with no country at all searches as the organization's country
+  // (India unless the tenant set another) rather than as "anywhere".
+  const profileCountries = [profile.countryOfResidence, ...profile.citizenshipCountries].filter(Boolean);
   const countryCandidates = normalizeCountryList(
-    [profile.countryOfResidence, ...profile.citizenshipCountries].filter(Boolean)
+    profileCountries.length > 0 ? profileCountries : fallbackCountry ? [fallbackCountry] : []
   );
   if (countryCandidates && countryCandidates.length > 0) {
     filters.eligibleCountries = countryCandidates;
@@ -593,6 +609,11 @@ export class ResearcherProfileService {
   ): Promise<ResearcherProfilePayload> {
     const normalizedCountries = normalizeCountryList(input.profile.citizenshipCountries) || normalizeTextArray(input.profile.citizenshipCountries);
     const residence = input.profile.countryOfResidence ? normalizeCountryInput(input.profile.countryOfResidence) || normalizeWhitespace(input.profile.countryOfResidence) : null;
+    // ISO codes beside the names (names stay what the profile shows): one code
+    // for residence only when the name resolves to exactly one country.
+    const residenceCodes = residence ? resolveCountryList([residence]).codes : [];
+    const residenceCountryCode = residenceCodes.length === 1 ? residenceCodes[0] : null;
+    const citizenshipCountryCodes = resolveCountryList(normalizedCountries).codes;
     const institutionType = normalizeInstitutionTypeList(input.profile.institutionType ? [input.profile.institutionType] : [])?.[0] || normalizeWhitespace(input.profile.institutionType);
     const careerStage = normalizeCareerStageList(input.profile.careerStage ? [input.profile.careerStage] : [])?.[0] || normalizeWhitespace(input.profile.careerStage);
     const applicationLanguages = normalizeApplicationLanguageList(input.profile.applicationLanguages) || normalizeTextArray(input.profile.applicationLanguages);
@@ -612,6 +633,8 @@ export class ResearcherProfileService {
           birth_year: input.profile.birthYear,
           country_of_residence: residence,
           citizenship_countries: normalizedCountries,
+          residence_country_code: residenceCountryCode,
+          citizenship_country_codes: citizenshipCountryCodes,
           institution_name: normalizeWhitespace(input.profile.institutionName) || null,
           institution_type: institutionType || null,
           department: normalizeWhitespace(input.profile.department) || null,
@@ -631,6 +654,8 @@ export class ResearcherProfileService {
           birth_year: input.profile.birthYear,
           country_of_residence: residence,
           citizenship_countries: normalizedCountries,
+          residence_country_code: residenceCountryCode,
+          citizenship_country_codes: citizenshipCountryCodes,
           institution_name: normalizeWhitespace(input.profile.institutionName) || null,
           institution_type: institutionType || null,
           department: normalizeWhitespace(input.profile.department) || null,
@@ -956,7 +981,7 @@ export class ResearcherProfileService {
     const profileDefaultContext = defaultArea
       ? {
           query: { researchArea: defaultArea.normalizedText || defaultArea.researchArea },
-          filters: buildProfileDefaultFilters(profile.profile),
+          filters: buildProfileDefaultFilters(profile.profile, await organizationCountryName(userId)),
           sourceLabel: defaultArea.label,
           taxonomy: defaultArea.taxonomy,
         }

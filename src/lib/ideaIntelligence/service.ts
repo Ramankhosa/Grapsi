@@ -40,6 +40,8 @@ import {
 import { loadProjectRecords } from '@/lib/ideaIntelligence/projectRecords'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
+import { countryNameFor } from '@/lib/geo/countries';
+import { getTenantLocale } from '@/lib/tenant/locale';
 
 type ActorContext = {
   userId: string
@@ -2180,7 +2182,12 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
             })
           : Promise.resolve(null),
         externalEvidenceEnabled
-          ? retrieveIdeaEvidence(structured.semanticQuery, { publicationLimit: 10, patentLimit: 10, webLimit: 8 })
+          ? retrieveIdeaEvidence(structured.semanticQuery, {
+              publicationLimit: 10,
+              patentLimit: 10,
+              webLimit: 8,
+              countryName: countryNameFor((await getTenantLocale(actor.tenantId)).countryCode),
+            })
           : Promise.resolve(emptyIdeaEvidence(['publications', 'patents', 'web'])),
         anchorFundingCallId
           ? loadAnchoredFundingCall(anchorFundingCallId, actor.access)

@@ -119,6 +119,10 @@ run it before the census ships.
    (restores every value it wrote unless someone has changed it since; on dev
    the legacy search-text hash returned to its original value byte for byte).
 
+In the same window, fill profile country codes (new columns only; same
+`xmin` caveat): `npx tsx scripts/backfill-profile-country-codes.ts` (dry run,
+lists unresolved names) then `--apply`. Profile saves keep them in step after.
+
 After it, curated calls' stated country eligibility also gates alerts and
 shows badges, and the funder filter matches them by funder link.
 

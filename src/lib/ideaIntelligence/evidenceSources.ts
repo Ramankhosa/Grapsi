@@ -226,7 +226,7 @@ export function emptyIdeaEvidence(disabledSources: string[] = []): MultiSourceEv
 
 export async function retrieveIdeaEvidence(
   query: string,
-  options: { publicationLimit?: number; patentLimit?: number; webLimit?: number; flags?: IdeaSourceFlags } = {}
+  options: { publicationLimit?: number; patentLimit?: number; webLimit?: number; flags?: IdeaSourceFlags; countryName?: string | null } = {}
 ): Promise<MultiSourceEvidence> {
   const publicationLimit = Math.min(Math.max(options.publicationLimit || 10, 1), 20)
   const patentLimit = Math.min(Math.max(options.patentLimit || 10, 1), 20)
@@ -251,7 +251,7 @@ export async function retrieveIdeaEvidence(
       : Promise.resolve(null),
     flags.patents ? serpApiProvider.searchPatents({ q: query, num: patentLimit }) : Promise.resolve(null),
     flags.patents ? searchPatentnest(query, patentLimit) : Promise.resolve(null),
-    flags.web ? serpApiProvider.searchWeb({ q: `${query} research funding India`, num: webLimit }) : Promise.resolve(null),
+    flags.web ? serpApiProvider.searchWeb({ q: `${query} research funding ${options.countryName || 'India'}`, num: webLimit }) : Promise.resolve(null),
   ])
 
   const publications = publicationResult.status === 'fulfilled' && publicationResult.value

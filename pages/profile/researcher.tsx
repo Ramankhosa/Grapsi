@@ -18,6 +18,15 @@ import { useAuth } from '@/lib/auth-context';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import ResearcherWorkspaceShell from '@/components/ResearcherWorkspaceShell';
 import type { ResearcherProfilePayload } from '@/lib/researcherProfile/types';
+import { allCountryCodes, countryNameFor, resolveCountryList } from '@/lib/geo/countries'
+
+/** Country names for the residence picker (short English names, sorted). */
+const COUNTRY_NAMES = Array.from(new Set(allCountryCodes().map(countryNameFor))).sort((a, b) => a.localeCompare(b))
+
+/** Values that are neither a country nor a known token (Global, Online, EU). */
+function unrecognisedCountries(values: Array<string | null | undefined>): string[] {
+  return resolveCountryList(values.filter((value): value is string => Boolean(value && value.trim()))).unknown
+}
 
 const notificationOptions = [
   { value: 'instant', label: 'Instant' },
@@ -376,10 +385,23 @@ export default function ResearcherProfilePage() {
                 <input type="number" min={1900} max={new Date().getFullYear()} value={data.profile.birthYear ?? ''} onChange={(event) => updateProfileField('birthYear', event.target.value ? Number(event.target.value) : null)} className="cb-input" />
               </Field>
               <Field label="Country of residence" why="Used for residency, host-country, and geographic eligibility checks.">
-                <input type="text" value={data.profile.countryOfResidence} onChange={(event) => updateProfileField('countryOfResidence', event.target.value)} className="cb-input" />
+                <input type="text" list="profile-country-names" value={data.profile.countryOfResidence} onChange={(event) => updateProfileField('countryOfResidence', event.target.value)} className="cb-input" />
+                {unrecognisedCountries([data.profile.countryOfResidence]).length > 0 ? (
+                  <p className="mt-1 text-[12px] text-amber-700">Not a recognised country. Pick one from the list so eligibility can be checked.</p>
+                ) : null}
               </Field>
               <Field label="Citizenship countries" hint="Comma-separated" why="Some funders limit opportunities by nationality independently of residence.">
                 <input type="text" value={joinList(data.profile.citizenshipCountries)} onChange={(event) => updateProfileField('citizenshipCountries', parseList(event.target.value))} className="cb-input" />
+                {unrecognisedCountries(data.profile.citizenshipCountries).length > 0 ? (
+                  <p className="mt-1 text-[12px] text-amber-700">
+                    Not recognised: {unrecognisedCountries(data.profile.citizenshipCountries).join(', ')}. Use country names, such as India or United Kingdom.
+                  </p>
+                ) : null}
+                <datalist id="profile-country-names">
+                  {COUNTRY_NAMES.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
               </Field>
             </div>
           </section>
