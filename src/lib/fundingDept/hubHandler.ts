@@ -3,6 +3,8 @@
  * One access fence (`resolveHubScope`), one export stamp, one error shape.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { zonedDayStart } from '@/lib/i18n/format'
 
 import { resolveHubScope, paging, type HubScope } from './hubScope'
 import { exportResponse } from './managementHandler'
@@ -46,11 +48,13 @@ const builders: Record<HubReport, Builder> = {
   },
   pendency: async (scope, params, exporting) => {
     const { page, pageSize } = paging(params)
+    const timeZone = await getTenantTimeZone(scope.tenantId)
     const day = (v: string | null, plus = 0) => {
       if (!v) return null
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new HubReportError('Dates must be YYYY-MM-DD.')
-      // India midnight, as a UTC instant.
-      return new Date(new Date(`${v}T00:00:00Z`).getTime() - 330 * 60000 + plus * 86400000)
+      // Local midnight in the tenant's zone (India unless set), as a UTC instant.
+      const shifted = new Date(Date.parse(`${v}T00:00:00Z`) + plus * 86400000).toISOString().slice(0, 10)
+      return zonedDayStart(shifted, timeZone)
     }
     const min = params.get('minMatches')
     // A chosen member means "calls this person is responsible for": the by-member

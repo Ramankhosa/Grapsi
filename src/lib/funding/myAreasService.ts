@@ -28,6 +28,9 @@
  */
 
 import { EmbeddingService } from '@/lib/services/embeddingService'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { dayKey, deadlineDayKey } from '@/lib/i18n/format'
+import { deadlineDaySql, localTodaySql } from '@/lib/i18n/sql'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -198,26 +201,32 @@ function visibleCallSql(tenantId: string | null): Prisma.Sql {
  * letter-of-intent date (entry_closes_at) has passed. Scoped to imported rows,
  * so a curated call's open/closed rule never changes.
  */
-function importedClosedSql(): Prisma.Sql {
+function importedClosedSql(timeZone: string): Prisma.Sql {
   // COALESCE: a NULL entry date must read as "not closed", or NOT (...) is
   // NULL and the call silently drops out of both open and closed.
-  return Prisma.sql`COALESCE(fc.import_run_id IS NOT NULL AND (fc.source_closed_at IS NOT NULL OR fc.entry_closes_at < (now() AT TIME ZONE 'Asia/Kolkata')::date), false)`
+  return Prisma.sql`COALESCE(fc.import_run_id IS NOT NULL AND (fc.source_closed_at IS NOT NULL OR fc.entry_closes_at < ${localTodaySql(timeZone)}), false)`
 }
 
-function statusSql(status: MyAreasStatus): Prisma.Sql {
+/**
+ * Open or closed in the researcher's organization zone (India unless set).
+ * A deadline's day follows deadlineDayKey: a date-only deadline keeps its
+ * date in every zone. For India this is the rule it always was.
+ */
+function statusSql(status: MyAreasStatus, timeZone: string): Prisma.Sql {
   const closesAt = Prisma.sql`COALESCE(fc.close_date, fc."deadlineAt")`
-  const today = Prisma.sql`(now() AT TIME ZONE 'Asia/Kolkata')::date`
-  const importedClosed = importedClosedSql()
+  const closingDay = deadlineDaySql(closesAt, timeZone)
+  const today = localTodaySql(timeZone)
+  const importedClosed = importedClosedSql(timeZone)
   if (status === 'active') {
-    return Prisma.sql`((${closesAt} IS NULL OR (${closesAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= ${today}) AND NOT ${importedClosed})`
+    return Prisma.sql`((${closesAt} IS NULL OR ${closingDay} >= ${today}) AND NOT ${importedClosed})`
   }
   if (status === 'expired') {
-    return Prisma.sql`((${closesAt} IS NOT NULL AND (${closesAt} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date < ${today}) OR ${importedClosed})`
+    return Prisma.sql`((${closesAt} IS NOT NULL AND ${closingDay} < ${today}) OR ${importedClosed})`
   }
   return Prisma.sql`TRUE`
 }
 
-function candidateColumns(source: MyAreasSource, score: Prisma.Sql, matchedOn: Prisma.Sql) {
+function candidateColumns(timeZone: string, source: MyAreasSource, score: Prisma.Sql, matchedOn: Prisma.Sql) {
   return Prisma.sql`
     fc.id,
     COALESCE(fc.scheme_title, fc.title)        AS title,
@@ -229,7 +238,7 @@ function candidateColumns(source: MyAreasSource, score: Prisma.Sql, matchedOn: P
     (${score})::float                          AS score,
     ${source}::text                            AS source,
     ${matchedOn}                               AS matched_on,
-    ${importedClosedSql()}                     AS imported_closed
+    ${importedClosedSql(timeZone)}             AS imported_closed
   `
 }
 
@@ -304,6 +313,7 @@ export async function findCallsInMyAreas(
   const publicationColumn = Prisma.raw(publicationEmbeddingColumn())
   const floor = vectorFloor()
   const visible = visibleCallSql(tenantId)
+  const timeZone = await getTenantTimeZone(tenantId)
 
   // What there is to match on, and what there is to match against. Fetched
   // first so an empty result can name the reason rather than shrug.
@@ -355,7 +365,7 @@ export async function findCallsInMyAreas(
   if (hasProfileVector) {
     branches.push(
       prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT ${candidateColumns(
+        SELECT ${candidateColumns(timeZone, 
           'profile',
           Prisma.sql`1 - (fc.${callColumn} <=> rp.${profileColumn})`,
           Prisma.sql`NULL::text`
@@ -366,7 +376,7 @@ export async function findCallsInMyAreas(
            AND rp.${profileColumn} IS NOT NULL
            AND 1 - (fc.${callColumn} <=> rp.${profileColumn}) >= ${floor}
            AND ${visible}
-           AND ${statusSql(status)}
+           AND ${statusSql(status, timeZone)}
          ORDER BY fc.${callColumn} <=> rp.${profileColumn} ASC
          ${sourceLimit}
       `)
@@ -377,7 +387,7 @@ export async function findCallsInMyAreas(
     branches.push(
       prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
         SELECT * FROM (
-        SELECT DISTINCT ON (fc.id) ${candidateColumns(
+        SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, 
           'research_area',
           Prisma.sql`1 - (fc.${callColumn} <=> area.${profileColumn})`,
           Prisma.sql`area.label`
@@ -390,7 +400,7 @@ export async function findCallsInMyAreas(
          WHERE fc.${callColumn} IS NOT NULL
            AND 1 - (fc.${callColumn} <=> area.${profileColumn}) >= ${floor}
            AND ${visible}
-           AND ${statusSql(status)}
+           AND ${statusSql(status, timeZone)}
          ORDER BY fc.id, fc.${callColumn} <=> area.${profileColumn} ASC
         ) best_per_call
         ORDER BY score DESC
@@ -403,7 +413,7 @@ export async function findCallsInMyAreas(
     branches.push(
       prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
         SELECT * FROM (
-        SELECT DISTINCT ON (fc.id) ${candidateColumns(
+        SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, 
           'publication',
           Prisma.sql`1 - (fc.${callColumn} <=> ref.${publicationColumn})`,
           Prisma.sql`ref.title`
@@ -417,7 +427,7 @@ export async function findCallsInMyAreas(
          WHERE fc.${callColumn} IS NOT NULL
            AND 1 - (fc.${callColumn} <=> ref.${publicationColumn}) >= ${floor}
            AND ${visible}
-           AND ${statusSql(status)}
+           AND ${statusSql(status, timeZone)}
          ORDER BY fc.id, fc.${callColumn} <=> ref.${publicationColumn} ASC
         ) best_per_call
         ORDER BY score DESC
@@ -433,7 +443,7 @@ export async function findCallsInMyAreas(
   if (query) {
     branches.push(
       prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT ${candidateColumns(
+        SELECT ${candidateColumns(timeZone, 
           'terms',
           Prisma.sql`ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query}))`,
           Prisma.sql`(SELECT string_agg(term, ', ' ORDER BY term) FROM unnest(ARRAY[${Prisma.join(terms)}]::text[]) term WHERE fc.ts_document @@ websearch_to_tsquery('english', '"' || term || '"'))`
@@ -441,7 +451,7 @@ export async function findCallsInMyAreas(
           FROM funding_calls fc
          WHERE fc.ts_document @@ websearch_to_tsquery('english', ${query})
            AND ${visible}
-           AND ${statusSql(status)}
+           AND ${statusSql(status, timeZone)}
          ORDER BY ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query})) DESC
          ${sourceLimit}
       `)
@@ -511,7 +521,7 @@ export async function findCallsInMyAreas(
       daysToClose,
       isExpired:
         row.imported_closed === true ||
-        Boolean(closesAt && new Date(closesAt.getTime()+330*60000).toISOString().slice(0,10) < new Date(now.getTime()+330*60000).toISOString().slice(0,10)),
+        Boolean(closesAt && deadlineDayKey(closesAt, timeZone) < dayKey(now, timeZone)),
       score: Number(row.score.toFixed(4)),
       tier,
       basis,
@@ -557,6 +567,7 @@ async function countBothSides(
   const callColumn = Prisma.raw(callEmbeddingColumn())
   const publicationColumn = Prisma.raw(publicationEmbeddingColumn())
   const visible = visibleCallSql(tenantId)
+  const timeZone = await getTenantTimeZone(tenantId)
 
   const clauses: Prisma.Sql[] = []
   if (sources.hasProfileVector) {
@@ -601,8 +612,8 @@ async function countBothSides(
   const [row] = await prisma.$queryRaw<Array<{ active: number; expired: number; total: number }>>(
     Prisma.sql`
       SELECT
-        COUNT(*) FILTER (WHERE ${statusSql('active')})::int AS active,
-        COUNT(*) FILTER (WHERE ${statusSql('expired')})::int AS expired,
+        COUNT(*) FILTER (WHERE ${statusSql('active', timeZone)})::int AS active,
+        COUNT(*) FILTER (WHERE ${statusSql('expired', timeZone)})::int AS expired,
         COUNT(*)::int AS total
       FROM funding_calls fc
       WHERE ${visible} AND (${anyMatch})

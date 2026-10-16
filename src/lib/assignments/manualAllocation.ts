@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_TIMEZONE, dayKey, deadlineDayKey } from '@/lib/i18n/format'
 
 export const ALLOCATION_REASONS = ['FACULTY_WILLINGNESS', 'INDIRECT_FIT', 'DSR_RECOMMENDATION'] as const
 export type AllocationReason = (typeof ALLOCATION_REASONS)[number]
@@ -41,12 +42,13 @@ export type AllocationCallOption = AllocationCall & {
 }
 export type AllocationPersonOption = AllocationPerson & { existingAssignment: ExistingAllocation | null }
 
-/** Date-only call deadlines remain open throughout the institution's local day. */
-export function allocationDateKey(date: Date | string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date))
+/** The institution's local calendar day of an instant (India unless the tenant set another zone). */
+export function allocationDateKey(date: Date | string, timeZone: string = DEFAULT_TIMEZONE): string {
+  return dayKey(date, timeZone)
 }
-export function allocationCallClosed(deadline: Date | string | null | undefined, now = new Date()): boolean {
-  return Boolean(deadline && allocationDateKey(deadline) < allocationDateKey(now))
+/** Date-only call deadlines remain open throughout the institution's local day. */
+export function allocationCallClosed(deadline: Date | string | null | undefined, now = new Date(), timeZone: string = DEFAULT_TIMEZONE): boolean {
+  return Boolean(deadline && deadlineDayKey(deadline, timeZone) < allocationDateKey(now, timeZone))
 }
 export function allocationHref(id: string): string {
   return `/assignments?view=managed&assignmentId=${encodeURIComponent(id)}`

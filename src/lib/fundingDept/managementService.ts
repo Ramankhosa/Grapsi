@@ -1,4 +1,6 @@
 import prisma from '@/lib/prisma'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { zonedDayStart } from '@/lib/i18n/format'
 import { Prisma } from '@/lib/prisma-generated'
 import { actionableSchoolCallWhereSql, loadUnitAreaProfile, relevanceForCalls } from '@/lib/funding/callUnitRelevance'
 import { textArray, visibleCallSql } from './callSql'
@@ -48,13 +50,16 @@ export async function managementWindow(tenantId: string, params: URLSearchParams
   if (key === 'custom') {
     const from = params.get('from') || ''; const to = params.get('to') || ''
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('Choose valid from and to dates.')
-    // Explicit India calendar boundaries, independent of server timezone.
-    const start = new Date(`${from}T00:00:00+05:30`); const end = new Date(new Date(`${to}T00:00:00+05:30`).getTime()+day)
+    // Explicit calendar boundaries in the tenant's zone, independent of the
+    // server's (India unless the tenant set another).
+    const timeZone = await getTenantTimeZone(tenantId)
+    const nextDay = new Date(Date.parse(`${to}T00:00:00Z`) + day).toISOString().slice(0, 10)
+    const start = zonedDayStart(from, timeZone); const end = zonedDayStart(nextDay, timeZone)
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end || start > asOf) throw new Error('Invalid reporting period.')
-    return { start, end: new Date(Math.min(end.getTime(),asOf.getTime()+1)), asOf, label: `${from} to ${to}`, timezone: 'Asia/Kolkata' }
+    return { start, end: new Date(Math.min(end.getTime(),asOf.getTime()+1)), asOf, label: `${from} to ${to}`, timezone: timeZone }
   }
   const window = await resolveActivityWindow(tenantId,key,asOf)
-  return { start: window.start, end: new Date(Math.min(window.end.getTime()+1,asOf.getTime()+1)), asOf, label: window.label, timezone: 'Asia/Kolkata' }
+  return { start: window.start, end: new Date(Math.min(window.end.getTime()+1,asOf.getTime()+1)), asOf, label: window.label, timezone: await getTenantTimeZone(tenantId) }
 }
 
 export async function loadCanonicalApplications(tenantId: string, schoolIds: string[], asOf: Date) {
@@ -64,6 +69,7 @@ export async function loadCanonicalApplications(tenantId: string, schoolIds: str
 
 export async function getManagementReport(tenantId: string, filters: ManagementFilters) {
   const at = filters.asOf
+  const timeZone = await getTenantTimeZone(tenantId)
   const [schoolCatalog, members, settings] = await Promise.all([
     prisma.tenantOrgUnit.findMany({ where: { tenant_id: tenantId, depth: 0 }, orderBy: [{name:'asc'},{id:'asc'}], select: { id:true,name:true,code:true,is_active:true } }),
     prisma.fundingDeptMember.findMany({ where: {tenant_id:tenantId}, include: { user:{select:{id:true,name:true,email:true}}, school_assignments:true } }),
@@ -149,7 +155,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     const entered = [...history].reverse().find(e=>!e.inferred && e.after_data &&
       (!e.before_data || applicationState(e.before_data).stage !== applicationState(e.after_data).stage))
     const overdue = {
-      agency: state.outstanding && !state.submitted && isExpiredInIndia(row.agency_deadline,at),
+      agency: state.outstanding && !state.submitted && isExpiredInIndia(row.agency_deadline,at,timeZone),
       internal: state.outstanding && !state.submitted && overdueAt(row.internal_deadline,at),
       review: state.outstanding && ['PROPOSAL_DRAFTING','INTERNAL_REVIEW'].includes(state.stage) && overdueAt(row.review_deadline,at),
       action: appActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status) && overdueAt(a.due_at,at)),
@@ -226,13 +232,13 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const submittedApplicationCount = callApps.filter(a=>a.submitted).length
       const hasAnySubmission = submittedApplicationCount>0
       const deadlineRisk = opportunityDeadlineAttention({deadline:call.deadline,asOf:at,quality:relevantQuality?'confirmed':quality,formalAllocations:formalAllocationCount,
-        submissions:submittedApplicationCount,outstandingApplications:callApps.filter(a=>a.outstanding).length})
+        submissions:submittedApplicationCount,outstandingApplications:callApps.filter(a=>a.outstanding).length,timeZone})
       const missedUnallocatedNoSubmission = deadlineRisk.missedUnallocatedNoSubmission
       // The shared per-responsibility states (reportDefinitions).
       const review = adHoc ? null : reviewState({triageStatus:call.triage,triageDecidedAt:call.decided_at,dispositionReason:disposition?.reason,
         formalAllocations:formalAllocationCount,namedActions:callActions.length})
       const deadlineStatus = adHoc ? null : deadlineState({deadline:call.deadline,formalAllocations:formalAllocationCount,submissions:submittedApplicationCount,
-        closedWithReason:review==='CLOSED_NO_ALLOCATION'},at)
+        closedWithReason:review==='CLOSED_NO_ALLOCATION'},at,timeZone)
       const submission = submissionSummary(callApps.map(a=>({...a,verified:Boolean(a.verification)})))
       const upcoming21 = deadlineRisk.upcoming21
       const gaps = relevantQuality ? [
@@ -247,7 +253,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const remaining = callApps.filter(a=>appMatches(a) && (filters.mode==='pending'?a.outstanding:filters.mode==='activity'?isActivity(a):true))
       const dueCall = !filters.horizon || [call.deadline,...allCallActions.filter(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)).map(a=>a.due_at)]
         .some(value=>value&&value.getTime()<=at.getTime()+filters.horizon!*day)
-      const callExpired=isExpiredInIndia(call.deadline,at)
+      const callExpired=isExpiredInIndia(call.deadline,at,timeZone)
       const callReminders=reminders.filter(r=>r.school_id===school.id&&r.call_id===call.id).map(r=>({...r,status:'OPEN',waiting_with:'DSR',is_next:false}))
       const hasLiveWork=callApps.some(a=>a.outstanding)||allCallActions.some(a=>['OPEN','ACKNOWLEDGED'].includes(a.status))||callReminders.length>0
       // Missed calls stay in view for the head even with expired calls hidden,
@@ -255,7 +261,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const missed = Boolean(deadlineStatus && MISSED_DEADLINE_STATES.includes(deadlineStatus) && (relevantQuality||quality==='origin'))
       if(callExpired&&!filters.includeExpired&&!hasLiveWork&&!(filters.showMissed&&missed))return []
       if (filters.mode==='cohort' && !inPeriod(firstSeen,filters.start,filters.end)) return []
-      const callException = !filters.exception || filters.exception==='overdue' && (isExpiredInIndia(call.deadline,at)||callActionOverdue) ||
+      const callException = !filters.exception || filters.exception==='overdue' && (isExpiredInIndia(call.deadline,at,timeZone)||callActionOverdue) ||
         filters.exception==='missing-deadline' && !call.deadline ||
         filters.exception==='matched-unallocated' && gaps.includes('MATCHED_UNALLOCATED') ||
         filters.exception==='untouched' && gaps.includes('UNTOUCHED') ||
@@ -279,7 +285,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       const responsible=transferredMember&&!isMemberAway(transferredMember,at)?transferredMember:cover.operational
       const firstTouchAt=[...contactRows.map(c=>c.happened_at),...allCallActions.map(a=>a.created_at),...callCandidates.map(c=>c.created_at),...callApps.map(a=>a.created_at),...(call.decided_at?[call.decided_at]:[]),...(disposition?[disposition.updated_at]:[])].sort((a,b)=>a.getTime()-b.getTime())[0]||null
       const waitingApp=callApps.find(a=>a.outstanding&&['AWAITING_FACULTY_RESPONSE','INTERNAL_REVIEW','SUBMITTED','UNDER_AGENCY_REVIEW'].includes(a.stage))
-      const baseResponsibility={asOf:at,firstSeenAt:firstSeen,firstTouchAt,deadline:call.deadline,intakeReady:true,thresholds:settings,
+      const baseResponsibility={asOf:at,timeZone,firstSeenAt:firstSeen,firstTouchAt,deadline:call.deadline,intakeReady:true,thresholds:settings,
         ownerUserId:responsible?.user_id,ownerName:responsible?.user.name||responsible?.user.email,
         waitingWith:waitingApp?.stage==='AWAITING_FACULTY_RESPONSE'?'FACULTY':waitingApp?.stage==='INTERNAL_REVIEW'?'REVIEWER':waitingApp?'AGENCY':null,
         waitingSince:waitingApp?.lastContact?.happened_at||waitingApp?.stageEnteredAt||waitingApp?.created_at,

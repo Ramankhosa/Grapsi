@@ -19,6 +19,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { openCallSql, textArray, visibleCallSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { queueSchoolMatchRefresh } from './currentMatches'
 import { coordinatorSql } from './hubScope'
@@ -75,10 +76,10 @@ function validate(f: IncomingFilters) {
 }
 
 /** One row per (call, school) in scope with every fact the report shows or filters on. */
-function pairsSql(tenantId: string, f: IncomingFilters): Prisma.Sql {
+function pairsSql(tenantId: string, f: IncomingFilters, timeZone: string): Prisma.Sql {
   const width = f.width ?? DEFAULT_MATCH_WIDTH
   const scope = textArray(f.schoolIds)
-  const days = indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf)
+  const days = indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf, timeZone)
   const action = actionStatusSql({ actionCompletedAt: 'r.action_completed_at', triageDecidedAt: 'r.triage_decided_at', shortlisted: 'r.shortlisted',
     allocations: 'r.allocations', followUps: 'r.follow_ups', namedActions: 'r.named_actions' })
   const sourceFilter = f.source === 'ORIGIN' ? Prisma.sql`AND 'ORIGIN' = ANY(p.sources)`
@@ -118,7 +119,7 @@ function pairsSql(tenantId: string, f: IncomingFilters): Prisma.Sql {
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = p.call_id AND tri.org_unit_id = p.school_id
       LEFT JOIN users cu ON cu.id = tri.action_completed_by_user_id
       WHERE ${visibleCallSql(tenantId, 'fc')}
-        ${f.includeExpired ? Prisma.empty : Prisma.sql`AND ${openCallSql('fc')}`}
+        ${f.includeExpired ? Prisma.empty : Prisma.sql`AND ${openCallSql('fc', timeZone)}`}
         ${f.callId ? Prisma.sql`AND p.call_id = ${f.callId}` : Prisma.empty}
         ${f.search ? Prisma.sql`AND (COALESCE(fc.scheme_title, fc.title) ILIKE ${`%${f.search}%`} OR COALESCE(fc.agency_name, fc."agencyName") ILIKE ${`%${f.search}%`} OR fc.id = ${f.search})` : Prisma.empty}
         ${sourceFilter}
@@ -143,7 +144,7 @@ export async function getIncomingCalls(tenantId: string, f: IncomingFilters) {
   const empty = { rows: [] as IncomingRow[], total: 0, page: f.page, pageSize: f.pageSize,
     summary: { openCalls: 0, notStarted: 0, closingSoonNotCompleted: 0, completed: 0 }, matchesRefreshedAt: null as Date | null }
   if (!f.schoolIds.length) return empty
-  const base = pairsSql(tenantId, f)
+  const base = pairsSql(tenantId, f, await getTenantTimeZone(tenantId))
   const closing = f.closingWithin ? Prisma.sql`AND min(days_to_deadline) BETWEEN 0 AND ${f.closingWithin}` : Prisma.empty
   const having = Prisma.sql`HAVING ${actionHaving(f.action)} ${closing}`
 

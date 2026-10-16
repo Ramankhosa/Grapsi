@@ -1,12 +1,15 @@
 import AdmZip from 'adm-zip'
+import { DEFAULT_TIMEZONE, isValidTimeZone, timeZoneLabel } from '@/lib/i18n/format'
 import type { ManagementReport } from './managementService'
 import { csvCell } from './managementRules'
 import { REPORT_DEFINITIONS, isRelevantQuality } from './reportDefinitions'
 
 export type ExportTable = { name: string; rows: unknown[][] }
-export type ExportStamp = { report: string; snapshot?: string | null; periodLabel?: string | null; periodStart?: Date | null; periodEnd?: Date | null; filters?: Record<string, unknown>; generatedAt?: Date }
+export type ExportStamp = { report: string; timeZone?: string | null; snapshot?: string | null; periodLabel?: string | null; periodStart?: Date | null; periodEnd?: Date | null; filters?: Record<string, unknown>; generatedAt?: Date }
 
-const indiaTime = (value: Date) => value.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST'
+/** An instant in the report's zone, e.g. "16 Oct 2026, 3:05 pm IST" for India. */
+const zonedTime = (value: Date, timeZone: string = DEFAULT_TIMEZONE) =>
+  value.toLocaleString('en-IN', { timeZone, dateStyle: 'medium', timeStyle: 'short' }) + (timeZone === DEFAULT_TIMEZONE ? ' IST' : ` (${timeZone})`)
 
 /**
  * The first sheet of every export: what this file is, which snapshot and
@@ -16,11 +19,13 @@ const indiaTime = (value: Date) => value.toLocaleString('en-IN', { timeZone: 'As
  */
 export function definitionsSheet(stamp: ExportStamp, extra: unknown[][] = []): ExportTable {
   const generated = stamp.generatedAt ?? new Date()
+  const zone = isValidTimeZone(stamp.timeZone) ? stamp.timeZone : DEFAULT_TIMEZONE
+  const zoneName = timeZoneLabel(zone)
   return { name: 'Definitions', rows: [
     ['Report', stamp.report], ['Snapshot ID', stamp.snapshot || 'Not recorded'],
     ['Reporting period', stamp.periodLabel || 'All time'],
-    ['Period start (India time)', stamp.periodStart ? indiaTime(stamp.periodStart) : ''], ['Period end, exclusive (India time)', stamp.periodEnd ? indiaTime(stamp.periodEnd) : ''],
-    ['Generated (India time)', indiaTime(generated)], ['Active filters', JSON.stringify(stamp.filters || {})],
+    [`Period start (${zoneName})`, stamp.periodStart ? zonedTime(stamp.periodStart, zone) : ''], [`Period end, exclusive (${zoneName})`, stamp.periodEnd ? zonedTime(stamp.periodEnd, zone) : ''],
+    [`Generated (${zoneName})`, zonedTime(generated, zone)], ['Active filters', JSON.stringify(stamp.filters || {})],
     ...extra, [], ['Term', 'Definition'], ...REPORT_DEFINITIONS.map(d => [d.term, d.definition]),
   ] }
 }

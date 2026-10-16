@@ -1,4 +1,5 @@
-import { day, deadlineAttention } from './managementRules'
+import { day, deadlineAttention, deadlineCalendarDay, indiaCalendarDay } from './managementRules'
+import { DEFAULT_TIMEZONE } from '@/lib/i18n/format'
 
 export const CLOSING_DISPOSITIONS = ['NO_SUITABLE_FACULTY', 'DECLINED', 'CAPACITY', 'OTHER']
 export const closesOpportunity = (reason?: string | null) => Boolean(reason && CLOSING_DISPOSITIONS.includes(reason))
@@ -50,6 +51,8 @@ export type ResponsibilityAction = {
 export type ResponsibilityInput = {
   responsibilityType: ResponsibilityType
   asOf: Date
+  /** The tenant's zone for deadline days; India when omitted. */
+  timeZone?: string
   firstSeenAt?: Date | string | null
   deadline?: Date | string | null
   intakeReady?: boolean
@@ -88,18 +91,14 @@ function asDate(value: Date | string | null | undefined) {
   return Number.isNaN(result.getTime()) ? null : result
 }
 
-/** A funding deadline remains active for the complete India calendar day. */
-export function isExpiredInIndia(value: Date | string | null | undefined, asOf = new Date()) {
+/**
+ * A funding deadline remains active for the complete calendar day it falls
+ * on, in the tenant's zone (India unless the tenant set another).
+ */
+export function isExpiredInIndia(value: Date | string | null | undefined, asOf = new Date(), timeZone: string = DEFAULT_TIMEZONE) {
   const deadline = asDate(value)
   if (!deadline) return false
-  const calendar = (date: Date) =>
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kolkata',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(date)
-  return calendar(deadline) < calendar(asOf)
+  return (deadlineCalendarDay(deadline, timeZone) ?? Infinity) < (indiaCalendarDay(asOf, timeZone) ?? -Infinity)
 }
 
 export function resolveResponsibility(input: ResponsibilityInput) {
@@ -113,8 +112,8 @@ export function resolveResponsibility(input: ResponsibilityInput) {
     return Boolean(due && due < input.asOf)
   })
   const deadline = asDate(input.deadline)
-  const daysToDeadline = deadlineAttention(deadline,input.asOf).daysToDeadline
-  const expired = isExpiredInIndia(deadline, input.asOf)
+  const daysToDeadline = deadlineAttention(deadline,input.asOf,input.timeZone).daysToDeadline
+  const expired = isExpiredInIndia(deadline, input.asOf, input.timeZone)
   const activeApplications = input.activeApplications ?? 0
   const originComplete = input.reviewState
     ? input.reviewState === 'ALLOCATED' || input.reviewState === 'CLOSED_NO_ALLOCATION'

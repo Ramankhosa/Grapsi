@@ -20,11 +20,14 @@ import {
   DEADLINE_STATES, REVIEW_STATES, deadlineStateSql, dsrApplicationSubmittedSql, reviewStateSql, submissionState,
   type DeadlineState, type ReviewState,
 } from './reportDefinitions'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 
 export const REGISTER_SUBMISSION_FILTERS = ['NO_ALLOCATION', 'NONE_SUBMITTED', 'PARTLY_SUBMITTED', 'ALL_SUBMITTED'] as const
 export type RegisterSubmissionFilter = (typeof REGISTER_SUBMISSION_FILTERS)[number]
 
 export type RegisterFilters = {
+  /** The tenant's zone for deadline days; filled by getCallRegister. */
+  timeZone?: string
   /** Schools the viewer may see; undefined for department-wide access. */
   scopeSchoolIds?: string[]
   schoolId?: string | null
@@ -55,7 +58,7 @@ function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
   const review = reviewStateSql({ triageStatus: 'r.triage_status', triageDecidedAt: 'r.triage_decided_at', dispositionReason: 'r.disposition_reason',
     formalAllocations: 'r.formal_allocations', namedActions: 'r.named_actions' })
   const deadline = deadlineStateSql({ deadline: 'r.deadline', formalAllocations: 'r.formal_allocations', submissions: 'r.submissions',
-    closedWithReason: `(${review.sql} = 'CLOSED_NO_ALLOCATION')` }, f.asOf)
+    closedWithReason: `(${review.sql} = 'CLOSED_NO_ALLOCATION')` }, f.asOf, f.timeZone)
   return Prisma.sql`
     WITH facts AS (
       SELECT m.call_id, m.school_id, s.name school_name, m.source, m.tier, m.reason mapping_reason, m.is_origin, m.mapped_at, m.backfilled,
@@ -131,6 +134,7 @@ function validate(f: RegisterFilters) {
 const DEADLINE_URGENCY: DeadlineState[] = ['MISSED_NEVER_ALLOCATED', 'MISSED_ALLOCATED_NOT_SUBMITTED', 'CLOSING_SOON', 'OPEN', 'PASSED_HANDLED', 'NO_DEADLINE']
 
 export async function getCallRegister(tenantId: string, f: RegisterFilters) {
+  f = { ...f, timeZone: f.timeZone ?? (await getTenantTimeZone(tenantId)) }
   validate(f)
   const page = Math.max(1, f.page || 1), pageSize = Math.min(100, Math.max(1, f.pageSize || 20))
   const base = responsibilitiesSql(tenantId, f)

@@ -12,7 +12,8 @@ import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { actionableSchoolCallWhereSql } from '@/lib/funding/callUnitRelevance'
-import { openCallSql,liveCallWorkSql } from '@/lib/fundingDept/callSql'
+import { callClosingDaySql, callDeadlineZoneSql, openCallSql, liveCallWorkSql } from '@/lib/fundingDept/callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { queueSchoolMatchRefresh } from '@/lib/fundingDept/currentMatches'
 
 export const dynamic = 'force-dynamic'
@@ -117,11 +118,12 @@ export async function GET(request: NextRequest) {
 
   const profile = await loadUnitAreaProfile(context.tenantId, [school.id])
   const now = new Date()
+  const timeZone = await getTenantTimeZone(context.tenantId)
   queueSchoolMatchRefresh(context.tenantId,school.id)
   const filters: Prisma.Sql[] = [
     visibleSql(context.tenantId),
     // Expired discovery is hidden; existing obligations remain actionable.
-    new URL(request.url).searchParams.get('includeExpired')==='true'?Prisma.sql`TRUE`:Prisma.sql`(${openCallSql()} OR ${liveCallWorkSql(context.tenantId,school.id)})`,
+    new URL(request.url).searchParams.get('includeExpired')==='true'?Prisma.sql`TRUE`:Prisma.sql`(${openCallSql('fc', timeZone)} OR ${liveCallWorkSql(context.tenantId,school.id)})`,
     relevanceMode==='all'?Prisma.sql`TRUE`:actionableSchoolCallWhereSql(context.tenantId,school.id),
   ]
 
@@ -134,7 +136,7 @@ export async function GET(request: NextRequest) {
   if (closingInDays > 0) {
     const until = new Date(now.getTime() + closingInDays * 86400000)
     filters.push(
-      Prisma.sql`(COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date BETWEEN (${now}::timestamptz AT TIME ZONE 'Asia/Kolkata')::date AND (${until}::timestamptz AT TIME ZONE 'Asia/Kolkata')::date`
+      Prisma.sql`${callClosingDaySql('fc', timeZone)} BETWEEN (${now}::timestamptz AT TIME ZONE ${callDeadlineZoneSql('fc', timeZone)})::date AND (${until}::timestamptz AT TIME ZONE ${callDeadlineZoneSql('fc', timeZone)})::date`
     )
   }
 

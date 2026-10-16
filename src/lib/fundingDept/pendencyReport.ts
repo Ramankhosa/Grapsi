@@ -21,8 +21,11 @@ import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
 import { textArray, utcTimestamp, visibleCallSql } from './callSql'
 import { coordinatorSql } from './hubScope'
 import { COUNTED_PENDENCY_STATES, PENDENCY_STATES, indiaDaysToDeadlineSql, pendencyStateSql, qualifyingMatchSql, type PendencyState } from './reportDefinitions'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 
 export type PendencyFilters = {
+  /** The tenant's zone for deadline days; filled by getPendency. */
+  timeZone?: string
   schoolIds: string[]
   /**
    * Only rows this user is the responsible coordinator for (the head's Member
@@ -69,7 +72,7 @@ function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
     ), facts AS (
       SELECT p.call_id, p.school_id, s.name school_name,
         COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency, ${Prisma.raw(deadline)} deadline,
-        ${indiaDaysToDeadlineSql(deadline, f.asOf)} days_to_deadline,
+        ${indiaDaysToDeadlineSql(deadline, f.asOf, f.timeZone)} days_to_deadline,
         q.n matched_faculty, q.first_seen first_matched_at,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id
           WHERE ca.tenant_id=${tenantId} AND ca.funding_call_id=p.call_id AND au.path[1]=p.school_id AND ca.status::text NOT IN (${Prisma.raw(NOT_TAKEN_UP)})) taken_up,
@@ -86,7 +89,7 @@ function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
       JOIN funding_calls fc ON fc.id = p.call_id
       JOIN tenant_org_units s ON s.id = p.school_id
       CROSS JOIN LATERAL (SELECT count(*)::int n, min(m.first_seen_at) first_seen FROM funding_opportunity_matches m
-        WHERE m.tenant_id=${tenantId} AND m.funding_call_id=p.call_id AND m.school_id=p.school_id AND ${qualifyingMatchSql('m', deadline)}) q
+        WHERE m.tenant_id=${tenantId} AND m.funding_call_id=p.call_id AND m.school_id=p.school_id AND ${qualifyingMatchSql('m', deadline, undefined, f.timeZone)}) q
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = p.call_id AND tri.org_unit_id = p.school_id
       LEFT JOIN users cu ON cu.id = tri.action_completed_by_user_id
       WHERE ${visibleCallSql(tenantId, 'fc')}
@@ -108,6 +111,7 @@ function stateWhere(state: string | null | undefined): Prisma.Sql {
 }
 
 export async function getPendency(tenantId: string, f: PendencyFilters) {
+  f = { ...f, timeZone: f.timeZone ?? (await getTenantTimeZone(tenantId)) }
   if (f.state && f.state !== 'all' && !PENDENCY_STATES.includes(f.state as PendencyState)) throw new PendencyError('Unknown pendency state.')
   const empty = { rows: [] as PendencyRow[], total: 0, page: f.page, pageSize: f.pageSize, members: [] as PendencyMember[],
     summary: { missed: 0, atRisk: 0, pending: 0, completedNoAllocation: 0 } }

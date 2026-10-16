@@ -13,6 +13,8 @@ import { Prisma } from '@/lib/prisma-generated'
 
 import { textArray, utcTimestamp } from './callSql'
 import { indiaDaysToDeadlineSql } from './reportDefinitions'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { safeTimeZone } from '@/lib/i18n/sql'
 
 export const ASSIGNED_STATUS_GROUPS: Record<string, string[] | null> = {
   active: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'],
@@ -24,6 +26,8 @@ export const ASSIGNED_STATUS_GROUPS: Record<string, string[] | null> = {
 export const SILENT_DAYS = 7
 
 export type AssignedFilters = {
+  /** The tenant's zone for deadline days and "this month"; filled by getAssignedCalls. */
+  timeZone?: string
   schoolIds: string[]
   status?: string | null
   due?: string | null
@@ -66,8 +70,8 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
         ca.submission_reference, ca.submission_url, ca.submission_evidence_status, ca.lapsed_at, ca.allocation_method, ca.allocation_reason, ca.allocation_note,
         ca.assignee_user_id, ca.assigned_by_user_id, ca.previous_assignment_id, ca.funding_call_id,
         COALESCE(fc.scheme_title, fc.title) call_title, COALESCE(fc.agency_name, fc."agencyName") agency, COALESCE(fc.close_date, fc."deadlineAt") call_deadline,
-        ${indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf)} call_days,
-        ${indiaDaysToDeadlineSql(due, f.asOf)} due_days,
+        ${indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf, f.timeZone)} call_days,
+        ${indiaDaysToDeadlineSql(due, f.asOf, f.timeZone)} due_days,
         su.id school_id, su.name school_name,
         COALESCE(fu.name, fu.email) faculty_name, fu.email faculty_email, COALESCE(bu.name, bu.email) assigned_by_name,
         lf.happened_at last_at, lf.kind last_kind, lf.note last_note, COALESCE(lu.name, lu.email) last_by,
@@ -94,8 +98,8 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
         (b.status IN ${Prisma.raw(ACTIVE)} AND b.due_days < 0) overdue,
         (b.status IN ${Prisma.raw(ACTIVE)} AND COALESCE(b.last_at, b.created_at) < ${utcTimestamp(new Date(f.asOf.getTime() - SILENT_DAYS * 86400000))}) silent,
         (b.status = 'ASSIGNED' AND b.created_at < ${utcTimestamp(new Date(f.asOf.getTime() - SILENT_DAYS * 86400000))}) awaiting_long,
-        (b.status = 'COMPLETED' AND (COALESCE(b.submitted_at, b.completed_at) AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
-          >= date_trunc('month', (${f.asOf.toISOString()}::timestamptz AT TIME ZONE 'Asia/Kolkata'))) submitted_this_month
+        (b.status = 'COMPLETED' AND (COALESCE(b.submitted_at, b.completed_at) AT TIME ZONE 'UTC' AT TIME ZONE ${safeTimeZone(f.timeZone)})
+          >= date_trunc('month', (${f.asOf.toISOString()}::timestamptz AT TIME ZONE ${safeTimeZone(f.timeZone)}))) submitted_this_month
       FROM base b
     )`
 }
@@ -115,6 +119,7 @@ function where(f: AssignedFilters): Prisma.Sql {
 }
 
 export async function getAssignedCalls(tenantId: string, f: AssignedFilters) {
+  f = { ...f, timeZone: f.timeZone ?? (await getTenantTimeZone(tenantId)) }
   if (f.status && !(f.status in ASSIGNED_STATUS_GROUPS)) throw new AssignedError('Unknown status filter.')
   if (f.due && !['overdue', '7', '14', '30'].includes(f.due)) throw new AssignedError('Unknown deadline filter.')
   if (f.submittedIn && f.submittedIn !== 'month') throw new AssignedError('Unknown submission filter.')

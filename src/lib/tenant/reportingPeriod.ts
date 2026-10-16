@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { dayKey, isValidTimeZone, zonedDayStart } from '@/lib/i18n/format'
 
 /**
  * The "period of consideration" — the window a tenant judges faculty activity
@@ -82,6 +83,45 @@ export function resolvePeriod(
   }
 }
 
+const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+const shiftYear = (day: string, years: number) => `${Number(day.slice(0, 4)) + years}${day.slice(4)}`
+
+/**
+ * The same window in an explicit zone, for a tenant that set its time zone:
+ * whole days start at that zone's midnight rather than the server's. Tenants
+ * without one keep the server-local boundaries above, exactly as before.
+ */
+export function resolvePeriodInZone(
+  startDay: string | null,
+  endDay: string | null,
+  label: string | null,
+  timeZone: string,
+  now: Date = new Date()
+): ReportingPeriod {
+  const bounds = (from: string, to: string) => ({
+    start: zonedDayStart(from, timeZone),
+    end: new Date(zonedDayStart(nextDay(to), timeZone).getTime() - 1),
+  })
+  if (!startDay || !endDay) {
+    const year = dayKey(now, timeZone).slice(0, 4)
+    return { ...bounds(`${year}-01-01`, `${year}-12-31`), label: year, isDefault: true }
+  }
+  let from = startDay
+  let to = endDay < startDay ? startDay : endDay
+  let guard = 0
+  while (bounds(from, to).end < now && guard < 50) {
+    from = shiftYear(from, 1)
+    to = shiftYear(to, 1)
+    guard += 1
+  }
+  const sameYear = from.slice(0, 4) === to.slice(0, 4)
+  return {
+    ...bounds(from, to),
+    label: label?.trim() || (sameYear ? from.slice(0, 4) : `${from.slice(0, 4)}-${to.slice(2, 4)}`),
+    isDefault: false,
+  }
+}
+
 /** The tenant's configured window, or the current calendar year if unset. */
 export async function getReportingPeriod(
   tenantId: string,
@@ -93,8 +133,25 @@ export async function getReportingPeriod(
       reporting_period_start: true,
       reporting_period_end: true,
       reporting_period_label: true,
+      timezone: true,
     },
   })
+
+  if (tenant?.timezone && isValidTimeZone(tenant.timezone)) {
+    // Stored at the server's local midnight of the day the admin entered
+    // (reporting-period route), so read it back with local getters.
+    const day = (value: Date | null) =>
+      value
+        ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+        : null
+    return resolvePeriodInZone(
+      day(tenant.reporting_period_start),
+      day(tenant.reporting_period_end),
+      tenant.reporting_period_label,
+      tenant.timezone,
+      now
+    )
+  }
 
   if (!tenant?.reporting_period_start || !tenant?.reporting_period_end) {
     return calendarYear(now)

@@ -29,6 +29,7 @@ import { Prisma } from '@/lib/prisma-generated'
 import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import {
   DEFAULT_MATCH_WIDTH, MATCH_WIDTHS, MATCH_WIDTH_COPY, MATCH_WIDTH_CUTOFFS, bandForScore, type MatchWidth,
 } from './matchBands'
@@ -293,10 +294,11 @@ export async function storedCallMatches(
  * as they stood. This is what bounds the work to the live catalogue.
  */
 export async function staleCallIds(tenantId: string, limit = CENSUS_CALLS_PER_PASS) {
+  const timeZone = await getTenantTimeZone(tenantId)
   const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT fc.id FROM funding_calls fc
      LEFT JOIN dsr_call_match_state s ON s.tenant_id = ${tenantId} AND s.call_id = fc.id AND s.version = ${CALL_MATCH_CENSUS_VERSION}
-     WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc')}
+     WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
        AND (s.refreshed_at IS NULL OR s.refreshed_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => ${CENSUS_FRESH_MS / 1000}))
      ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST, fc.id
      LIMIT ${limit}`)
@@ -330,6 +332,7 @@ export type MatchWidthPreview = {
  * how to run the work in front of them, not how to re-describe last year.
  */
 export async function previewMatchWidths(tenantId: string, schoolIds?: string[]): Promise<MatchWidthPreview[]> {
+  const timeZone = await getTenantTimeZone(tenantId)
   const scope = schoolIds?.length
     ? Prisma.sql`AND m.school_id = ANY(${textArray(schoolIds)})`
     : Prisma.empty
@@ -341,7 +344,7 @@ export async function previewMatchWidths(tenantId: string, schoolIds?: string[])
        WHERE m.tenant_id = ${tenantId} AND m.is_current AND m.inferred = false
          AND COALESCE(m.source_version,'') NOT IN (${Prisma.join(UNCOUNTED_MATCH_VERSIONS.map((v) => Prisma.sql`${v}`))})
          AND m.match_score IS NOT NULL
-         AND ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc')} ${scope}
+         AND ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)} ${scope}
     ), widths(moderate, strong) AS (VALUES ${Prisma.join(
       MATCH_WIDTHS.map((width) => {
         const cutoffs = MATCH_WIDTH_CUTOFFS[width]

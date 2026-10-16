@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { isExpiredInIndia } from './responsibility'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { textArray } from './callSql'
 import { REVIEW_STATE_LABELS, countIntakeEvents, reviewStateSql, type ReviewState } from './reportDefinitions'
 
@@ -44,7 +45,8 @@ export async function getIncomingReport(tenantId:string,schoolIds:string[]|undef
   // An arrival of a call that had already arrived is a duplicate even when the
   // intake pipeline did not flag it (reportDefinitions.countIntakeEvents).
   const repeats=countIntakeEvents(rows.map(r=>({id:r.id,callId:r.callId,duplicate:r.duplicate,enteredAt:r.enteredAt}))).duplicateIds
-  return rows.filter(r=>(filters.includeExpired||!isExpiredInIndia(r.deadline,filters.asOf)||r.live)&&(!filters.schoolId||r.schoolId===filters.schoolId)&&(!filters.callId||r.callId===filters.callId)&&(!filters.callSearch||`${r.title} ${r.id}`.toLowerCase().includes(filters.callSearch.toLowerCase()))).map(r=>{
+  const timeZone=await getTenantTimeZone(tenantId)
+  return rows.filter(r=>(filters.includeExpired||!isExpiredInIndia(r.deadline,filters.asOf,timeZone)||r.live)&&(!filters.schoolId||r.schoolId===filters.schoolId)&&(!filters.callId||r.callId===filters.callId)&&(!filters.callSearch||`${r.title} ${r.id}`.toLowerCase().includes(filters.callSearch.toLowerCase()))).map(r=>{
     const processing=['queued','processing','fetching','extracting','PENDING','PROCESSING'].includes(r.status)
     // Reviewing a call is not completing it: an intake is done only once the
     // school allocated someone or closed the call with a reason.

@@ -184,3 +184,40 @@ export function timeZoneLabel(timeZone: string = DEFAULT_TIMEZONE): string {
   const city = timeZone.split('/').pop() || timeZone
   return `${city.replace(/_/g, ' ')} time`
 }
+
+/**
+ * The calendar day a stored deadline falls on, in a zone.
+ *
+ * Intake stores a date-only deadline ("31 December") at exactly 00:00 UTC: it
+ * means that date in every zone, and reading it as an instant would move it to
+ * the previous day anywhere west of UTC. Any other stored value is a real
+ * instant, read in the zone. For India the two readings agree on every date
+ * stored at UTC midnight (+05:30 never crosses midnight), so its deadlines are
+ * unchanged by this rule.
+ */
+export function deadlineDayKey(value: Date | string | number, timeZone: string = DEFAULT_TIMEZONE): string {
+  const date = toDate(value)
+  if (!date) return dayKey(new Date(NaN), timeZone)
+  const midnightUtc = date.getUTCHours() === 0 && date.getUTCMinutes() === 0 && date.getUTCSeconds() === 0 && date.getUTCMilliseconds() === 0
+  return midnightUtc ? date.toISOString().slice(0, 10) : dayKey(date, timeZone)
+}
+
+/** A datetime-local input value ("YYYY-MM-DDTHH:mm") for an instant, in a zone. */
+export function toZonedDateTimeInput(value: Date | string | number, timeZone: string = DEFAULT_TIMEZONE): string {
+  const date = toDate(value)
+  if (!date) return ''
+  const zone = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIMEZONE
+  return new Date(date.getTime() + timeZoneOffsetMinutes(zone, date) * 60000).toISOString().slice(0, 16)
+}
+
+/** The instant a zone's local "YYYY-MM-DDTHH:mm" names (DST-safe), or null. */
+export function fromZonedDateTimeInput(local: string, timeZone: string = DEFAULT_TIMEZONE): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local)) return null
+  const zone = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIMEZONE
+  const asUtc = new Date(`${local}:00Z`)
+  const first = timeZoneOffsetMinutes(zone, asUtc)
+  let instant = asUtc.getTime() - first * 60000
+  const second = timeZoneOffsetMinutes(zone, new Date(instant))
+  if (second !== first) instant = asUtc.getTime() - second * 60000
+  return new Date(instant)
+}

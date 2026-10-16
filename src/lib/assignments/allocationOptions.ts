@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { zonedDayStart } from '@/lib/i18n/format'
 import { Prisma } from '@/lib/prisma-generated'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope, type TenantScopeContext } from '@/lib/auth/tenantAccess'
@@ -41,6 +43,7 @@ function pagination(params: URLSearchParams) {
 }
 
 export async function callOptions(context: TenantScopeContext, params: URLSearchParams) {
+  const timeZone = await getTenantTimeZone(context.tenantId)
   const { person, permission } = await allocationPerson(context, params.get('assigneeUserId') || '')
   const { limit, offset } = pagination(params)
   const q = (params.get('q') || '').trim().slice(0, 200)
@@ -50,7 +53,11 @@ export async function callOptions(context: TenantScopeContext, params: URLSearch
   else {
     if (q) filters.push({ OR: ['id', 'programIdentifier', 'title', 'scheme_title', 'agencyName', 'agency_name', 'description', 'summary'].map(field => ({ [field]: { contains: q, mode: 'insensitive' } })) })
     if (params.get('includeClosed') !== 'true') {
-      const today = new Date(`${allocationDateKey(new Date())}T00:00:00+05:30`)
+      // The earlier of local midnight and UTC midnight of the local day: a
+      // date-only deadline (stored at 00:00 UTC) for today stays in, whichever
+      // side of UTC the zone is. For India this is India midnight, as before.
+      const todayKey = allocationDateKey(new Date(), timeZone)
+      const today = new Date(Math.min(zonedDayStart(todayKey, timeZone).getTime(), Date.parse(`${todayKey}T00:00:00Z`)))
       filters.push({ OR: [
         { close_date: { gte: today } },
         { close_date: null, deadlineAt: { gte: today } },
@@ -79,7 +86,7 @@ export async function callOptions(context: TenantScopeContext, params: URLSearch
     const mapping = mappings.find(m => m.call_id === row.id)
     const deadline = row.close_date || row.deadlineAt
     return { id: row.id, title: row.scheme_title || row.title, agency: row.agency_name || row.agencyName,
-      closeDate: deadline, isClosed: allocationCallClosed(deadline),
+      closeDate: deadline, isClosed: allocationCallClosed(deadline, new Date(), timeZone),
       existingAssignment: assignment ? { id: assignment.id, status: assignment.status } : null,
       responsibility: { schoolId, schoolName: school?.name || null, willReopen: mapping?.is_active === false, previousReason: mapping?.ended_reason || null } }
   }), total, limit, offset }

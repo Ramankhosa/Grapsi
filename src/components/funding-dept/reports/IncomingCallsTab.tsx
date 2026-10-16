@@ -5,6 +5,7 @@
  * chip per school and the coordinator's own "action completed" mark.
  */
 import Link from 'next/link'
+import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 import { Fragment, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
@@ -32,6 +33,7 @@ const STATUS_STYLE: Record<ActionStatus, { badge: string; dot: string }> = {
 }
 
 export default function IncomingCallsTab({ filters, setFilters, openTab }: { filters: Filters; setFilters: (f: Filters) => void; openTab: OpenTab }) {
+  useTenantLocale()
   const [page, setPage] = useState(1); const [revision, setRevision] = useState(0); const [marking, setMarking] = useState<string | null>(null)
   const { data, error, loading } = useHubReport<Payload>('incoming-calls', filters, page, revision)
   const set = (key: string, value: string) => { setFilters({ ...filters, [key]: value }); setPage(1) }
@@ -44,7 +46,7 @@ export default function IncomingCallsTab({ filters, setFilters, openTab }: { fil
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
       <Stat title={filters.includeExpired === 'true' ? 'Calls (open)' : 'Open calls'} value={s?.openCalls} active={isQuick('')} help="Every open call that concerns your schools. Click to clear the action filters." onClick={() => quick({})} />
       <Stat title="Not started" value={s?.notStarted} active={isQuick('NOT_STARTED')} tone={s?.notStarted ? 'border-amber-300' : ''} help={define('Action: Not started')} onClick={() => quick({ action: 'NOT_STARTED' })} />
-      <Stat title="Closing in 7 days, not completed" value={s?.closingSoonNotCompleted} active={isQuick('NOT_COMPLETED', '7')} tone={s?.closingSoonNotCompleted ? 'border-red-300' : ''} help="Open calls closing within 7 India calendar days where at least one of your schools has not marked its action completed." onClick={() => quick({ action: 'NOT_COMPLETED', closingWithin: '7' })} />
+      <Stat title="Closing in 7 days, not completed" value={s?.closingSoonNotCompleted} active={isQuick('NOT_COMPLETED', '7')} tone={s?.closingSoonNotCompleted ? 'border-red-300' : ''} help="Open calls closing within 7 local calendar days where at least one of your schools has not marked its action completed." onClick={() => quick({ action: 'NOT_COMPLETED', closingWithin: '7' })} />
       <Stat title="Action completed" value={s?.completed} active={isQuick('COMPLETED')} help={define('Action: Action completed')} onClick={() => quick({ action: 'COMPLETED' })} />
     </div>
 
@@ -63,7 +65,7 @@ export default function IncomingCallsTab({ filters, setFilters, openTab }: { fil
 
     <Status loading={loading && !data} refreshing={loading && !!data} error={error} />
     {data && <p className="nk-sub text-xs">{plural(data.total, 'call')} · sorted by deadline, soonest first · schools reached by discipline mapping or by a strong/moderate faculty match
-      {data.matchesRefreshedAt ? ` · faculty matches refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}`
+      {data.matchesRefreshedAt ? ` · faculty matches refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: clientTimeZone(), dateStyle: 'medium', timeStyle: 'short' })}`
         : data.options.schools.length ? ' · faculty matching has not run yet for some schools' : ' · no schools in this view'}</p>}
 
     {data && <section className="nk-panel overflow-x-auto">

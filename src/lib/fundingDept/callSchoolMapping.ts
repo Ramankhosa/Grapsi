@@ -29,6 +29,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { openCallSql, textArray, visibleCallSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { getDeptSettings } from './settings'
 
 export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK', 'MANUAL_ALLOCATION'] as const
@@ -221,6 +222,7 @@ export function mapCallToSchoolsQuietly(callId: string) {
  * responsibilities it already has.
  */
 export async function remapSchoolOpenCalls(tenantId: string, schoolIds: string[], actorId: string | null = null) {
+  const timeZone = await getTenantTimeZone(tenantId)
   const roots = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT DISTINCT path[1] id FROM tenant_org_units WHERE tenant_id = ${tenantId} AND id = ANY(${textArray(schoolIds)})`)
   if (!roots.length) return []
@@ -233,7 +235,7 @@ export async function remapSchoolOpenCalls(tenantId: string, schoolIds: string[]
   // coordinator's queue already stale.
   const calls = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT fc.id FROM funding_calls fc
-     WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc')}
+     WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
        AND EXISTS (SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id)`)
   const planned = await planTenantMappings(tenantId, calls.map(c => c.id), { schoolIds: roots.map(r => r.id) })
   return writeMappings(planned, actorId)
@@ -331,8 +333,7 @@ export async function planBackfill(tenantId: string, backfillDay = new Date()) {
       SELECT fc.id FROM funding_calls fc
        WHERE ((fc."tenantId"=${tenantId} AND (fc.status='PUBLISHED' OR fc.catalog_status='PUBLISHED'))
               OR (fc."tenantId" IS NULL AND fc.visibility='GLOBAL_PUBLISHED' AND fc.status='PUBLISHED'))
-         AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-              OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)`),
+         AND ${openCallSql('fc', await getTenantTimeZone(tenantId))}`),
     prisma.$queryRaw<Array<{ call_id: string; school_id: string }>>(Prisma.sql`SELECT call_id, school_id FROM dsr_call_school_mappings WHERE tenant_id=${tenantId}`),
   ])
   const originRows = (await planTenantMappings(tenantId, origins.map(o => o.call_id), { backfilled: true })).filter(r => r.source === 'ORIGIN')

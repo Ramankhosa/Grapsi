@@ -1,6 +1,8 @@
 /** Pure reporting rules shared by the reports and their tests. */
 import { createHash } from 'node:crypto'
 
+import { DEFAULT_TIMEZONE, dayKey, deadlineDayKey } from '@/lib/i18n/format'
+
 export type ReportMode = 'pending' | 'cohort' | 'activity' | 'portfolio'
 export type AttentionFilter = 'upcoming-21' | 'missed-unallocated-no-submission' | 'missed-never-allocated' | 'missed-allocated-not-submitted'
 export type WaitingWith = 'FACULTY' | 'DSR' | 'REVIEWER' | 'APPROVER' | 'AGENCY'
@@ -56,16 +58,26 @@ export function overdueAt(value: Date | string | null | undefined, at: Date) {
 /** Calendar-day deadline classification in the department's reporting timezone.
  * Funding-call dates are date-like values, so a call due today must not become
  * "missed" halfway through the day just because its stored timestamp is 00:00. */
-export function indiaCalendarDay(value: Date | string) {
+export function indiaCalendarDay(value: Date | string, timeZone: string = DEFAULT_TIMEZONE) {
   const parsed = new Date(value)
   if (!Number.isFinite(parsed.getTime())) return null
-  const shifted = new Date(parsed.getTime() + 330 * 60_000)
-  return Math.floor(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) / day)
+  return Math.floor(Date.parse(`${dayKey(parsed, timeZone)}T00:00:00Z`) / day)
 }
-export function deadlineAttention(value: Date | string | null | undefined, at: Date) {
+
+/**
+ * The day number a stored deadline falls on: a date-only deadline (stored at
+ * 00:00 UTC) is its own date in every zone, an instant is read in the zone
+ * (deadlineDayKey). For India this equals indiaCalendarDay on every value.
+ */
+export function deadlineCalendarDay(value: Date | string, timeZone: string = DEFAULT_TIMEZONE) {
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  return Math.floor(Date.parse(`${deadlineDayKey(parsed, timeZone)}T00:00:00Z`) / day)
+}
+export function deadlineAttention(value: Date | string | null | undefined, at: Date, timeZone: string = DEFAULT_TIMEZONE) {
   if (!value) return { daysToDeadline: null, status: 'UNKNOWN' as const, upcoming21: false, missed: false }
-  const deadlineDay = indiaCalendarDay(value)
-  const reportDay = indiaCalendarDay(at)
+  const deadlineDay = deadlineCalendarDay(value, timeZone)
+  const reportDay = indiaCalendarDay(at, timeZone)
   if (deadlineDay === null || reportDay === null) return { daysToDeadline: null, status: 'UNKNOWN' as const, upcoming21: false, missed: false }
   const daysToDeadline = deadlineDay - reportDay
   return {
@@ -75,8 +87,8 @@ export function deadlineAttention(value: Date | string | null | undefined, at: D
     missed: daysToDeadline < 0,
   }
 }
-export function opportunityDeadlineAttention(input:{deadline:Date|string|null|undefined;asOf:Date;quality:string;formalAllocations:number;submissions:number;outstandingApplications:number}) {
-  const deadline=deadlineAttention(input.deadline,input.asOf)
+export function opportunityDeadlineAttention(input:{deadline:Date|string|null|undefined;asOf:Date;quality:string;formalAllocations:number;submissions:number;outstandingApplications:number;timeZone?:string}) {
+  const deadline=deadlineAttention(input.deadline,input.asOf,input.timeZone)
   const confirmed=input.quality==='confirmed'
   return {...deadline,
     upcoming21:confirmed && deadline.upcoming21 && (input.formalAllocations===0 || input.outstandingApplications>0),

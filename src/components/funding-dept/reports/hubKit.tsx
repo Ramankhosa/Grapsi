@@ -6,6 +6,7 @@
  * its filters in the URL, so any report can open another one already filtered.
  */
 import { useEffect, useState } from 'react'
+import { clientTimeZone } from '@/hooks/useTenantLocale'
 
 import { useAuth } from '@/lib/auth-context'
 import { REPORT_DEFINITIONS } from '@/lib/fundingDept/reportGlossary'
@@ -18,7 +19,7 @@ export type HubTab = 'incoming' | 'assigned' | 'pendency' | 'followups'
 
 export const field = 'rounded border border-nickel-300 bg-white px-2 py-1.5 text-sm'
 export const define = (term: string) => REPORT_DEFINITIONS.find(d => d.term === term)?.definition || ''
-export const fmtDate = (s?: string | null) => s ? new Date(s).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' }) : '—'
+export const fmtDate = (s?: string | null) => s ? new Date(s).toLocaleDateString('en-IN', { timeZone: clientTimeZone(), day: 'numeric', month: 'short', year: 'numeric' }) : '—'
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 /** The filters that define whose work a report shows; they travel with every jump between reports. */
 export const SCOPE_KEYS = ['memberId', 'schoolId', 'portfolio'] as const

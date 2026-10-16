@@ -31,6 +31,7 @@ import { Prisma } from '@/lib/prisma-generated'
 
 import type { ActivityWindow } from './accountabilityService'
 import { callEnteredAtSql, openCallSql, liveCallWorkSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { queueSchoolMatchRefresh } from './currentMatches'
 import { getCoverageForUnits } from './membershipService'
 import { queueStateSql, untouchedSql } from './queueState'
@@ -120,6 +121,7 @@ async function backlogForSchool(
   settings: DeptSettings,
   options: { includeClosed: boolean; now: Date }
 ): Promise<BacklogRow[]> {
+  const timeZone = await getTenantTimeZone(tenantId)
   const scopeIds = await subtreeUnitIds(tenantId, [school.id])
   const scopeArray = textArray(scopeIds)
 
@@ -169,7 +171,7 @@ async function backlogForSchool(
       LEFT JOIN call_school_triage tri
              ON tri.funding_call_id = fc.id AND tri.org_unit_id = ${school.id}
      WHERE ${visibleCallSql(tenantId, 'fc')}
-       AND ${options.includeClosed ? Prisma.sql`TRUE` : Prisma.sql`(${openCallSql()} OR ${liveCallWorkSql(tenantId,school.id)})`}
+       AND ${options.includeClosed ? Prisma.sql`TRUE` : Prisma.sql`(${openCallSql('fc', timeZone)} OR ${liveCallWorkSql(tenantId,school.id)})`}
        AND ${relevant}
        AND ${untouched}
      ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST

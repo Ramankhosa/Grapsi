@@ -50,9 +50,17 @@ export async function getTenantLocale(tenantId: string | null | undefined): Prom
   if (!tenantId) return DEFAULT_TENANT_LOCALE
   const hit = cache.get(tenantId)
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value
-  const row = await prisma.tenant
-    .findUnique({ where: { id: tenantId }, select: { default_currency: true, timezone: true, locale: true, country_code: true } })
-    .catch(() => null)
+  // Settings must never take a read path down: any failure (including a
+  // client without the tenant model, as in unit tests) means the default.
+  let row: Parameters<typeof resolveTenantLocale>[0] = null
+  try {
+    row = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { default_currency: true, timezone: true, locale: true, country_code: true },
+    })
+  } catch {
+    row = null
+  }
   const value = resolveTenantLocale(row)
   cache.set(tenantId, { value, at: Date.now() })
   return value

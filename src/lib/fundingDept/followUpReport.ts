@@ -19,8 +19,12 @@ import { Prisma } from '@/lib/prisma-generated'
 import { textArray, utcTimestamp } from './callSql'
 import { coordinatorSql } from './hubScope'
 import { FOLLOW_UP_STAGE_ORDER, countableFollowUpSql, facultyContactSql, indiaWeekStart, indiaWeekStartSql } from './reportDefinitions'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { DEFAULT_TIMEZONE, zonedDayStart } from '@/lib/i18n/format'
 
 export type FollowUpFilters = {
+  /** The tenant's zone: weeks run Monday to Sunday there. Filled by getFollowUpReport. */
+  timeZone?: string
   schoolIds: string[]
   /** Only effort by / allocations owned by this user (the head's Member filter). */
   memberUserId?: string | null
@@ -54,22 +58,25 @@ const ACTIVE = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']
 export const NO_OWNER = 'no-coordinator'
 const empty = (): WeekCell => ({ followUps: 0, facultyContacts: 0, reminders: 0, active: 0, touched: 0, silent: 0 })
 
-/** The Mondays of the last `n` India weeks, oldest first, ending with the current week. */
-export function weekStarts(asOf: Date, n: number): string[] {
-  const current = new Date(`${indiaWeekStart(asOf)}T00:00:00Z`)
+/** The Mondays of the last `n` weeks in the zone (India by default), oldest first, ending with the current week. */
+export function weekStarts(asOf: Date, n: number, timeZone: string = DEFAULT_TIMEZONE): string[] {
+  const current = new Date(`${indiaWeekStart(asOf, timeZone)}T00:00:00Z`)
   return Array.from({ length: n }, (_, i) => new Date(current.getTime() - (n - 1 - i) * 7 * 86400000).toISOString().slice(0, 10))
 }
-/** UTC instant at which an India-date week starts. */
-const weekInstant = (monday: string) => new Date(new Date(`${monday}T00:00:00Z`).getTime() - 330 * 60000)
+/** UTC instant at which a week (a local Monday) starts in the zone. */
+const weekInstant = (monday: string, timeZone: string = DEFAULT_TIMEZONE) => zonedDayStart(monday, timeZone)
+/** The calendar day `n` days after a YYYY-MM-DD day. */
+const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
 
 export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
+  f = { ...f, timeZone: f.timeZone ?? (await getTenantTimeZone(tenantId)) }
   if (![4, 8, 12, 26].includes(f.weeks)) throw new FollowUpReportError('Weeks must be 4, 8, 12 or 26.')
-  const weeks = weekStarts(f.asOf, f.weeks)
+  const weeks = weekStarts(f.asOf, f.weeks, f.timeZone)
   const empty_ = { weeks, members: [] as MemberWeeks[], effort: [] as EffortRow[], effortTotal: 0, log: [] as LogEntry[], logTotal: 0, page: f.page, pageSize: f.pageSize,
     totals: { followUps: 0, facultyContacts: 0, activeAssignments: 0, silentThisWeek: 0 }, total: 0 }
   if (!f.schoolIds.length) return empty_
-  const start = weekInstant(weeks[0])
-  const end = new Date(weekInstant(weeks[weeks.length - 1]).getTime() + 7 * 86400000)
+  const start = weekInstant(weeks[0], f.timeZone)
+  const end = weekInstant(addDays(weeks[weeks.length - 1], 7), f.timeZone)
   const scope = textArray(f.schoolIds)
   const faculty = facultyContactSql('f')
 
@@ -77,7 +84,7 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   const entries = await prisma.$queryRaw<Array<{ id: string; assignment_id: string | null; funding_call_id: string | null; kind: string; contact_target: string; stage: string | null
     note: string; happened_at: Date; created_by_user_id: string; author: string | null; week: Date; school_name: string | null; call_title: string | null; faculty_name: string | null; is_faculty: boolean }>>(Prisma.sql`
     SELECT f.id, f.assignment_id, COALESCE(f.funding_call_id, ca.funding_call_id) funding_call_id, f.kind, f.contact_target, f.stage, f.note, f.happened_at, f.created_by_user_id,
-      COALESCE(au.name, au.email) author, ${indiaWeekStartSql('f.happened_at')} week, s.name school_name, COALESCE(fc.scheme_title, fc.title) call_title,
+      COALESCE(au.name, au.email) author, ${indiaWeekStartSql('f.happened_at', f.timeZone)} week, s.name school_name, COALESCE(fc.scheme_title, fc.title) call_title,
       COALESCE(fu.name, fu.email) faculty_name, ${faculty} is_faculty
     FROM assignment_follow_ups f
     LEFT JOIN call_assignments ca ON ca.id = f.assignment_id
@@ -157,7 +164,7 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   // now, for the current week): one declined or submitted mid-week is not owed
   // a follow-up that week, and must not show as silent.
   const aliveIn = (a: { created_at: Date; closed_at: Date | null }, monday: string) => {
-    const we = new Date(weekInstant(monday).getTime() + 7 * 86400000)
+    const we = weekInstant(addDays(monday, 7), f.timeZone)
     const close = we > f.asOf ? f.asOf : we
     return a.created_at < close && (!a.closed_at || a.closed_at >= close)
   }

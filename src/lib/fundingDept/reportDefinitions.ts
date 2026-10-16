@@ -17,6 +17,8 @@
  * re-exported here so there is one import for "what does this report count".
  */
 import { Prisma } from '@/lib/prisma-generated'
+import { DEFAULT_TIMEZONE, dayKey, deadlineDayKey } from '@/lib/i18n/format'
+import { deadlineDayRaw, timeZoneLiteral } from '@/lib/i18n/sql'
 
 import { applicationState, deadlineAttention, type ApplicationRow } from './managementRules'
 import {
@@ -193,8 +195,8 @@ export type DeadlineFacts = {
  * submitted work, or a recorded closure, is handled; otherwise the call was
  * missed — and whether anybody was ever allocated decides which kind of miss.
  */
-export function deadlineState(facts: DeadlineFacts, asOf: Date): DeadlineState {
-  const attention = deadlineAttention(facts.deadline, asOf)
+export function deadlineState(facts: DeadlineFacts, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): DeadlineState {
+  const attention = deadlineAttention(facts.deadline, asOf, timeZone)
   if (attention.daysToDeadline === null) return 'NO_DEADLINE'
   if (attention.daysToDeadline >= 0) return attention.daysToDeadline <= CLOSING_SOON_DAYS ? 'CLOSING_SOON' : 'OPEN'
   if (facts.submissions > 0 || (facts.closedWithReason && facts.formalAllocations === 0)) return 'PASSED_HANDLED'
@@ -205,16 +207,17 @@ export function deadlineState(facts: DeadlineFacts, asOf: Date): DeadlineState {
  * Whole India calendar days from `asOf` to the deadline expression, negative
  * once it has passed. Deadlines are stored as UTC timestamps without zone.
  */
-export function indiaDaysToDeadlineSql(deadline: string, asOf: Date): Prisma.Sql {
+export function indiaDaysToDeadlineSql(deadline: string, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
   // asOf is bound as an ISO string: a bound Date arrives zone-less and would be
-  // read in the session time zone, which is not UTC on every server.
-  return Prisma.sql`((${Prisma.raw(deadline)} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date
-    - (${asOf.toISOString()}::timestamptz AT TIME ZONE 'Asia/Kolkata')::date)`
+  // read in the session time zone, which is not UTC on every server. The
+  // deadline day follows deadlineDayKey (date-only deadlines keep their date).
+  return Prisma.sql`(${Prisma.raw(deadlineDayRaw(deadline, timeZone))}
+    - (${asOf.toISOString()}::timestamptz AT TIME ZONE ${Prisma.raw(timeZoneLiteral(timeZone))})::date)`
 }
 
 /** `deadlineState` in SQL. */
-export function deadlineStateSql(cols: { deadline: string; formalAllocations: string; submissions: string; closedWithReason: string }, asOf: Date): Prisma.Sql {
-  const days = indiaDaysToDeadlineSql(cols.deadline, asOf)
+export function deadlineStateSql(cols: { deadline: string; formalAllocations: string; submissions: string; closedWithReason: string }, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const days = indiaDaysToDeadlineSql(cols.deadline, asOf, timeZone)
   return Prisma.sql`(CASE
     WHEN ${Prisma.raw(cols.deadline)} IS NULL THEN 'NO_DEADLINE'
     WHEN ${days} > ${CLOSING_SOON_DAYS} THEN 'OPEN'
@@ -325,20 +328,22 @@ export const UNCOUNTED_MATCH_VERSIONS = ['manual-allocation-v1', 'person-call-ce
  * `is_current` is not required, so a call missed months ago still shows the
  * match it had then.
  */
-export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string, width: MatchWidth = DEFAULT_MATCH_WIDTH): Prisma.Sql {
+export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string, width: MatchWidth = DEFAULT_MATCH_WIDTH, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
   const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
+  const zone = timeZoneLiteral(timeZone)
   return Prisma.sql`(${Prisma.raw(`${matchAlias}.inferred = false AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
     AND ${countsAtWidthSql(matchAlias, width)}
-    ${Prisma.raw(`AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= (${deadlineExpr} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date)`)})`
+    ${Prisma.raw(`AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE ${zone})::date <= ${deadlineDayRaw(deadlineExpr, timeZone)})`)})`
 }
 export const isQualifyingMatch = (
   m: { inferred: boolean; source_version: string | null; match_tier: string | null; match_score?: number | null; first_seen_at: Date | string },
   deadline: Date | string | null,
-  width: MatchWidth = DEFAULT_MATCH_WIDTH
+  width: MatchWidth = DEFAULT_MATCH_WIDTH,
+  timeZone: string = DEFAULT_TIMEZONE
 ) =>
   !m.inferred && !UNCOUNTED_MATCH_VERSIONS.includes(m.source_version as never)
   && isCountedBand(bandForScore(m.match_score ?? null, width, m.match_tier))
-  && (!deadline || indiaDate(m.first_seen_at) <= indiaDate(deadline))
+  && (!deadline || indiaDate(m.first_seen_at, timeZone) <= deadlineDayKey(deadline, timeZone))
 
 /**
  * The same rule for a *live* match: what "matched faculty" means on every
@@ -361,19 +366,19 @@ export function currentQualifyingMatchSql(matchAlias: string, width: MatchWidth 
 /* Follow-up effort — India weeks                                             */
 /* -------------------------------------------------------------------------- */
 
-const IST_OFFSET_MS = 330 * 60000
-/** YYYY-MM-DD of the India calendar day a UTC instant falls on. */
-export function indiaDate(at: Date | string): string {
-  return new Date(new Date(at).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10)
+/** YYYY-MM-DD of the calendar day a UTC instant falls on, in the zone (India by default). */
+export function indiaDate(at: Date | string, timeZone: string = DEFAULT_TIMEZONE): string {
+  return dayKey(at, timeZone)
 }
-/** Monday (YYYY-MM-DD) of the India week containing this instant. */
-export function indiaWeekStart(at: Date | string): string {
-  const day = new Date(`${indiaDate(at)}T00:00:00Z`)
+/** Monday (YYYY-MM-DD) of the week containing this instant, in the zone. */
+export function indiaWeekStart(at: Date | string, timeZone: string = DEFAULT_TIMEZONE): string {
+  const day = new Date(`${indiaDate(at, timeZone)}T00:00:00Z`)
   const offset = (day.getUTCDay() + 6) % 7
   return new Date(day.getTime() - offset * 86400000).toISOString().slice(0, 10)
 }
 /** `indiaWeekStart` in SQL over a UTC timestamp column; yields a date. */
-export const indiaWeekStartSql = (column: string) => Prisma.raw(`date_trunc('week', (${column} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::date`)
+export const indiaWeekStartSql = (column: string, timeZone: string = DEFAULT_TIMEZONE) =>
+  Prisma.raw(`date_trunc('week', (${column} AT TIME ZONE 'UTC' AT TIME ZONE ${timeZoneLiteral(timeZone)}))::date`)
 
 /** A follow-up the effort report counts: anything a person logged, not review history. */
 export const countableFollowUpSql = (alias = 'f') => Prisma.raw(`(${alias}.kind <> 'TRIAGE')`)

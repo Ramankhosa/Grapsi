@@ -29,3 +29,20 @@ export function localDateSql(expression: Prisma.Sql, timeZone: string | null | u
 export function localTodaySql(timeZone: string | null | undefined): Prisma.Sql {
   return Prisma.sql`(now() AT TIME ZONE ${safeTimeZone(timeZone)})::date`
 }
+
+/**
+ * `deadlineDayKey` in SQL over a UTC timestamp expression: a value at exactly
+ * 00:00 UTC is a date-only deadline (its own date in every zone); anything
+ * else is an instant read in the zone.
+ */
+export function deadlineDaySql(expression: Prisma.Sql, timeZone: string | null | undefined | Prisma.Sql): Prisma.Sql {
+  const zone = typeof timeZone === 'object' && timeZone !== null ? timeZone : Prisma.sql`${safeTimeZone(timeZone as string | null | undefined)}`
+  return Prisma.sql`(CASE WHEN (${expression})::time = time '00:00' THEN (${expression})::date
+    ELSE ((${expression}) AT TIME ZONE 'UTC' AT TIME ZONE ${zone})::date END)`
+}
+
+/** `deadlineDaySql` for raw-SQL builders: the expression and a validated zone literal. */
+export function deadlineDayRaw(expression: string, timeZone: string | null | undefined): string {
+  const zone = timeZoneLiteral(timeZone)
+  return `(CASE WHEN (${expression})::time = time '00:00' THEN (${expression})::date ELSE ((${expression}) AT TIME ZONE 'UTC' AT TIME ZONE ${zone})::date END)`
+}

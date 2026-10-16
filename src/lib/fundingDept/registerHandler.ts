@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 
 import { getAuditTrail, AUDIT_ENTITY_TYPES } from './auditTrail'
 import { textArray } from './callSql'
@@ -33,13 +34,13 @@ export async function registerReportHandler(request: NextRequest, view: (typeof 
     if (requestedSchool && access.schoolIds && !access.schoolIds.includes(requestedSchool))
       return NextResponse.json({ error: 'That school is outside your access.' }, { status: 403 })
     const allTime = params.get('window') === 'all'
-    const window = allTime ? { start: null, end: null, asOf: new Date(), label: 'All time', timezone: 'Asia/Kolkata' } : await managementWindow(tenantId, params)
+    const window = allTime ? { start: null, end: null, asOf: new Date(), label: 'All time', timezone: await getTenantTimeZone(tenantId) } : await managementWindow(tenantId, params)
     const page = Math.max(1, Number.parseInt(params.get('page') || '1', 10) || 1)
     const pageSize = Math.max(1, Math.min(100, Number.parseInt(params.get('pageSize') || '20', 10) || 20))
     const format = params.get('format')
     const exporting = format === 'csv' || format === 'xlsx'
     const scope = access.schoolIds
-    const stamp = (report: string, snapshot: string | null) => ({ report, snapshot, periodLabel: window.label, periodStart: window.start, periodEnd: window.end,
+    const stamp = (report: string, snapshot: string | null) => ({ report, snapshot, timeZone: window.timezone, periodLabel: window.label, periodStart: window.start, periodEnd: window.end,
       filters: Object.fromEntries([...params].filter(([k]) => !['format', 'page', 'pageSize'].includes(k))) })
     const snapshotOf = async (payload: unknown) => writeReportSnapshot(tenantId, access.context.user.id, reportScopeKey(access), reportFilterKey(params, view), payload as never)
     const registerFilters: RegisterFilters = {

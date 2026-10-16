@@ -9,6 +9,8 @@
  */
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { DEFAULT_TIMEZONE } from '@/lib/i18n/format'
+import { deadlineDaySql, safeTimeZone } from '@/lib/i18n/sql'
 
 /** A bound `text[]` literal. Empty arrays are the caller problem, not this one. */
 export function textArray(values: string[]): Prisma.Sql {
@@ -32,12 +34,53 @@ export function visibleCallSql(tenantId: string, alias = 'fc'): Prisma.Sql {
   )`
 }
 
-/** Still open for applications, or has no stated closing date at all. */
-export function openCallSql(alias = 'fc'): Prisma.Sql {
+/**
+ * The zone a call's deadline day is read in: an imported call's own
+ * (deadline_timezone, the funder's) when it has one, else the tenant's.
+ * Curated calls never carry deadline_timezone (the existing-call backfill
+ * leaves it unset), so for them this is the tenant zone, Asia/Kolkata unless
+ * the tenant set another.
+ */
+export function callDeadlineZoneSql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  return Prisma.sql`COALESCE(CASE WHEN ${a}.import_run_id IS NOT NULL THEN ${a}.deadline_timezone END, ${safeTimeZone(timeZone)})`
+}
+
+/**
+ * The calendar day applications close, in the call's deadline zone. A
+ * curated call's stored value follows deadlineDayKey: a date-only deadline
+ * (00:00 UTC) keeps its date, an instant is read as a local day. An imported call
+ * publishes date-only deadlines (entry_closes_at: a letter-of-intent stage
+ * closes entry first), already a calendar day: shifting a date stored at UTC
+ * midnight into a western zone would move it to the day before.
+ */
+export function callClosingDaySql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  return Prisma.sql`(CASE
+    WHEN ${a}.import_run_id IS NOT NULL AND COALESCE(${a}.entry_closes_at, ${a}.final_deadline_at) IS NOT NULL
+      THEN COALESCE(${a}.entry_closes_at, ${a}.final_deadline_at)
+    ELSE ${deadlineDaySql(Prisma.sql`COALESCE(${a}.close_date, ${a}."deadlineAt")`, callDeadlineZoneSql(alias, timeZone))}
+  END)`
+}
+
+/** Today, in the call's deadline zone. */
+export function callTodaySql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  return Prisma.sql`(now() AT TIME ZONE ${callDeadlineZoneSql(alias, timeZone)})::date`
+}
+
+/**
+ * Still open for applications, or has no stated closing date at all. A
+ * deadline stays open to the end of its local day. An imported call the
+ * source has marked closed is closed whatever its dates say.
+ */
+export function openCallSql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
   const a = Prisma.raw(alias)
   return Prisma.sql`(
-    COALESCE(${a}.close_date, ${a}."deadlineAt") IS NULL
-    OR (COALESCE(${a}.close_date, ${a}."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date
+    NOT (${a}.import_run_id IS NOT NULL AND ${a}.source_closed_at IS NOT NULL)
+    AND (
+      ${callClosingDaySql(alias, timeZone)} IS NULL
+      OR ${callClosingDaySql(alias, timeZone)} >= ${callTodaySql(alias, timeZone)}
+    )
   )`
 }
 

@@ -45,7 +45,8 @@ import {
   type AccountabilityFlag,
   type FlagInput,
 } from './accountabilityFlags'
-import { textArray } from './callSql'
+import { openCallSql, textArray } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { listMembers } from './membershipService'
 import { isCallUntouched, queueStateFor, type QueueState } from './queueState'
 import { getSchoolFunnel, type SchoolFunnelRow } from './schoolFunnelService'
@@ -846,6 +847,7 @@ export async function getSchoolCallLedger(
 ): Promise<SchoolCallLedger> {
   const now = options.now ?? new Date()
   const settings = options.settings ?? (await getDeptSettings(tenantId))
+  const timeZone = await getTenantTimeZone(tenantId)
 
   const school = await prisma.tenantOrgUnit.findFirst({
     where: { id: schoolId, tenant_id: tenantId },
@@ -919,8 +921,7 @@ export async function getSchoolCallLedger(
        AND (
              -- Open and relevant to this school…
              (
-               (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-                OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
+               ${openCallSql('fc', timeZone)}
                AND ${relevant}
              )
              -- …or closed, but this school still has work on it.

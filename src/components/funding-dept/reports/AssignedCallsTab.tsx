@@ -6,6 +6,8 @@
  * to move each one along.
  */
 import Link from 'next/link'
+import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
+import { timeZoneLabel } from '@/lib/i18n/format'
 import { Fragment, useState } from 'react'
 
 import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
@@ -39,6 +41,7 @@ const OUTCOME: Record<string, string> = { AWARDED: 'nk-badge nk-badge-ok', REJEC
 const kindLabel = (k: string) => ({ CALL: 'Call', EMAIL: 'Email', MEETING: 'Meeting', NOTE: 'Note', REMINDER: 'Reminder' } as Record<string, string>)[k] || k
 
 export default function AssignedCallsTab({ filters, setFilters, openTab }: { filters: Filters; setFilters: (f: Filters) => void; openTab: OpenTab }) {
+  useTenantLocale()
   const { showToast } = useToast()
   const [page, setPage] = useState(1); const [revision, setRevision] = useState(0)
   const [open, setOpen] = useState<string | null>(null); const [profile, setProfile] = useState<Row['faculty'] | null>(null)
@@ -60,7 +63,7 @@ export default function AssignedCallsTab({ filters, setFilters, openTab }: { fil
       <Stat title="No reply for 7+ days" value={s?.awaitingReply} active={isQuick('awaiting')} tone={s?.awaitingReply ? 'border-amber-300' : ''} help="Allocated more than 7 days ago and the faculty member has not accepted or declined." onClick={() => quick({ awaitingReply: 'true' })} />
       <Stat title="Overdue, not submitted" value={s?.overdue} active={isQuick('overdue')} tone={s?.overdue ? 'border-red-300' : ''} help="Active allocations past the internal deadline (or the agency deadline when no internal one was set)." onClick={() => quick({ due: 'overdue' })} />
       <Stat title="Silent for 7+ days" value={s?.silent} active={isQuick('silent')} tone={s?.silent ? 'border-amber-300' : ''} help="Active allocations with no follow-up logged in the last 7 days." onClick={() => quick({ silent: 'true' })} />
-      <Stat title="Submitted this month" value={s?.submittedThisMonth} active={isQuick('submitted')} help="Allocations recorded as submitted since the 1st of this month (India time)." onClick={() => quick({ status: 'submitted', submittedIn: 'month' })} />
+      <Stat title="Submitted this month" value={s?.submittedThisMonth} active={isQuick('submitted')} help={`Allocations recorded as submitted since the 1st of this month (${timeZoneLabel(clientTimeZone())}).`} onClick={() => quick({ status: 'submitted', submittedIn: 'month' })} />
     </div>
 
     <div className="nk-panel flex flex-wrap items-end gap-3 p-4">

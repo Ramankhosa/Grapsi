@@ -107,7 +107,7 @@ export const PENDENCY_STATE_LABELS: Record<PendencyState, string> = {
 /** The three states that count as pendency; a coordinator-closed call is shown, not counted. */
 export const COUNTED_PENDENCY_STATES: PendencyState[] = ['MISSED', 'AT_RISK', 'PENDING']
 
-/* Follow-up effort — weekly, India time */
+/* Follow-up effort — weekly, in the organization's time zone */
 
 export const FACULTY_CONTACT_KINDS = ['CALL', 'EMAIL', 'MEETING'] as const
 export const FOLLOW_UP_STAGE_ORDER = ['CONTACTED', 'PREPARING', 'APPROVALS', 'SUBMITTED'] as const
@@ -131,8 +131,8 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
   }[state] })),
   ...DEADLINE_STATES.map(state => ({ term: `Deadline: ${DEADLINE_STATE_LABELS[state]}`, definition: {
     NO_DEADLINE: 'The call has no deadline on record.',
-    OPEN: `More than ${CLOSING_SOON_DAYS} India calendar days remain.`,
-    CLOSING_SOON: `${CLOSING_SOON_DAYS} or fewer India calendar days remain, including the deadline day itself.`,
+    OPEN: `More than ${CLOSING_SOON_DAYS} calendar days remain.`,
+    CLOSING_SOON: `${CLOSING_SOON_DAYS} or fewer calendar days remain, including the deadline day itself.`,
     PASSED_HANDLED: 'The deadline passed after a submission, or after the school closed the call with a reason.',
     MISSED_NEVER_ALLOCATED: 'The deadline passed with no allocation, no submission and no recorded closure.',
     MISSED_ALLOCATED_NOT_SUBMITTED: 'The deadline passed with an allocation but no submission.',
@@ -146,16 +146,16 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
   { term: 'Directly matched call', definition: `A call with at least one ${PENDENCY_MATCH_TIERS.join(' or ')} automatic faculty match in the school, first seen before the call's deadline. Weak, reconstructed and manual-allocation matches do not count.` },
   ...PENDENCY_STATES.map(state => ({ term: `Pendency: ${PENDENCY_STATE_LABELS[state]}`, definition: {
     MISSED: 'A directly matched call whose deadline passed with nobody from the school allocated, no independent application, and no "not relevant" decision.',
-    AT_RISK: `A directly matched call, still open, closing within ${PENDENCY_AT_RISK_DAYS} India calendar days, with nobody allocated.`,
+    AT_RISK: `A directly matched call, still open, closing within ${PENDENCY_AT_RISK_DAYS} calendar days, with nobody allocated.`,
     PENDING: `A directly matched call, still open with more than ${PENDENCY_AT_RISK_DAYS} days left, with nobody allocated.`,
     COMPLETED_NO_ALLOCATION: 'The coordinator marked the action completed without allocating anyone. Shown with their note for the head to judge; not counted as pendency.',
   }[state] })),
   { term: 'Pendency vs. escalation ladder', definition: 'The escalation reminders use a different rule: any relevant call nobody has reviewed or contacted about. This report only counts calls with a direct faculty match that nobody was allocated to.' },
   { term: 'Follow-up', definition: 'An entry in the DSR contact log (call, email, meeting, note or scheduled reminder). Automatic review-history entries are not counted.' },
   { term: 'Faculty contact', definition: 'A follow-up logged as a call, email or meeting with the faculty member.' },
-  { term: 'Follow-up week', definition: 'Monday to Sunday, India (Asia/Kolkata) time.' },
+  { term: 'Follow-up week', definition: "Monday to Sunday in the organization's time zone (India, Asia/Kolkata, unless the organization set another in Regional Settings)." },
   { term: 'Silent assignment', definition: 'An allocation still open (assigned, accepted or in progress) at the end of the week with no follow-up logged that week.' },
   { term: 'Reporting period', definition: 'Period totals cover calls that entered in the selected period, with their progress as of the report date. "Needs attention now" ignores the period.' },
-  { term: 'Deadline day', definition: 'A deadline stays open until the end of its India (Asia/Kolkata) calendar day.' },
+  { term: 'Deadline day', definition: "A deadline stays open until the end of its calendar day in the organization's time zone (India, Asia/Kolkata, unless set otherwise). A date-only deadline is that date wherever you are." },
 ]
 

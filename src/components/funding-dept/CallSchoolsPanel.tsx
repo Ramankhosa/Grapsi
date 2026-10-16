@@ -8,6 +8,7 @@
  * allocated or shortlisted.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 
 import { useAuth } from '@/lib/auth-context'
 import { ACTION_STATUS_LABELS, type ActionStatus } from '@/lib/fundingDept/reportGlossary'
@@ -32,6 +33,7 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
   width: MatchWidth | null
   onWidthChange: (width: MatchWidth) => void
 }) {
+  useTenantLocale()
   const { authFetch } = useAuth()
   const [data, setData] = useState<Payload | null>(null); const [error, setError] = useState(''); const [marking, setMarking] = useState(false)
   const [own, setOwn] = useState(0)
@@ -94,7 +96,7 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
             <td className="border-t border-nickel-100 px-3 py-2 text-right"><button className={on ? 'nk-btn-primary nk-btn-xs' : 'nk-btn-secondary nk-btn-xs'} onClick={() => onSelect(s.schoolId)}>{on ? 'Showing below' : 'Show faculty'}</button></td>
           </tr> })}</tbody></table>}
     {data.canAddSchool && data.otherSchools.length > 0 && <AddSchool callId={callId} schools={data.otherSchools} onAdded={changed} />}
-    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = people scored against this call who reach the <strong>{MATCH_WIDTH_COPY[data.width].label.toLowerCase()}</strong> width{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}` : ''}. {MATCH_WIDTH_COPY[data.width].help} Picking a school lists those same people below, possible matches included, so you can see everyone who was considered. Changing the width re-counts what is already scored; it never changes the scores.</p>
+    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = people scored against this call who reach the <strong>{MATCH_WIDTH_COPY[data.width].label.toLowerCase()}</strong> width{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: clientTimeZone(), dateStyle: 'medium', timeStyle: 'short' })}` : ''}. {MATCH_WIDTH_COPY[data.width].help} Picking a school lists those same people below, possible matches included, so you can see everyone who was considered. Changing the width re-counts what is already scored; it never changes the scores.</p>
   </section>
 }
 

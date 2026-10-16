@@ -7,6 +7,7 @@
  * opens exactly the records it counts.
  */
 import Link from 'next/link'
+import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 import { Fragment, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
@@ -19,7 +20,7 @@ import {
 export type RegisterFilterState = Record<string, string>
 
 const field = 'rounded border border-nickel-300 bg-white px-2 py-1.5 text-sm'
-const date = (s?: string | null) => s ? new Date(s).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' }) : 'Not recorded'
+const date = (s?: string | null) => s ? new Date(s).toLocaleDateString('en-IN', { timeZone: clientTimeZone(), day: 'numeric', month: 'short', year: 'numeric' }) : 'Not recorded'
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const define = (term: string) => REPORT_DEFINITIONS.find(d => d.term === term)?.definition || ''
 const SUBMISSION_FILTERS: Array<[string, string]> = [['NO_ALLOCATION', 'No allocation'], ['NONE_SUBMITTED', 'Allocated, none submitted'], ['PARTLY_SUBMITTED', 'Partly submitted'], ['ALL_SUBMITTED', 'All submitted']]
@@ -72,6 +73,7 @@ type OverviewPayload = {
 export function OverviewView({ periodQuery, revision, openRegister, openActions, openMapping }: {
   periodQuery: string; revision: number; openRegister: (f: RegisterFilterState) => void; openActions: (queue?: string) => void; openMapping: (tab: string) => void
 }) {
+  useTenantLocale()
   const { data, error, loading } = useJson<OverviewPayload>(`/api/funding-dept/reports/overview?${periodQuery}`, revision)
   const { download, error: exportError } = useDownload()
   if (error) return <p role="alert" className="text-red-700">{error}</p>
@@ -95,7 +97,7 @@ export function OverviewView({ periodQuery, revision, openRegister, openActions,
         {data.unclassified.overdue > 0 && <span className="ml-2 text-red-700">{data.unclassified.overdue} older than {data.unclassified.overdueAfterDays} days</span>}</p>}
     </section>
     <section className="nk-panel p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="font-semibold">{data.windowLabel}</h2><span className="nk-sub text-xs">Calls that entered in this period, with their progress as of {new Date(data.asOf).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span></div>
+      <div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="font-semibold">{data.windowLabel}</h2><span className="nk-sub text-xs">Calls that entered in this period, with their progress as of {new Date(data.asOf).toLocaleString('en-IN', { timeZone: clientTimeZone() })}</span></div>
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
         <Stat title="Calls entered" value={t.callsEntered} help={define('Unique calls')} />
         <Stat title="Calls mapped to a school" value={t.callsMapped} help="Unique calls with at least one school responsibility." onClick={() => openRegister({})} />
@@ -138,6 +140,7 @@ type RegisterPayload = { rows: RegisterRow[]; total: number; page: number; pageS
 export function RegisterView({ periodQuery, filters, setFilters, schools, revision, onAudit }: {
   periodQuery: string; filters: RegisterFilterState; setFilters: (f: RegisterFilterState) => void; schools: Array<{ id: string; name: string }>; revision: number; onAudit: (callId: string) => void
 }) {
+  useTenantLocale()
   const [page, setPage] = useState(1); const [open, setOpen] = useState<Record<string, boolean>>({})
   useEffect(() => setPage(1), [periodQuery, filters])
   const query = new URLSearchParams(periodQuery)
@@ -192,6 +195,7 @@ export function RegisterView({ periodQuery, filters, setFilters, schools, revisi
 /* ------------------------------------------------------------ Mapping register */
 
 export function MappingView({ tab, setTab, schools, isHead, revision, refresh }: { tab: string; setTab: (t: string) => void; schools: Array<{ id: string; name: string }>; isHead: boolean; revision: number; refresh: () => void }) {
+  useTenantLocale()
   const { authFetch } = useAuth()
   const [page, setPage] = useState(1); const [filters, setFilters] = useState<RegisterFilterState>({}); const [actionError, setActionError] = useState('')
   useEffect(() => setPage(1), [tab, filters])
@@ -245,6 +249,7 @@ export function MappingView({ tab, setTab, schools, isHead, revision, refresh }:
 /* --------------------------------------------------------------- Audit trail */
 
 export function AuditView({ periodQuery, callId, setCallId, schools, revision }: { periodQuery: string; callId: string; setCallId: (id: string) => void; schools: Array<{ id: string; name: string }>; revision: number }) {
+  useTenantLocale()
   const [page, setPage] = useState(1); const [schoolId, setSchoolId] = useState(''); const [entityType, setEntityType] = useState('')
   useEffect(() => setPage(1), [callId, schoolId, entityType, periodQuery])
   const query = new URLSearchParams(periodQuery)
@@ -262,7 +267,7 @@ export function AuditView({ periodQuery, callId, setCallId, schools, revision }:
     </div>
     {(error || exportError) && <p role="alert" className="text-red-700">{error || exportError}</p>}
     {loading && <p role="status" className="nk-sub">Loading audit trail…</p>}
-    {data && <section className="nk-panel">{data.rows.map((r: any) => <details key={r.id} className="border-b px-4 py-3 text-sm"><summary className="cursor-pointer">{new Date(r.occurred_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} · {r.actor_name || (r.inferred ? 'Recorded at backfill' : 'System')} · {r.summary}{r.call_title ? ` · ${r.call_title}` : ''}</summary>
+    {data && <section className="nk-panel">{data.rows.map((r: any) => <details key={r.id} className="border-b px-4 py-3 text-sm"><summary className="cursor-pointer">{new Date(r.occurred_at).toLocaleString('en-IN', { timeZone: clientTimeZone() })} · {r.actor_name || (r.inferred ? 'Recorded at backfill' : 'System')} · {r.summary}{r.call_title ? ` · ${r.call_title}` : ''}</summary>
       {r.reason && <p className="mt-1">Reason: {r.reason}</p>}<pre className="mt-1 whitespace-pre-wrap text-xs text-nickel-600">{JSON.stringify({ before: r.before_data, after: r.after_data }, null, 2)}</pre></details>)}
       {!data.rows.length && <p className="p-5 nk-sub">No recorded changes match these filters.</p>}
       <Pager page={page} total={data.total} pageSize={data.pageSize} onChange={setPage} /></section>}

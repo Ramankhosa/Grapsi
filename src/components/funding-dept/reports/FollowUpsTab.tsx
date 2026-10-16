@@ -6,6 +6,7 @@
  * that led to each submission.
  */
 import Link from 'next/link'
+import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 import { useState } from 'react'
 
 import {
@@ -31,6 +32,7 @@ const KIND: Record<string, string> = { CALL: 'Call', EMAIL: 'Email', MEETING: 'M
 const RESULT: Record<Effort['result'], { label: string; cls: string }> = { SUBMITTED: { label: 'Submitted', cls: 'nk-badge nk-badge-ok' }, IN_PROGRESS: { label: 'In progress', cls: 'nk-badge nk-badge-live' }, CLOSED: { label: 'Closed, not submitted', cls: 'nk-badge' } }
 
 export default function FollowUpsTab({ filters, setFilters, openTab }: { filters: Filters; setFilters: (f: Filters) => void; openTab: OpenTab }) {
+  useTenantLocale()
   const [page, setPage] = useState(1)
   const query = { weeks: '8', ...filters }
   const { data, error, loading } = useHubReport<Payload>('follow-ups', query, page, 0)
@@ -100,7 +102,7 @@ export default function FollowUpsTab({ filters, setFilters, openTab }: { filters
         <span className="nk-sub text-xs">{data.logTotal > data.log.length ? `Latest ${data.log.length} of ${data.logTotal} — export for all` : plural(data.logTotal, 'entry', 'entries')}
           {(filters.logWeek || filters.logAuthor) && <button className="ml-2 text-cobalt-700 underline" onClick={() => setMany({ logWeek: '', logAuthor: '' })}>Clear</button>}</span></div>
       <ul className="divide-y divide-nickel-100">{data.log.map(l => <li key={l.id} className="flex flex-wrap gap-x-4 gap-y-1 px-3 py-2 text-sm">
-        <span className="w-28 shrink-0 text-xs text-nickel-600">{new Date(l.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+        <span className="w-28 shrink-0 text-xs text-nickel-600">{new Date(l.at).toLocaleString('en-IN', { timeZone: clientTimeZone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
         <span className="w-32 shrink-0 text-xs">{l.author || 'Unknown'}</span>
         <span className="nk-badge shrink-0">{KIND[l.kind] || l.kind}{l.target === 'FACULTY' && ['CALL', 'EMAIL', 'MEETING'].includes(l.kind) ? ' · faculty' : l.target === 'AGENCY' ? ' · agency' : ''}</span>
         {l.stage && <span className="nk-badge nk-badge-live shrink-0">{STAGE[l.stage] || l.stage}</span>}

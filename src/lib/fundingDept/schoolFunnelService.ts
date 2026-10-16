@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { callEnteredAtSql, textArray, visibleCallSql, openCallSql, liveCallWorkSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { queueSchoolMatchRefresh } from './currentMatches'
 import { applicationSubmittedSql, queueStateSql, untouchedSql } from './reportDefinitions'
 import { getDeptSettings, type DeptSettings } from './settings'
@@ -80,6 +81,7 @@ async function funnelForSchool(
   school: { id: string; name: string; code: string | null },
   settings: DeptSettings
 ): Promise<SchoolFunnelRow> {
+  const timeZone = await getTenantTimeZone(tenantId)
   queueSchoolMatchRefresh(tenantId,school.id)
   const subtree = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM tenant_org_units
@@ -139,7 +141,7 @@ async function funnelForSchool(
         LEFT JOIN call_school_triage tri
                ON tri.funding_call_id = fc.id AND tri.org_unit_id = ${school.id}
        WHERE ${visibleSql(tenantId)}
-         AND (${openCallSql()} OR ${liveCallWorkSql(tenantId,school.id)})
+         AND (${openCallSql('fc', timeZone)} OR ${liveCallWorkSql(tenantId,school.id)})
          AND ${relevant}
     `),
     prisma.$queryRaw<
@@ -296,16 +298,17 @@ export async function getFunnelForUnits(
 
 /** Tenant-wide headline figures, for the strip above the lenses. */
 export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRow[]) {
+  const timeZone = await getTenantTimeZone(tenantId)
   const [openCalls, unclassified] = await Promise.all([
     prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
-         AND ${openCallSql()}
+         AND ${openCallSql('fc', timeZone)}
     `),
     prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
-         AND ${openCallSql()}
+         AND ${openCallSql('fc', timeZone)}
          AND NOT EXISTS (
            SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id
          )

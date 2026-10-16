@@ -15,6 +15,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { openCallSql, textArray, visibleCallSql } from './callSql'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { getDeptSettings } from './settings'
 
@@ -43,10 +44,11 @@ export async function getMappedCalls(tenantId: string, f: { scopeSchoolIds?: str
 
 /** Open, visible calls nobody has classified. Head-owned; aged so it cannot become a black hole. */
 export async function getUnclassifiedQueue(tenantId: string, f: { page?: number; pageSize?: number; all?: boolean; asOf?: Date } = {}) {
+  const timeZone = await getTenantTimeZone(tenantId)
   const page = Math.max(1, f.page || 1), pageSize = Math.min(100, Math.max(1, f.pageSize || 20))
   const settings = await getDeptSettings(tenantId)
   const asOf = f.asOf ?? new Date()
-  const where = Prisma.sql`${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc')}
+  const where = Prisma.sql`${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
     AND NOT EXISTS (SELECT 1 FROM funding_call_research_area_taxonomies t WHERE t.funding_call_id = fc.id)`
   const [count, rows] = await Promise.all([
     prisma.$queryRaw<Array<{ n: number; overdue: number }>>(Prisma.sql`SELECT count(*)::int n,

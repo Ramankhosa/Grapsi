@@ -58,7 +58,7 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
         Math.min(...[b.agency_deadline,b.nextAction?.due_at].filter(Boolean).map(d=>new Date(d!).getTime()),Infinity) || a.id.localeCompare(b.id))
     }
     if(format==='csv'||format==='xlsx'){
-      const stamp={report:`DSR ${view.replace(/-/g,' ')}`,snapshot,periodLabel:window.label,periodStart:report.period.start,periodEnd:report.period.end,filters:Object.fromEntries(params)}
+      const stamp={report:`DSR ${view.replace(/-/g,' ')}`,snapshot,timeZone:window.timezone,periodLabel:window.label,periodStart:report.period.start,periodEnd:report.period.end,filters:Object.fromEntries(params)}
       const rows=view==='opportunity-gaps'?gapRows():['pending','deadline-risk','outcomes'].includes(view)?applicationRows():[]
       const body=params.get('workbook')==='complete'?managementExport(report,format,{...stamp,report:'Complete DSR workbook'})
         :writeTables([definitionsSheet(stamp),...viewTables(view,report,rows)],format)
