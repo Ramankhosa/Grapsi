@@ -29,6 +29,7 @@ const DEFAULT_MIGRATIONS = [
   '20261016100000_funding_call_vector_hnsw',
   '20261016110000_funding_call_search_text',
   '20261016120000_tenant_locale_settings',
+  '20261016130000_funding_call_documents_additive',
 ]
 
 const FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
@@ -70,7 +71,13 @@ function withoutCheckReplacements(body: string): string {
  * HNSW replacement (20261016100000_funding_call_vector_hnsw). Any other index
  * name still fails the check.
  */
-const REPLACED_INDEXES = new Set(['funding_calls_embedding_idx', 'funding_calls_embedding_voyage_1024_idx'])
+const REPLACED_INDEXES = new Set([
+  'funding_calls_embedding_idx',
+  'funding_calls_embedding_voyage_1024_idx',
+  // One-active-document-per-call contradicts additive documents (since
+  // f5a2cc0) and made every second upload fail (20261016130000).
+  'funding_call_documents_one_active_idx',
+])
 const INDEX_DROP = /DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?("[^"]+"|[\w.]+)\s*;/gi
 
 function withoutReplacedIndexDrops(body: string): string {

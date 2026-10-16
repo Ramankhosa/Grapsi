@@ -104,10 +104,10 @@ async function main() {
   const usage = await prisma.$queryRaw<Array<{ calls: number; input: number; output: number; cost: number }>>(Prisma.sql`
     SELECT count(*)::int AS calls, COALESCE(sum("inputTokens"), 0)::int AS input, COALESCE(sum("outputTokens"), 0)::int AS output,
            COALESCE(sum((meta->'cost'->>'actualCost')::float), 0)::float AS cost
-    FROM usage_logs WHERE "tenantId" = ${platform.id} AND "userId" = ${operator.userId} AND "startedAt" >= ${startedAt}`)
+    FROM usage_logs WHERE "tenantId" = ${platform.id} AND "userId" = ${operator.userId} AND "startedAt" >= (${startedAt.toISOString()}::timestamptz AT TIME ZONE 'UTC')`)
   const byModel = await prisma.$queryRaw<Array<{ model: string; calls: number; cost: number }>>(Prisma.sql`
     SELECT COALESCE("modelClass", '?') AS model, count(*)::int AS calls, COALESCE(sum((meta->'cost'->>'actualCost')::float), 0)::float AS cost
-    FROM usage_logs WHERE "tenantId" = ${platform.id} AND "userId" = ${operator.userId} AND "startedAt" >= ${startedAt}
+    FROM usage_logs WHERE "tenantId" = ${platform.id} AND "userId" = ${operator.userId} AND "startedAt" >= (${startedAt.toISOString()}::timestamptz AT TIME ZONE 'UTC')
     GROUP BY 1 ORDER BY 3 DESC`)
   const tally = (status: string) => outcomes.filter((o) => o.status === status).length
   const attempted = outcomes.filter((o) => o.status !== 'SKIPPED').length

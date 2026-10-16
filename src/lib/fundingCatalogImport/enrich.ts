@@ -43,6 +43,8 @@ const MIN_PAGE_CHARS = 1_500
 const MIN_GUIDELINE_ITEMS = 5
 const MIN_TITLE_OVERLAP = 0.5
 const MIN_DESCRIPTION_CHARS = 300
+/** Page text kept: a few pages render megabytes of script/JSON as "text". */
+const MAX_PAGE_CHARS = 100_000
 
 export type EnrichmentStatus = 'ENRICHED' | 'NEEDS_REVIEW' | 'SKIPPED' | 'FAILED'
 
@@ -245,11 +247,12 @@ export async function enrichImportedCall(input: {
       return { ...outcome, reasons: ['robots.txt disallows the official page'] }
     }
     const page = await fetchReadableUrlContent(pageUrl)
-    const pageText = page.normalizedText || ''
+    const pageText = (page.normalizedText || '').slice(0, MAX_PAGE_CHARS)
     const finalUrl = String((page.fetchMetadata as Record<string, unknown>)?.fetchedUrl || pageUrl)
     outcome.pageChars = pageText.length
 
     const documentIds: string[] = []
+    let linkedDocuments = 0
     if (pageText.length >= 200) {
       const pageDoc = await fundingDocumentService.createDocumentFromText({
         fundingCallId: callId,
@@ -270,6 +273,7 @@ export async function enrichImportedCall(input: {
         const document = await ingestFundingDocumentFromUrl(callId, link, operator, { documentKind: 'guideline_document', deferProcessing: true })
         if (!document.duplicate) await inserted('funding_call_documents', document.documentId)
         documentIds.push(document.documentId)
+        linkedDocuments += 1
       } catch (error) {
         log(`    document skipped (${link}): ${error instanceof Error ? error.message.replace(/\s+/g, ' ').slice(-240) : error}`)
       }
@@ -284,7 +288,7 @@ export async function enrichImportedCall(input: {
 
     // Nothing to read (a script-rendered portal, a login wall): the gate would
     // fail anyway, so spend no LLM calls on it.
-    if (pageText.length < 200 && documentIds.length === 0) {
+    if (pageText.length < 200 && linkedDocuments === 0) {
       outcome.reasons = [`page text too short (${pageText.length} chars) and no documents`]
       await db.fundingImportCandidate.upsert({
         where: { dedupe_key: `enrich:${callId}` },
@@ -305,8 +309,18 @@ export async function enrichImportedCall(input: {
     }
 
     const guidelinesBefore = await db.fundingCallGuideline.findMany({ where: { fundingCallId: callId }, select: { id: true } })
-    const run = await fundingGuidelineService.createExtractionRunFromFundingCall(callId, operator, { sourceMode: 'documents', fallbackText: pageText })
-    const runRow = await db.fundingCallGuidelineRun.findUnique({ where: { id: (run as { id: string }).id } }).catch(() => null)
+    // "No usable rules" is an answer, not a fault: it goes to the gate (and
+    // so to review) rather than being retried.
+    const run = await fundingGuidelineService
+      .createExtractionRunFromFundingCall(callId, operator, { sourceMode: 'documents', fallbackText: pageText })
+      .catch((error) => {
+        if (/no usable rules/i.test(String(error))) return null
+        throw error
+      })
+    const latestRun = run ? null : await db.fundingCallGuidelineRun.findFirst({ where: { funding_call_id: callId }, orderBy: { created_at: 'desc' } })
+    const runRow = run
+      ? await db.fundingCallGuidelineRun.findUnique({ where: { id: (run as { id: string }).id } }).catch(() => null)
+      : latestRun && latestRun.created_at >= new Date(Date.now() - 30 * 60_000) ? latestRun : null
     if (runRow) await inserted('funding_call_guideline_runs', runRow.id)
     for (const guideline of await db.fundingCallGuideline.findMany({ where: { fundingCallId: callId }, select: { id: true } })) {
       if (!guidelinesBefore.some((existing) => existing.id === guideline.id)) await inserted('funding_call_guidelines', guideline.id)
@@ -318,7 +332,7 @@ export async function enrichImportedCall(input: {
       pageText,
       pageHost: new URL(finalUrl).host,
       officialHost: new URL(pageUrl).host,
-      documents: outcome.documents,
+      documents: linkedDocuments,
       guidelineItems: outcome.guidelineItems,
     })
 
@@ -382,6 +396,19 @@ export async function enrichImportedCall(input: {
     return { ...outcome, status: 'ENRICHED', descriptionUpdated: Boolean(description) }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    // The site refuses automated access: retrying will not change that.
+    if (/status code (401|403)/.test(message)) {
+      const reasons = [`official site refused automated access (${message.match(/40[13]/)?.[0]})`]
+      await db.fundingImportCandidate
+        .upsert({
+          where: { dedupe_key: `enrich:${callId}` },
+          update: { run_id: runId, signals: { reasons, page: pageUrl } as never, resolution: 'pending' },
+          create: { run_id: runId, dedupe_key: `enrich:${callId}`, reason: 'ENRICHMENT_REVIEW', tier: 'INFO', subject_call_id: callId, signals: { reasons, page: pageUrl } as never, blocks_release: false },
+        })
+        .catch(() => undefined)
+      await mergeEnrichmentMetadata(db, callId, { status: 'needs_review', at: new Date().toISOString(), run_id: runId, reasons }).catch(() => undefined)
+      return { ...outcome, status: 'NEEDS_REVIEW', reasons }
+    }
     const attempts = Number(((call.metadata as Record<string, any>)?.enrichment?.attempts) || 0) + 1
     await mergeEnrichmentMetadata(db, callId, { status: 'failed', at: new Date().toISOString(), run_id: runId, attempts, error: message.slice(0, 300) }).catch(() => undefined)
     return { ...outcome, status: 'FAILED', reasons: [message.slice(0, 200)] }
