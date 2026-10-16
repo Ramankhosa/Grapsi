@@ -10,6 +10,7 @@ import SchoolCoverageEditor, {
   type CoverageSchool,
 } from '@/components/funding-dept/SchoolCoverageEditor'
 import SummaryCards from '@/components/funding-dept/SummaryCards'
+import { formatMoney, formatMoneyTotals, type MoneyTotal } from '@/lib/i18n/format'
 
 interface MemberRow {
   id: string
@@ -60,6 +61,7 @@ interface SchoolRow {
   pending: number
   shortlisted: number
   awardAmount: number
+  awardTotals?: MoneyTotal[]
   lastContactAt: string | null
 }
 
@@ -87,6 +89,7 @@ interface OverviewData {
     submitted: number
     awarded: number
     awardAmount: number
+  awardTotals?: MoneyTotal[]
   }
 }
 
@@ -617,8 +620,8 @@ export default function FundingDeptOverviewPage() {
                     <td className="px-4 py-3 tabular-nums">{school.submitted}</td>
                     <td className="px-4 py-3 tabular-nums">
                       {school.awarded}
-                      {school.awardAmount > 0 ? (
-                        <span className="nk-sub"> · ₹{school.awardAmount.toLocaleString('en-IN')}</span>
+                      {formatMoneyTotals(school.awardTotals) || (school.awardAmount > 0 ? formatMoney(school.awardAmount, 'INR') : null) ? (
+                        <span className="nk-sub"> · {formatMoneyTotals(school.awardTotals) || formatMoney(school.awardAmount, 'INR')}</span>
                       ) : null}
                     </td>
                     <td className="nk-sub px-4 py-3">

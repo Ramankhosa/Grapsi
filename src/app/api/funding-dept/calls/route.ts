@@ -7,6 +7,8 @@ import { canReviewDept } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { getTenantLocale } from '@/lib/tenant/locale'
+import { amountIn, sumByCurrency } from '@/lib/i18n/format'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,6 +64,7 @@ export async function GET(request: NextRequest) {
   // Drafts are part of the desk's work-in-progress, so the funnel shows them
   // (this endpoint is admin/head-only; the faculty-facing lists still hide them).
   const visible = visibleFundingCallWhere(context.tenantId, { includeTenantDrafts: true })
+  const tenantCurrency = (await getTenantLocale(context.tenantId)).currency
 
   const draftPredicate: Prisma.FundingCallWhereInput = {
     visibility: 'TENANT_PRIVATE',
@@ -297,6 +300,7 @@ export async function GET(request: NextRequest) {
             submitted: number
             awarded: number
             award_amount: number
+            award_entries: string[] | null
             schools: number
           }>
         >(Prisma.sql`
@@ -309,6 +313,7 @@ export async function GET(request: NextRequest) {
             COUNT(*) FILTER (WHERE submitted_at IS NOT NULL)::int AS submitted,
             COUNT(*) FILTER (WHERE outcome = 'AWARDED')::int AS awarded,
             COALESCE(SUM(award_amount) FILTER (WHERE outcome = 'AWARDED'), 0)::float AS award_amount,
+            array_agg(COALESCE(NULLIF(TRIM(award_currency), ''), '?') || ':' || award_amount) FILTER (WHERE outcome = 'AWARDED' AND award_amount IS NOT NULL) AS award_entries,
             COUNT(DISTINCT assignee_org_unit_id) FILTER (WHERE assignee_org_unit_id IS NOT NULL)::int AS schools
           FROM call_assignments
           WHERE tenant_id = ${context.tenantId} AND funding_call_id = ANY(${idArray})
@@ -350,7 +355,8 @@ export async function GET(request: NextRequest) {
         declined: assignments?.declined ?? 0,
         submitted: assignments?.submitted ?? 0,
         awarded: assignments?.awarded ?? 0,
-        awardAmount: assignments?.award_amount ?? 0,
+        awardAmount: amountIn(sumByCurrency(assignments?.award_entries, tenantCurrency), tenantCurrency),
+        awardTotals: sumByCurrency(assignments?.award_entries, tenantCurrency),
         schools: assignments?.schools ?? 0,
       },
     }

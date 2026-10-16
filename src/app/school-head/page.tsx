@@ -8,6 +8,7 @@ import FacultyEngagementTab from '@/components/funding-dept/FacultyEngagementTab
 
 import SummaryCards from '@/components/funding-dept/SummaryCards'
 import { useAuth } from '@/lib/auth-context'
+import { formatMoney, formatMoneyTotals, type MoneyTotal } from '@/lib/i18n/format'
 
 interface FacultyRow {
   userId: string
@@ -52,6 +53,7 @@ interface Section {
     awarded: number
     total: number
     awardedAmount: number
+    awardTotals?: MoneyTotal[]
     successRate: number | null
   }
   faculty: FacultyRow[]
@@ -284,8 +286,8 @@ export default function SchoolHeadPage() {
                   <p className="nk-readout mt-3">{section.summary.submitted}</p>
                   <p className="nk-sub mt-1.5">
                     {section.summary.awarded} awarded
-                    {section.summary.awardedAmount > 0
-                      ? ` · ₹${section.summary.awardedAmount.toLocaleString('en-IN')}`
+                    {formatMoneyTotals(section.summary.awardTotals) || section.summary.awardedAmount > 0
+                      ? ` · ${formatMoneyTotals(section.summary.awardTotals) || formatMoney(section.summary.awardedAmount, 'INR')}`
                       : ''}
                     {section.summary.successRate !== null
                       ? ` · ${section.summary.successRate}% success`

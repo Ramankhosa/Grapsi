@@ -29,6 +29,7 @@ import type {
   PointPriority,
 } from './types';
 import { normalizeGrantPrepIdeationDecision } from './ideaAnchor';
+import { detectCurrency } from '@/lib/fundingCatalogImport/normalize/money';
 import {
   markGrantPrepStageMemoryStale,
   normalizeGrantPrepStageMemory,
@@ -473,8 +474,15 @@ export function getGrantPrepPointStatus(input: {
 
   const budgetUpperBound = extractBudgetUpperBound(input.budgetLimits)
   const capturedBudget = extractBudgetUpperBound(captureText)
+  // Numbers in two different stated currencies are not comparable (a
+  // "EUR 500,000" ceiling against "INR 4 crore"); only block when the
+  // currencies match or either side names none, as before.
+  const callCurrency = detectCurrency(String(input.budgetLimits || ''))?.code ?? null
+  const capturedCurrency = detectCurrency(String(captureText || ''))?.code ?? null
+  const sameCurrency = !callCurrency || !capturedCurrency || callCurrency === capturedCurrency
   if (
     input.stageKey === 'budget_strategy'
+    && sameCurrency
     && budgetUpperBound
     && capturedBudget
     && capturedBudget > budgetUpperBound

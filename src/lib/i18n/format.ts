@@ -221,3 +221,38 @@ export function fromZonedDateTimeInput(local: string, timeZone: string = DEFAULT
   if (second !== first) instant = asUtc.getTime() - second * 60000
   return new Date(instant)
 }
+
+export type MoneyTotal = { currency: string; amount: number }
+
+/**
+ * Per-currency totals from "CUR:amount" entries (SQL: array_agg of
+ * COALESCE(currency, <tenant currency>) || ':' || amount). Amounts in
+ * different currencies are never added together.
+ */
+export function sumByCurrency(entries: Array<string | null> | null | undefined, fallbackCurrency: string = DEFAULT_CURRENCY): MoneyTotal[] {
+  const totals = new Map<string, number>()
+  for (const entry of entries || []) {
+    if (!entry) continue
+    const at = entry.lastIndexOf(':')
+    const amount = Number(entry.slice(at + 1))
+    if (at < 0 || !Number.isFinite(amount)) continue
+    const currency = normalizeCurrencyCode(entry.slice(0, at)) || normalizeCurrencyCode(fallbackCurrency) || DEFAULT_CURRENCY
+    totals.set(currency, (totals.get(currency) || 0) + amount)
+  }
+  return Array.from(totals, ([currency, amount]) => ({ currency, amount })).sort((a, b) => b.amount - a.amount || a.currency.localeCompare(b.currency))
+}
+
+export function mergeMoneyTotals(lists: Array<MoneyTotal[] | null | undefined>): MoneyTotal[] {
+  return sumByCurrency(lists.flatMap((list) => (list || []).map((total) => `${total.currency}:${total.amount}`)))
+}
+
+/** The amount in one currency (0 when none). */
+export function amountIn(totals: MoneyTotal[] | null | undefined, currency: string): number {
+  return (totals || []).find((total) => total.currency === currency)?.amount ?? 0
+}
+
+/** "₹12,00,000 + $50,000"; null when there is nothing to show. */
+export function formatMoneyTotals(totals: MoneyTotal[] | null | undefined, options: MoneyFormatOptions = {}): string | null {
+  const parts = (totals || []).filter((total) => total.amount).map((total) => formatMoney(total.amount, total.currency, options)).filter(Boolean)
+  return parts.length > 0 ? parts.join(' + ') : null
+}

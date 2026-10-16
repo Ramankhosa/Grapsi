@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { loadUnitAreaProfile, relevantCallWhereSql } from '../funding/callUnitRelevance';
 import { notTakenUpSql } from './shared';
+import { getTenantLocale } from '@/lib/tenant/locale';
+import { amountIn, sumByCurrency, type MoneyTotal } from '@/lib/i18n/format';
 
 /**
  * Tenant grant-portfolio analytics.
@@ -171,8 +173,26 @@ const BUCKET_COLUMNS = Prisma.sql`
   COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int       AS "awarded",
   COUNT(*) FILTER (WHERE ca.outcome = 'REJECTED')::int      AS "rejected",
   COUNT(*)::int                                             AS "total",
-  COALESCE(SUM(ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED'), 0)::float AS "awardedAmount"
+  COALESCE(SUM(ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED'), 0)::float AS "awardedAmount",
+  -- Per currency: amounts in different currencies are never added together.
+  array_agg(COALESCE(NULLIF(TRIM(ca.award_currency), ''), '?') || ':' || ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED' AND ca.award_amount IS NOT NULL) AS "awardEntries"
 `;
+
+/**
+ * awardedAmount in the tenant's currency only (a missing currency is the
+ * tenant's), with every currency in awardTotals. Rupee-only tenants see the
+ * same figure as before.
+ */
+async function withAwardTotals<T extends { awardedAmount: number; awardEntries?: Array<string | null> | null }>(
+  tenantId: string,
+  rows: T[]
+): Promise<Array<Omit<T, 'awardEntries'> & { awardTotals: MoneyTotal[] }>> {
+  const currency = (await getTenantLocale(tenantId)).currency;
+  return rows.map(({ awardEntries, ...row }) => {
+    const awardTotals = sumByCurrency(awardEntries, currency);
+    return { ...row, awardedAmount: amountIn(awardTotals, currency), awardTotals } as Omit<T, 'awardEntries'> & { awardTotals: MoneyTotal[] };
+  });
+}
 
 export interface DashboardSummary {
   active: number;
@@ -185,20 +205,22 @@ export interface DashboardSummary {
   awarded: number;
   rejected: number;
   total: number;
+  /** In the tenant's currency; other currencies are in awardTotals. */
   awardedAmount: number;
+  awardTotals: MoneyTotal[];
   unassignedExpiredCalls: number;
   /** Awarded / (awarded + rejected), as a percentage. Null when nothing decided. */
   successRate: number | null;
 }
 
 export async function getSummary(filters: DashboardFilters): Promise<DashboardSummary> {
-  const [row] = await prisma.$queryRaw<
-    Array<Omit<DashboardSummary, 'unassignedExpiredCalls' | 'successRate'>>
+  const [row] = await withAwardTotals(filters.tenantId, await prisma.$queryRaw<
+    Array<Omit<DashboardSummary, 'unassignedExpiredCalls' | 'successRate' | 'awardTotals'> & { awardEntries: string[] | null }>
   >(Prisma.sql`
     SELECT ${BUCKET_COLUMNS}
     ${assignmentFrom()}
     WHERE ${assignmentWhere(filters)}
-  `);
+  `));
 
   // Org-level metric by definition ("nobody in the organization took this"),
   // so it is suppressed for a scoped head rather than reported as if it were
@@ -219,6 +241,7 @@ export async function getSummary(filters: DashboardFilters): Promise<DashboardSu
     rejected: row?.rejected || 0,
     total: row?.total || 0,
     awardedAmount: row?.awardedAmount || 0,
+    awardTotals: row?.awardTotals || [],
     unassignedExpiredCalls,
     successRate: decided > 0 ? Math.round(((row.awarded || 0) / decided) * 1000) / 10 : null,
   };
@@ -237,12 +260,14 @@ export interface AllocationRow {
   awarded: number;
   rejected: number;
   total: number;
+  /** In the tenant's currency; other currencies are in awardTotals. */
   awardedAmount: number;
+  awardTotals: MoneyTotal[];
 }
 
 /** Per-faculty allocation; the UI rolls these up into school -> department. */
 export async function getAllocation(filters: DashboardFilters): Promise<AllocationRow[]> {
-  return prisma.$queryRaw<AllocationRow[]>(Prisma.sql`
+  return withAwardTotals(filters.tenantId, await prisma.$queryRaw<Array<Omit<AllocationRow, 'awardTotals'> & { awardEntries: string[] | null }>>(Prisma.sql`
     SELECT
       rp.school                                        AS "school",
       rp.department                                    AS "department",
@@ -253,7 +278,7 @@ export async function getAllocation(filters: DashboardFilters): Promise<Allocati
     WHERE ${assignmentWhere(filters)}
     GROUP BY rp.school, rp.department, ca.assignee_user_id, COALESCE(rp.display_name, u.name, u.email, '—')
     ORDER BY rp.school NULLS LAST, rp.department NULLS LAST, "facultyName"
-  `);
+  `));
 }
 
 export interface AssignmentListRow {
@@ -497,14 +522,14 @@ export async function getReport(
       ? Prisma.sql`ORDER BY "label" ASC`
       : Prisma.sql`ORDER BY "total" DESC, "label" ASC`;
 
-  return prisma.$queryRaw<ReportRow[]>(Prisma.sql`
+  return withAwardTotals(filters.tenantId, await prisma.$queryRaw<Array<Omit<ReportRow, 'awardTotals'> & { awardEntries: string[] | null }>>(Prisma.sql`
     SELECT ${label} AS "label", ${BUCKET_COLUMNS}
     ${assignmentFrom()}
     WHERE ${assignmentWhere(filters)}
     GROUP BY ${label}
     ${order}
     LIMIT 500
-  `);
+  `));
 }
 
 const CSV_COLUMNS: Array<[keyof ReportRow, string]> = [

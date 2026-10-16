@@ -6,6 +6,8 @@ import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
 import ManualAllocationDetails from '@/components/funding-dept/ManualAllocationDetails'
+import { formatMoney } from '@/lib/i18n/format'
+import { useTenantLocale } from '@/hooks/useTenantLocale'
 
 interface Assignment {
   allocationMethod?: string | null
@@ -119,7 +121,8 @@ export default function AssignmentsPage() {
   const [deciding, setDeciding] = useState<Assignment | null>(null)
   const [outcome, setOutcome] = useState<Assignment['outcome']>('PENDING')
   const [awardAmount, setAwardAmount] = useState('')
-  const [awardCurrency, setAwardCurrency] = useState('INR')
+  const tenantLocale = useTenantLocale()
+  const [awardCurrency, setAwardCurrency] = useState(tenantLocale.currency)
   const [decisionAt, setDecisionAt] = useState('')
   const [outcomeSaving, setOutcomeSaving] = useState(false)
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
@@ -295,7 +298,7 @@ export default function AssignmentsPage() {
     setDeciding(assignment)
     setOutcome(assignment.outcome || 'PENDING')
     setAwardAmount(assignment.awardAmount != null ? String(assignment.awardAmount) : '')
-    setAwardCurrency(assignment.awardCurrency || 'INR')
+    setAwardCurrency(assignment.awardCurrency || tenantLocale.currency)
     setDecisionAt(
       assignment.decisionAt ? assignment.decisionAt.slice(0, 10) : new Date().toISOString().slice(0, 10)
     )
@@ -445,7 +448,7 @@ export default function AssignmentsPage() {
                         >
                           {OUTCOME_STYLES[assignment.outcome]?.label}
                           {assignment.outcome === 'AWARDED' && assignment.awardAmount
-                            ? ` · ${assignment.awardCurrency || ''}${new Intl.NumberFormat('en-IN').format(assignment.awardAmount)}`
+                            ? ` · ${formatMoney(assignment.awardAmount, assignment.awardCurrency || tenantLocale.currency)}`
                             : ''}
                         </span>
                       )}

@@ -11,6 +11,7 @@ import { useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import ReassignDialog from './ReassignDialog'
+import { clientCurrency } from '@/hooks/useTenantLocale'
 
 export type RowAssignment = {
   id: string
@@ -68,7 +69,7 @@ export default function AssignmentRowActions({ assignment, onChanged, compact = 
         if (dialog === 'submitted') void patch({ status: 'COMPLETED', submissionReference: v('reference') || null, submissionUrl: v('url') || null, submissionNotes: v('notes') || null, submittedAt: v('date') || null }, 'Marked submitted')
         if (dialog === 'unallocate') void patch({ status: 'CANCELLED', cancelReason: v('reason') }, 'Unallocated')
         if (dialog === 'lapse') void patch({ status: 'LAPSED', lapsedReason: v('reason') }, 'Closed out as not applied for')
-        if (dialog === 'outcome') { const outcome = v('outcome'); const amount = Number(v('amount')); void patch({ outcome, awardAmount: outcome === 'AWARDED' && amount > 0 ? amount : null, awardCurrency: outcome === 'AWARDED' ? v('currency') || 'INR' : null }, 'Outcome recorded') }
+        if (dialog === 'outcome') { const outcome = v('outcome'); const amount = Number(v('amount')); void patch({ outcome, awardAmount: outcome === 'AWARDED' && amount > 0 ? amount : null, awardCurrency: outcome === 'AWARDED' ? v('currency') || clientCurrency() : null }, 'Outcome recorded') }
       }}>
         <h2 className="text-base font-semibold">{{ submitted: 'Mark submitted', unallocate: 'Unallocate', lapse: 'Not applied for', outcome: 'Record the funding decision' }[dialog]}</h2>
         <p className="nk-sub text-sm">{assignment.facultyName} · {assignment.callTitle}</p>

@@ -20,6 +20,10 @@ export function clientLocale(): string {
   return current.locale
 }
 
+export function clientCurrency(): string {
+  return current.currency
+}
+
 export function useTenantLocale() {
   const { authFetch, user } = useAuth()
   const [, setVersion] = useState(0)

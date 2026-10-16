@@ -16,6 +16,8 @@ import { buildSubmissionUpdate } from '@/lib/assignments/submission'
 import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import { submissionWatchers } from '@/lib/fundingDept/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
+import { normalizeCurrencyCode } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 export const dynamic = 'force-dynamic'
 
@@ -245,7 +247,16 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       data.award_amount = payload.awardAmount
     }
     if (payload.awardCurrency !== undefined) {
-      data.award_currency = payload.awardCurrency || null
+      // Strictly a code ("Rs" or "dollars" would split totals into phantom
+      // currencies); an amount with no currency is in the tenant's.
+      const typed = payload.awardCurrency?.trim().toUpperCase() || null
+      if (typed && !(/^[A-Z]{3}$/.test(typed) && normalizeCurrencyCode(typed))) {
+        return NextResponse.json({ error: 'Award currency must be an ISO 4217 code, such as INR or USD.' }, { status: 400 })
+      }
+      data.award_currency = typed
+    }
+    if (data.award_amount != null && !data.award_currency && !record.award_currency) {
+      data.award_currency = (await getTenantLocale(context.tenantId)).currency
     }
     if (payload.decisionAt !== undefined) {
       data.decision_at = parseDate(payload.decisionAt)

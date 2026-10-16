@@ -8,6 +8,8 @@ import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { queueSchoolMatchRefresh } from './currentMatches'
 import { applicationSubmittedSql, queueStateSql, untouchedSql } from './reportDefinitions'
 import { getDeptSettings, type DeptSettings } from './settings'
+import { amountIn, mergeMoneyTotals, sumByCurrency, type MoneyTotal } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 /**
  * Each school as a funnel: how much is relevant, how much is untouched, how
@@ -34,7 +36,9 @@ export interface SchoolFunnelRow {
   live: number
   submitted: number
   awarded: number
+  /** In the tenant's currency; other currencies are in awardTotals. */
   awardAmount: number
+  awardTotals: MoneyTotal[]
   overdue: number
   faculty: number
   /**
@@ -145,7 +149,7 @@ async function funnelForSchool(
          AND ${relevant}
     `),
     prisma.$queryRaw<
-      Array<{ live: number; submitted: number; awarded: number; award_amount: number; overdue: number }>
+      Array<{ live: number; submitted: number; awarded: number; award_amount: number; award_entries: string[] | null; overdue: number }>
     >(Prisma.sql`
       SELECT
         COUNT(*) FILTER (WHERE ca.status IN ${OPEN_STATUSES})::int AS live,
@@ -156,6 +160,7 @@ async function funnelForSchool(
         COUNT(*) FILTER (WHERE ${SUBMITTED})::int                 AS submitted,
         COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int        AS awarded,
         COALESCE(SUM(ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED'), 0)::float AS award_amount,
+        array_agg(COALESCE(NULLIF(TRIM(ca.award_currency), ''), '?') || ':' || ca.award_amount) FILTER (WHERE ca.outcome = 'AWARDED' AND ca.award_amount IS NOT NULL) AS award_entries,
         COUNT(*) FILTER (
           WHERE ca.status IN ${OPEN_STATUSES}
             AND ca.deadline_at IS NOT NULL
@@ -214,6 +219,8 @@ async function funnelForSchool(
   const calls = callRows[0]
   const work = workRows[0]
 
+  const tenantCurrency = (await getTenantLocale(tenantId)).currency
+  const awardTotals = sumByCurrency(work?.award_entries, tenantCurrency)
   return {
     schoolId: school.id,
     name: school.name,
@@ -228,7 +235,8 @@ async function funnelForSchool(
     live: work?.live ?? 0,
     submitted: work?.submitted ?? 0,
     awarded: work?.awarded ?? 0,
-    awardAmount: work?.award_amount ?? 0,
+    awardAmount: amountIn(awardTotals, tenantCurrency),
+    awardTotals,
     overdue: work?.overdue ?? 0,
     faculty: facultyRows[0]?.count ?? 0,
     proposalsInReview: proposalRows[0]?.in_review ?? 0,
@@ -326,6 +334,7 @@ export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRo
     submitted: rows.reduce((sum, row) => sum + row.submitted, 0),
     awarded: rows.reduce((sum, row) => sum + row.awarded, 0),
     awardAmount: rows.reduce((sum, row) => sum + row.awardAmount, 0),
+    awardTotals: mergeMoneyTotals(rows.map((row) => row.awardTotals)),
     proposalsInReview: rows.reduce((sum, row) => sum + row.proposalsInReview, 0),
     proposalsCleared: rows.reduce((sum, row) => sum + row.proposalsCleared, 0),
     proposalsSubmitted: rows.reduce((sum, row) => sum + row.proposalsSubmitted, 0),

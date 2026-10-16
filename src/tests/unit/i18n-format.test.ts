@@ -86,3 +86,18 @@ describe('tenant locale settings patch', () => {
     expect(parseTenantLocalePatch({})).toEqual({ error: 'Nothing to change.' })
   })
 })
+
+describe('per-currency totals', () => {
+  it('never adds amounts in different currencies, and reads a missing currency as the tenant’s', async () => {
+    const { sumByCurrency, mergeMoneyTotals, amountIn, formatMoneyTotals } = await import('@/lib/i18n/format')
+    const totals = sumByCurrency(['INR:500000', '?:700000', 'USD:50000', 'rs:100', null], 'INR')
+    expect(totals).toEqual([
+      { currency: 'INR', amount: 1200100 },
+      { currency: 'USD', amount: 50000 },
+    ])
+    expect(amountIn(totals, 'INR')).toBe(1200100)
+    expect(formatMoneyTotals(totals)).toBe('₹12,00,100 + $50,000')
+    expect(mergeMoneyTotals([totals, [{ currency: 'USD', amount: 1 }]])).toContainEqual({ currency: 'USD', amount: 50001 })
+    expect(formatMoneyTotals([])).toBeNull()
+  })
+})

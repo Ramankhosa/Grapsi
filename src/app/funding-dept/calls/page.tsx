@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
+import { formatMoney, formatMoneyTotals, type MoneyTotal } from '@/lib/i18n/format'
 
 /**
  * The call funnel: every call the department can act on, with its
@@ -35,6 +36,7 @@ interface FunnelCall {
     submitted: number
     awarded: number
     awardAmount: number
+    awardTotals?: MoneyTotal[]
     schools: number
   }
 }
@@ -597,9 +599,9 @@ export default function DeptCallFunnelPage() {
                           <td className="px-4 py-3 text-[13.5px] text-nickel-900">{call.assignments.submitted}</td>
                           <td className="px-4 py-3">
                             <p className="text-[13.5px] text-nickel-900">{call.assignments.awarded}</p>
-                            {call.assignments.awardAmount > 0 ? (
+                            {formatMoneyTotals(call.assignments.awardTotals) || call.assignments.awardAmount > 0 ? (
                               <p className="nk-sub text-[11.5px]">
-                                ₹{new Intl.NumberFormat('en-IN').format(Math.round(call.assignments.awardAmount))}
+                                {formatMoneyTotals(call.assignments.awardTotals) || formatMoney(call.assignments.awardAmount, 'INR')}
                               </p>
                             ) : null}
                           </td>

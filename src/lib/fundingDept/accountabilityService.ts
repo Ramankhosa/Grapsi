@@ -52,6 +52,8 @@ import { isCallUntouched, queueStateFor, type QueueState } from './queueState'
 import { getSchoolFunnel, type SchoolFunnelRow } from './schoolFunnelService'
 import { flagThresholdsFrom, getDeptSettings, type DeptSettings } from './settings'
 import { isMemberAway, serializeMember } from './shared'
+import { amountIn, mergeMoneyTotals, sumByCurrency, type MoneyTotal } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 /* -------------------------------------------------------------------------- */
 /* The activity window                                                        */
@@ -111,7 +113,9 @@ export interface MatrixSchoolRow {
   /* Allocations in this school, by where they have got to. */
   buckets: ProgressBuckets
   live: number
+  /** In the tenant's currency; other currencies are in awardTotals. */
   awardAmount: number
+  awardTotals: MoneyTotal[]
   /* Windowed activity, attributed to THIS member. */
   followUpsInWindow: number
   callsCirculatedInWindow: number
@@ -156,6 +160,7 @@ export interface MatrixMemberRow {
     facultyNeverEngaged: number
     dueNudges: number
     awardAmount: number
+    awardTotals: MoneyTotal[]
   }
   lastActionAt: Date | null
   flags: AccountabilityFlag[]
@@ -206,6 +211,7 @@ interface AllocationRow {
   submitted_at: Date | null
   created_at: Date
   award_amount: number | null
+  award_currency: string | null
   last_follow_up_at: Date | null
   last_stage: string | null
   has_workspace: boolean
@@ -250,6 +256,7 @@ async function loadAllocations(tenantId: string, schoolIds: string[]): Promise<A
       ca.submitted_at,
       ca.created_at,
       ca.award_amount,
+      ca.award_currency,
       fu.last_follow_up_at,
       fu.last_stage,
       EXISTS (
@@ -482,6 +489,7 @@ export async function getMemberSchoolMatrix(
     settings?: DeptSettings
   }
 ): Promise<MemberSchoolMatrix> {
+  const tenantCurrency = (await getTenantLocale(tenantId)).currency
   const now = options.now ?? new Date()
   const settings = options.settings ?? (await getDeptSettings(tenantId))
   const thresholds = flagThresholdsFrom(settings)
@@ -552,12 +560,16 @@ export async function getMemberSchoolMatrix(
   ): MatrixSchoolRow => {
     const rows = bySchool.get(schoolId) || []
     const buckets = emptyBuckets()
-    let awardAmount = 0
+    const awardEntries: string[] = []
     for (const row of rows) {
       const progress = progressFor(row)
       addToBuckets(buckets, progress)
-      if (String(row.outcome).toUpperCase() === 'AWARDED') awardAmount += row.award_amount || 0
+      if (String(row.outcome).toUpperCase() === 'AWARDED' && row.award_amount != null) {
+        awardEntries.push(`${row.award_currency || '?'}:${row.award_amount}`)
+      }
     }
+    const awardTotals = sumByCurrency(awardEntries, tenantCurrency)
+    const awardAmount = amountIn(awardTotals, tenantCurrency)
     const live = buckets.awaitingReply + buckets.inHand + buckets.drafting + buckets.overdue
     const key = `${schoolId}:${memberUserId}`
     const followUpsInWindow = activity.followUps.get(key) ?? 0
@@ -602,6 +614,7 @@ export async function getMemberSchoolMatrix(
       buckets,
       live,
       awardAmount,
+      awardTotals,
       followUpsInWindow,
       callsCirculatedInWindow,
       triageDecisionsInWindow,
@@ -648,6 +661,7 @@ export async function getMemberSchoolMatrix(
       facultyNeverEngaged: 0,
       dueNudges: 0,
       awardAmount: 0,
+      awardTotals: [] as MoneyTotal[],
     }
     let lastActionAt: Date | null = null
     for (const school of schools) {
@@ -662,6 +676,7 @@ export async function getMemberSchoolMatrix(
       totals.facultyNeverEngaged += school.facultyNeverEngaged
       totals.dueNudges += school.dueNudges
       totals.awardAmount += school.awardAmount
+      totals.awardTotals = mergeMoneyTotals([totals.awardTotals, school.awardTotals])
       for (const key of Object.keys(totals.buckets) as Array<keyof ProgressBuckets>) {
         totals.buckets[key] += school.buckets[key]
       }
