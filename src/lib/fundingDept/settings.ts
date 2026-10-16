@@ -17,6 +17,7 @@
 import prisma from '@/lib/prisma'
 
 import { SILENT_DAYS, UNANSWERED_DAYS, UNTOUCHED_DAYS } from './accountabilityProgress'
+import { DEFAULT_MATCH_WIDTH, isMatchWidth, type MatchWidth } from './matchBands'
 
 export interface DeptSettings {
   // --- When work is late ---------------------------------------------------
@@ -64,6 +65,19 @@ export interface DeptSettings {
    * Off by default: a broad match floods queues with calls nobody will take.
    */
   mapBroadTier: boolean
+
+  // --- Faculty matching ----------------------------------------------------
+  /**
+   * How good a score has to be before a person counts as matched: narrow,
+   * balanced or wide (see `matchBands`).
+   *
+   * There is no cutoff that is right for every institution — a reranker's
+   * absolute scale moves with the discipline and with how broadly an agency
+   * writes — so the office sets it, against a preview of the counts each width
+   * would give them. It changes what is *counted*, never how anything was
+   * scored, so the reports and the call window stay in step at every width.
+   */
+  matchWidth: MatchWidth
 }
 
 export const DEFAULT_DEPT_SETTINGS: DeptSettings = {
@@ -80,6 +94,7 @@ export const DEFAULT_DEPT_SETTINGS: DeptSettings = {
   dismissalRateWarnPct: 40,
   callMappingRoutingEnabled: false,
   mapBroadTier: false,
+  matchWidth: DEFAULT_MATCH_WIDTH,
 }
 
 /** The booleans a tenant admin can flip, for the settings screen and the API. */
@@ -197,7 +212,13 @@ export function normalizeDeptSettings(raw: unknown): DeptSettings {
   for (const key of DEPT_TOGGLES) {
     next[key] = bool(source[key], DEFAULT_DEPT_SETTINGS[key])
   }
+  next.matchWidth = isMatchWidth(source.matchWidth) ? source.matchWidth : DEFAULT_MATCH_WIDTH
   return next
+}
+
+/** The tenant's chosen width, for the reads that only need this one setting. */
+export async function getMatchWidth(tenantId: string): Promise<MatchWidth> {
+  return (await getDeptSettings(tenantId)).matchWidth
 }
 
 export async function getDeptSettings(tenantId: string): Promise<DeptSettings> {

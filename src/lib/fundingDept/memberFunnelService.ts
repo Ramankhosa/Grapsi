@@ -5,6 +5,7 @@ import type { CallRelevance, RelevanceTier } from '@/lib/funding/callUnitRelevan
 
 import { getSchoolCallLedger, type ActivityWindow, type LedgerAllocation } from './accountabilityService'
 import { textArray } from './callSql'
+import { UNCOUNTED_MATCH_VERSIONS, currentQualifyingMatchSql } from './reportDefinitions'
 import { listMembers } from './membershipService'
 import { getSchoolFunnel } from './schoolFunnelService'
 import { serializeMember } from './shared'
@@ -234,11 +235,12 @@ export async function getMemberFunnelReport(
     Promise.all(schoolIds.map((schoolId) => getSchoolCallLedger(tenantId, schoolId, { window }))),
     schoolIds.length
       ? prisma.$queryRaw<Array<{ school_id: string; funding_call_id: string; count: number; inferred: boolean; first_seen_at: Date }>>(Prisma.sql`
-          SELECT school_id, funding_call_id, COUNT(DISTINCT user_id)::int AS count,
+          SELECT school_id, funding_call_id,
+                 COUNT(DISTINCT user_id) FILTER (WHERE ${currentQualifyingMatchSql('m')})::int AS count,
                  BOOL_AND(inferred) AS inferred, MIN(first_seen_at) AS first_seen_at
-            FROM funding_opportunity_matches
+            FROM funding_opportunity_matches m
            WHERE tenant_id = ${tenantId} AND school_id = ANY(${textArray(schoolIds)})
-             AND source_version IS DISTINCT FROM 'manual-allocation-v1'
+             AND COALESCE(source_version,'') NOT IN (${Prisma.join(UNCOUNTED_MATCH_VERSIONS.map(v => Prisma.sql`${v}`))})
            GROUP BY school_id, funding_call_id
         `)
       : Promise.resolve([]),

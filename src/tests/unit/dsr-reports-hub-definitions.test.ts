@@ -48,7 +48,7 @@ describe('pendency state', () => {
 })
 
 describe('qualifying match', () => {
-  const m = { inferred: false, source_version: 'person-call-census-v1', match_tier: 'strong', first_seen_at: new Date('2026-09-01T10:00:00Z') }
+  const m = { inferred: false, source_version: 'call-people-census-v2', match_tier: 'strong', first_seen_at: new Date('2026-09-01T10:00:00Z') }
   it('counts automatic strong and moderate matches seen by the deadline day', () => {
     expect(isQualifyingMatch(m, new Date('2026-09-10T00:00:00Z'))).toBe(true)
     expect(isQualifyingMatch({ ...m, match_tier: 'moderate' }, null)).toBe(true)
@@ -58,6 +58,9 @@ describe('qualifying match', () => {
     expect(isQualifyingMatch({ ...m, inferred: true }, null)).toBe(false)
     expect(isQualifyingMatch({ ...m, source_version: 'manual-allocation-v1' }, null)).toBe(false)
     expect(isQualifyingMatch(m, new Date('2026-08-31T00:00:00Z'))).toBe(false)
+  })
+  it('ignores the retired per-researcher scoring, which tiered everyone against their own best call', () => {
+    expect(isQualifyingMatch({ ...m, source_version: 'person-call-census-v1' }, null)).toBe(false)
   })
   it('compares India calendar days, so a match seen late on the deadline day still counts', () => {
     // 18:00 UTC on 9 Sep is 23:30 IST on 9 Sep; the deadline day is 9 Sep.

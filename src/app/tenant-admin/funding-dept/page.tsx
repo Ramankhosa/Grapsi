@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
 import DeptSettingsCard from '@/components/funding-dept/DeptSettingsCard'
+import MatchWidthCard from '@/components/funding-dept/MatchWidthCard'
 import ProposalSettingsCard from '@/components/proposals/ProposalSettingsCard'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
@@ -426,6 +427,7 @@ export default function TenantAdminFundingDeptPage() {
           how activity is counted.
         */}
         <div className="mb-6">
+          <MatchWidthCard />
           <DeptSettingsCard />
         </div>
 

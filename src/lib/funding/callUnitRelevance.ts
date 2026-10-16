@@ -221,6 +221,12 @@ export function relevantCallWhereSql(
  * mapping names it (once the department has switched mapping routing on — see
  * `callSchoolMapping`), or a current person in the school matches.  Recorded
  * human work remains visible for audit.
+ *
+ * Routing deliberately accepts *any* current match, weak included, while the
+ * reports count only strong and moderate ones (`currentQualifyingMatchSql`).
+ * The two questions differ: "is this worth a look?" should be generous, "how
+ * many faculty match?" must not be. Tightening this to the counted tiers would
+ * empty the school queues of everything the taxonomy had not already mapped.
  */
 export function actionableSchoolCallWhereSql(
   tenantId: string,

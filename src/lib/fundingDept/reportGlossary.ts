@@ -142,6 +142,7 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
     IN_PROGRESS: 'Something has been recorded (a review, shortlist, allocation, follow-up or action), but the coordinator has not marked the work completed.',
     COMPLETED: 'The coordinator marked this school’s action on the call as completed. Only a person sets this; allocating or shortlisting does not.',
   }[state] })),
+  { term: 'Matched faculty', definition: `People scored against the call itself and tiered ${PENDENCY_MATCH_TIERS.join(' or ')}. Every screen counts the same stored scoring, so the figure on a report and the list on the call window are the same people. Weak, reconstructed and manual-allocation matches are shown but never counted.` },
   { term: 'Directly matched call', definition: `A call with at least one ${PENDENCY_MATCH_TIERS.join(' or ')} automatic faculty match in the school, first seen before the call's deadline. Weak, reconstructed and manual-allocation matches do not count.` },
   ...PENDENCY_STATES.map(state => ({ term: `Pendency: ${PENDENCY_STATE_LABELS[state]}`, definition: {
     MISSED: 'A directly matched call whose deadline passed with nobody from the school allocated, no independent application, and no "not relevant" decision.',

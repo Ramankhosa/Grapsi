@@ -16,6 +16,7 @@ import FollowUpPanel from '@/components/funding-dept/FollowUpPanel'
 import ReassignDialog from '@/components/funding-dept/ReassignDialog'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
+import { MATCH_WIDTH_COPY, type MatchWidth } from '@/lib/fundingDept/matchBands'
 import { useToast } from '@/components/ui/toast'
 
 /**
@@ -109,6 +110,9 @@ interface Dossier {
   queueState: string
   people: Person[]
   peopleError: string | null
+  peopleBasis: 'census' | 'live'
+  matchWidth: MatchWidth
+  matchBandLabels: Record<string, string>
   assignments: Assignment[]
   unattributedAssignments: Assignment[]
   timeline: TimelineEvent[]
@@ -184,6 +188,9 @@ export default function CallDossierPage({ params }: { params: { callId: string }
   const [busy, setBusy] = useState(false)
   const [panelRevision, setPanelRevision] = useState(0)
   const [bulkOpen, setBulkOpen] = useState(false)
+  // Null until the server reports the office's own setting; the control then
+  // drives both the counts above and the list below from one number.
+  const [matchWidth, setMatchWidth] = useState<MatchWidth | null>(null)
   // Opened without ?school= (from Incoming calls): start on the first school the
   // call actually reaches, not the viewer's first covered school.
   const autoPicked = useRef(false)
@@ -192,7 +199,10 @@ export default function CallDossierPage({ params }: { params: { callId: string }
     async (unitId: string) => {
       setLoading(true)
       try {
-        const query = unitId ? `?orgUnitId=${encodeURIComponent(unitId)}` : ''
+        const search = new URLSearchParams()
+        if (unitId) search.set('orgUnitId', unitId)
+        if (matchWidth) search.set('width', matchWidth)
+        const query = search.toString() ? `?${search.toString()}` : ''
         const response = await authFetch(`/api/funding-dept/calls/${params.callId}/dossier${query}`)
         const payload = await response.json()
         if (!response.ok) {
@@ -202,6 +212,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
         setData(payload)
         setPanelRevision((value) => value + 1)
         if (!unitId && payload.school?.id) setSchoolId(payload.school.id)
+        if (!matchWidth && payload.matchWidth) setMatchWidth(payload.matchWidth)
         setError(null)
       } catch {
         setError('Could not load this call.')
@@ -209,7 +220,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
         setLoading(false)
       }
     },
-    [authFetch, params.callId]
+    [authFetch, params.callId, matchWidth]
   )
 
   useEffect(() => {
@@ -223,7 +234,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
     const fromUrl = new URLSearchParams(window.location.search).get('school') || ''
     void load(schoolId || fromUrl)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, meLoading, me.isMember, me.canAdminister, schoolId])
+  }, [authLoading, meLoading, me.isMember, me.canAdminister, schoolId, matchWidth])
 
   const setTriage = async (status: string) => {
     if (!data) return
@@ -444,6 +455,8 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           callId={data.call.id}
           selectedSchoolId={data.school.id}
           revision={panelRevision}
+          width={matchWidth}
+          onWidthChange={setMatchWidth}
           onChanged={() => void load(data.school.id)}
           onLoaded={(ids) => {
             if (autoPicked.current) return
@@ -460,7 +473,15 @@ export default function CallDossierPage({ params }: { params: { callId: string }
         {/* People */}
         <section className="mt-8" id="school-detail">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="nk-title text-lg">Best matches in {data.school.name}</h2>
+            <h2 className="nk-title text-lg">
+              Matched faculty in {data.school.name}
+              {data.people.length > 0 && (
+                <span className="nk-sub ml-2 text-sm font-normal tabular-nums">
+                  {data.people.filter((person) => person.matchTier === 'strong' || person.matchTier === 'moderate').length}{' '}
+                  strong or moderate of {data.people.length} ranked
+                </span>
+              )}
+            </h2>
             <p className="nk-sub">
               Ranked against this call · track record over{' '}
               <strong>{data.period.label}</strong> ({formatDate(data.period.start)} –{' '}
@@ -526,6 +547,12 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               </div>
             )
           })()}
+          {data.peopleBasis === 'live' && (
+            <p className="nk-sub mt-2 text-xs">
+              Scored on the spot — this call has not been through the overnight matching run yet, so
+              the counts above may lag this list for a few minutes.
+            </p>
+          )}
           <div className="nk-panel mt-3">
             {data.peopleError ? (
               <p className="nk-sub p-4">{data.peopleError}</p>

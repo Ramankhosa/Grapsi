@@ -9,7 +9,7 @@ import { reportSchoolMatchStates } from './currentMatches'
 import { getDeptSettings } from './settings'
 import { isMemberAway } from './shared'
 import { getIncomingReport } from './incomingReport'
-import { countAllocations, countIndependentApplications, countSchoolResponsibilities, countSubmissions, countUniqueCalls, deadlineState, isAdHocCallId, isRelevantQuality, MISSED_DEADLINE_STATES, reviewState, submissionState, submissionSummary, isAllocation, isIndependentApplication, isSubmission } from './reportDefinitions'
+import { countAllocations, countIndependentApplications, countSchoolResponsibilities, countSubmissions, countUniqueCalls, deadlineState, isAdHocCallId, isRelevantQuality, MISSED_DEADLINE_STATES, PENDENCY_MATCH_TIERS, reviewState, submissionState, submissionSummary, isAllocation, isIndependentApplication, isSubmission, UNCOUNTED_MATCH_VERSIONS } from './reportDefinitions'
 
 export type ActionRow = {
   id: string; tenant_id: string; school_id: string; call_id: string | null; application_id: string | null
@@ -109,7 +109,11 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       WHERE f.tenant_id=${tenantId} AND f.assignment_id IS NULL AND u.path[1]=ANY(${textArray(ids)}) AND f.happened_at<=${at}`),
     prisma.$queryRaw<ActionRow[]>(Prisma.sql`SELECT a.*,COALESCE(u.name,u.email) owner_name FROM dsr_actions a JOIN users u ON u.id=a.owner_user_id
       WHERE a.tenant_id=${tenantId} AND a.school_id=ANY(${textArray(ids)}) AND a.created_at<=${at} ORDER BY a.is_next DESC,a.due_at NULLS LAST,a.id`),
-    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids.filter(id=>projection.get(id)?.fresh)},is_current:true}}),
+    // Only what every other report calls a match: current, automatic, strong or
+    // moderate. Counting weak rows here is what made MATCHED_UNALLOCATED fire
+    // on calls whose "matches" the call window itself ranked as weak.
+    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids.filter(id=>projection.get(id)?.fresh)},is_current:true,
+      inferred:false,match_tier:{in:[...PENDENCY_MATCH_TIERS]},NOT:{source_version:{in:[...UNCOUNTED_MATCH_VERSIONS]}}}}),
     prisma.$queryRaw<Array<{ school_id:string;call_id:string;first_seen_at:Date;inferred:boolean }>>(Prisma.sql`SELECT * FROM dsr_opportunity_observations WHERE tenant_id=${tenantId} AND school_id=ANY(${textArray(ids)}) AND first_seen_at<=${at}`),
     prisma.$queryRaw<Array<{ application_id:string;evidence_fingerprint:string;reviewer_user_id:string;verified_at:Date }>>(Prisma.sql`SELECT * FROM dsr_submission_verifications WHERE tenant_id=${tenantId} AND verified_at<=${at}`),
     prisma.$queryRaw<Array<{application_id:string;id:string}>>(Prisma.sql`SELECT 'assignment:'||assignment_id application_id,id FROM assignment_documents WHERE tenant_id=${tenantId} AND kind='PROPOSAL'

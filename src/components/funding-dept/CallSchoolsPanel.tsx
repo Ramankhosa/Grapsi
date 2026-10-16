@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import { ACTION_STATUS_LABELS, type ActionStatus } from '@/lib/fundingDept/reportGlossary'
+import { MATCH_WIDTHS, MATCH_WIDTH_COPY, type MatchWidth } from '@/lib/fundingDept/matchBands'
 import { MarkCompleted } from '@/components/funding-dept/reports/IncomingCallsTab'
 
 type School = {
@@ -18,29 +19,35 @@ type School = {
   matchedFaculty: number; shortlisted: number; allocations: number; liveAllocations: number; submitted: number; followUps: number
   actionStatus: ActionStatus; completed: { at: string; by: string | null; note: string | null } | null
 }
-type Payload = { callId: string; row: { schools: School[]; actionStatus: ActionStatus } | null; otherSchools: Array<{ id: string; name: string }>; canAddSchool: boolean; matchesRefreshedAt: string | null }
+type Payload = { callId: string; row: { schools: School[]; actionStatus: ActionStatus } | null; otherSchools: Array<{ id: string; name: string }>; canAddSchool: boolean; matchesRefreshedAt: string | null; width: MatchWidth }
 
 const BADGE: Record<ActionStatus, string> = { NOT_STARTED: 'nk-badge nk-badge-warn', IN_PROGRESS: 'nk-badge nk-badge-live', COMPLETED: 'nk-badge nk-badge-ok' }
 const field = 'rounded border border-nickel-300 bg-white px-2 py-1.5 text-sm'
 
-export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, revision, onChanged, onLoaded }: {
+export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, revision, onChanged, onLoaded, width, onWidthChange }: {
   callId: string; selectedSchoolId: string; onSelect: (schoolId: string) => void; revision: number; onChanged: () => void
   /** The schools this call reaches, in panel order, each time the panel loads. */
   onLoaded?: (schoolIds: string[]) => void
+  /** Null until the office's own setting arrives from the server. */
+  width: MatchWidth | null
+  onWidthChange: (width: MatchWidth) => void
 }) {
   const { authFetch } = useAuth()
   const [data, setData] = useState<Payload | null>(null); const [error, setError] = useState(''); const [marking, setMarking] = useState(false)
   const [own, setOwn] = useState(0)
   const load = useCallback(async () => {
     try {
-      const r = await authFetch(`/api/funding-dept/calls/${encodeURIComponent(callId)}/schools`)
+      const query = width ? `?width=${encodeURIComponent(width)}` : ''
+      const r = await authFetch(`/api/funding-dept/calls/${encodeURIComponent(callId)}/schools${query}`)
       const body = await r.json().catch(() => null)
       if (!r.ok) throw Error(body?.error || 'Could not load the schools for this call.')
       setData(body); setError('')
       onLoaded?.((body as Payload).row?.schools.map(s => s.schoolId) || [])
+      // The office's own setting, once, so the control starts where they left it.
+      if (!width && (body as Payload).width) onWidthChange((body as Payload).width)
     } catch (e) { setError((e as Error).message) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authFetch, callId])
+  }, [authFetch, callId, width])
   useEffect(() => { void load() }, [load, revision, own])
   const changed = () => { setOwn(v => v + 1); onChanged() }
 
@@ -51,7 +58,22 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
   return <section className="nk-panel mt-6 overflow-x-auto">
     <div className="flex flex-wrap items-baseline justify-between gap-2 p-3">
       <h2 className="nk-title text-lg">All schools for this call</h2>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* How generous "matched" is, applied to the counts and the list at
+            once. It re-counts what is already stored, so nothing is re-scored
+            and the office can try a width before settling on one. */}
+        <div className="flex items-center gap-1.5" role="group" aria-label="How wide a match counts">
+          <span className="nk-sub text-xs">Match width</span>
+          {MATCH_WIDTHS.map(option => (
+            <button
+              key={option}
+              className={option === data.width ? 'nk-btn-primary nk-btn-xs' : 'nk-btn-secondary nk-btn-xs'}
+              aria-pressed={option === data.width}
+              title={MATCH_WIDTH_COPY[option].help}
+              onClick={() => onWidthChange(option)}
+            >{MATCH_WIDTH_COPY[option].label}</button>
+          ))}
+        </div>
         {schools.length > 0 && <button className="nk-btn-secondary nk-btn-sm" aria-expanded={marking} onClick={() => setMarking(v => !v)}>{data.row?.actionStatus === 'COMPLETED' ? 'Action completed ✓' : 'Mark action completed'}</button>}
       </div>
     </div>
@@ -72,7 +94,7 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
             <td className="border-t border-nickel-100 px-3 py-2 text-right"><button className={on ? 'nk-btn-primary nk-btn-xs' : 'nk-btn-secondary nk-btn-xs'} onClick={() => onSelect(s.schoolId)}>{on ? 'Showing below' : 'Show faculty'}</button></td>
           </tr> })}</tbody></table>}
     {data.canAddSchool && data.otherSchools.length > 0 && <AddSchool callId={callId} schools={data.otherSchools} onAdded={changed} />}
-    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = current strong or moderate automatic matches{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}` : ''}. The list below ranks everyone in the selected school live.</p>
+    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = people scored against this call who reach the <strong>{MATCH_WIDTH_COPY[data.width].label.toLowerCase()}</strong> width{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}` : ''}. {MATCH_WIDTH_COPY[data.width].help} Picking a school lists those same people below, possible matches included, so you can see everyone who was considered. Changing the width re-counts what is already scored; it never changes the scores.</p>
   </section>
 }
 

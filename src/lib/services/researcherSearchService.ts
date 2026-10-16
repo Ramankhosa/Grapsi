@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@prisma/client';
 
 import prisma from '../prisma';
@@ -19,6 +21,18 @@ const VECTOR_BRANCH_LIMIT = 80;
 const TEXT_BRANCH_LIMIT = 80;
 const MERGED_LIMIT = 100;
 const RERANK_LIMIT = 40;
+/**
+ * Census mode: score the whole eligible population rather than a display page.
+ *
+ * A displayed search only needs the top of the list, so it retrieves 80 per
+ * branch and reranks the first 40. A census is a *count* — "how many faculty
+ * does this call match" — so every candidate past the retrieval floor has to be
+ * scored and tiered, or the number is just "how many fitted in the window".
+ */
+const CENSUS_BRANCH_LIMIT = 2000;
+const CENSUS_MERGED_LIMIT = 4000;
+/** Voyage reranks one batch per request; scores are pointwise, so batches merge. */
+const CENSUS_RERANK_BATCH = 100;
 const FUNDING_PUBLICATION_TAG = 'my-publication';
 const EVIDENCE_SNIPPET_LENGTH = 280;
 const SHARED_TERM_LIMIT = 8;
@@ -39,8 +53,17 @@ const SHARED_TERM_LIMIT = 8;
  *     so a relative gap works better than a second absolute threshold).
  */
 const RERANK_GATE_DEFAULT = 0.35;
-const RERANK_STRONG_TIER = 0.65;
-const RERANK_MODERATE_TIER = 0.5;
+/**
+ * Tier thresholds for reranked scores.
+ *
+ * These decide what every DSR report counts as "matched faculty", not just what
+ * a card is labelled, so they are env-tunable: a cross-encoder's absolute scale
+ * depends on the domain, and an institution whose calls and profiles are both
+ * broadly worded sits lower on it than one with sharply worded calls. Calibrate
+ * with scripts/verify-call-match-census.ts, which prints the live distribution.
+ */
+const RERANK_STRONG_TIER_DEFAULT = 0.65;
+const RERANK_MODERATE_TIER_DEFAULT = 0.5;
 const VECTOR_FLOOR_VOYAGE_DEFAULT = 0.3;
 const VECTOR_FLOOR_DEFAULT = 0.45;
 const VECTOR_GAP_DEFAULT = 0.15;
@@ -87,6 +110,18 @@ export interface ResearcherSearchFilters {
   includeSelf?: boolean;
 }
 
+/**
+ * Reranker scores the caller already holds, keyed by exactly what was scored.
+ *
+ * A census rescores the same people against the same calls on every refresh,
+ * and only a changed profile or a changed call changes the answer. The cache
+ * makes a steady-state refresh cost nothing, so counts can stay fresh.
+ */
+export interface RerankScoreCache {
+  lookup(entries: Array<{ userId: string; inputHash: string }>): Promise<Map<string, number>>;
+  store(entries: Array<{ userId: string; inputHash: string; score: number }>): Promise<void>;
+}
+
 export interface ResearcherSearchRequest {
   query?: string | null;
   fundingCallId?: string | null;
@@ -94,6 +129,14 @@ export interface ResearcherSearchRequest {
   limit?: number | null;
   requesterUserId?: string | null;
   requesterTenantId?: string | null;
+  /**
+   * Evaluate the whole eligible population and return every gated result.
+   * Used by the stored match census so that the number a report counts and the
+   * list a screen shows are the same rows, scored the same way.
+   */
+  census?: boolean | null;
+  /** Census only: reuse reranker scores for unchanged (call, person) pairs. */
+  scoreCache?: RerankScoreCache | null;
 }
 
 export interface ResearcherMatchEvidence {
@@ -563,6 +606,8 @@ function applyRelevanceGate(
 
   if (basis === 'rerank') {
     const gate = envNumber('RESEARCHER_MATCH_RERANK_GATE', RERANK_GATE_DEFAULT);
+    const strong = envNumber('RESEARCHER_MATCH_RERANK_STRONG', RERANK_STRONG_TIER_DEFAULT);
+    const moderate = envNumber('RESEARCHER_MATCH_RERANK_MODERATE', RERANK_MODERATE_TIER_DEFAULT);
     return results
       .filter((result) => relax || (result.rerankScore !== null && result.rerankScore >= gate))
       .map((result) => {
@@ -570,9 +615,9 @@ function applyRelevanceGate(
         // no rerank score — treat those as weak rather than crashing.
         const rerankScore = result.rerankScore ?? 0;
         const matchTier: ResearcherMatchTier =
-          rerankScore >= RERANK_STRONG_TIER
+          rerankScore >= strong
             ? 'strong'
-            : rerankScore >= RERANK_MODERATE_TIER
+            : rerankScore >= moderate
               ? 'moderate'
               : 'weak';
         return { ...result, matchTier };
@@ -592,6 +637,16 @@ function applyRelevanceGate(
             : 'weak';
       return { ...result, matchTier };
     });
+}
+
+/**
+ * What a cached rerank score was computed from: the model, the call's text and
+ * the person's document. Any change to one of them invalidates that pair alone.
+ */
+function rerankInputHash(query: string, document: string) {
+  return createHash('sha1')
+    .update(`${voyageRerankService.getModelName()}\u0000${query}\u0000${document}`)
+    .digest('hex');
 }
 
 function buildRerankDocument(result: ResearcherSearchResult) {
@@ -718,7 +773,7 @@ export class ResearcherSearchService {
     return vectorLiteralFromEmbedding(response.embedding);
   }
 
-  private async searchProfileVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+  private async searchProfileVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql, branchLimit = VECTOR_BRANCH_LIMIT) {
     const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT
@@ -736,11 +791,11 @@ export class ResearcherSearchService {
         AND 1 - (${profileEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY ${profileEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
-      LIMIT ${VECTOR_BRANCH_LIMIT}
+      LIMIT ${branchLimit}
     `);
   }
 
-  private async searchSavedAreaVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+  private async searchSavedAreaVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql, branchLimit = VECTOR_BRANCH_LIMIT) {
     const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT DISTINCT ON (u.id)
@@ -759,11 +814,11 @@ export class ResearcherSearchService {
         AND 1 - (area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
-      LIMIT ${VECTOR_BRANCH_LIMIT}
+      LIMIT ${branchLimit}
     `);
   }
 
-  private async searchPublicationVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+  private async searchPublicationVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql, branchLimit = VECTOR_BRANCH_LIMIT) {
     const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT DISTINCT ON (u.id)
@@ -784,11 +839,11 @@ export class ResearcherSearchService {
         AND 1 - (ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
-      LIMIT ${VECTOR_BRANCH_LIMIT}
+      LIMIT ${branchLimit}
     `);
   }
 
-  private async searchText(query: string, hardConditions: Prisma.Sql) {
+  private async searchText(query: string, hardConditions: Prisma.Sql, branchLimit = TEXT_BRANCH_LIMIT) {
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT
         ${profileCandidateColumns(
@@ -833,8 +888,81 @@ export class ResearcherSearchService {
         ) @@ websearch_to_tsquery('english', ${query})
         AND ${hardConditions}
       ORDER BY "textRank" DESC
-      LIMIT ${TEXT_BRANCH_LIMIT}
+      LIMIT ${branchLimit}
     `);
+  }
+
+  /**
+   * Census rerank: every candidate is scored, in batches, with cached pairs
+   * skipped. Voyage relevance scores are pointwise — the cross-encoder sees one
+   * (query, document) pair at a time — so scores from different batches, and
+   * scores read from the cache, are directly comparable.
+   */
+  private async rerankCensus(
+    query: string,
+    results: ResearcherSearchResult[],
+    cache?: RerankScoreCache | null
+  ): Promise<{ ranked: ResearcherSearchResult[]; basis: ResearcherScoreBasis }> {
+    if (!voyageRerankService.isConfigured() || results.length === 0) {
+      return { ranked: results, basis: 'vector' };
+    }
+
+    const documents = new Map(results.map((result) => [result.userId, buildRerankDocument(result)]));
+    const hashes = new Map(
+      results.map((result) => [result.userId, rerankInputHash(query, documents.get(result.userId) || '')])
+    );
+
+    let cached = new Map<string, number>();
+    if (cache) {
+      cached = await cache
+        .lookup(results.map((result) => ({ userId: result.userId, inputHash: hashes.get(result.userId)! })))
+        .catch(() => new Map<string, number>());
+    }
+
+    const pending = results.filter((result) => !cached.has(result.userId));
+    const fresh = new Map<string, number>();
+    for (let index = 0; index < pending.length; index += CENSUS_RERANK_BATCH) {
+      const batch = pending.slice(index, index + CENSUS_RERANK_BATCH);
+      const scored = await voyageRerankService.rerank({
+        query,
+        documents: batch.map((result) => documents.get(result.userId) || ''),
+        topK: batch.length,
+      });
+      for (const row of scored) {
+        const person = batch[row.index];
+        if (person) fresh.set(person.userId, clampScore(row.relevanceScore));
+      }
+    }
+
+    if (cache && fresh.size > 0) {
+      await cache
+        .store(
+          Array.from(fresh.entries()).map(([userId, score]) => ({
+            userId,
+            inputHash: hashes.get(userId)!,
+            score,
+          }))
+        )
+        .catch(() => undefined);
+    }
+
+    const scores = new Map([...cached, ...fresh]);
+    // Partial coverage is not usable: the rerank gate is absolute, so an
+    // unscored person would be dropped from the census rather than tiered, and
+    // a count must not depend on which batch happened to fail. Fall back to the
+    // retrieval scores for everyone, and let the caller record the basis.
+    if (scores.size < results.length) {
+      return { ranked: results, basis: 'vector' };
+    }
+
+    const ranked = results
+      .map((result) => {
+        const rerankScore = scores.get(result.userId)!;
+        return { ...result, rerankScore, score: rerankScore };
+      })
+      .sort((left, right) => right.score - left.score);
+
+    return { ranked, basis: 'rerank' };
   }
 
   private async rerank(
@@ -886,15 +1014,16 @@ export class ResearcherSearchService {
 
   async search(input: ResearcherSearchRequest): Promise<ResearcherSearchResponse> {
     const query = await this.resolveSearchText(input);
-    const limit = Math.max(1, Math.min(Number(input.limit || 20), 50));
+    const census = Boolean(input.census);
+    const branchLimit = census ? CENSUS_BRANCH_LIMIT : undefined;
     const hardConditions = buildHardFilterConditions(input);
     const vectorLiteral = await this.buildQueryVectorLiteral(query).catch(() => null);
 
     const vectorBranches = vectorLiteral
       ? await Promise.allSettled([
-          this.searchProfileVectors(vectorLiteral, hardConditions),
-          this.searchSavedAreaVectors(vectorLiteral, hardConditions),
-          this.searchPublicationVectors(vectorLiteral, hardConditions),
+          this.searchProfileVectors(vectorLiteral, hardConditions, branchLimit),
+          this.searchSavedAreaVectors(vectorLiteral, hardConditions, branchLimit),
+          this.searchPublicationVectors(vectorLiteral, hardConditions, branchLimit),
         ])
       : [];
 
@@ -904,15 +1033,19 @@ export class ResearcherSearchService {
       : vectorLiteral
         ? null
         : 'text_only';
-    const textRows = await this.searchText(query, hardConditions).catch(() => []);
-    const merged = mergeCandidates([...vectorRows, ...textRows], MERGED_LIMIT);
-    const { ranked, basis } = await this.rerank(query, merged);
+    const textRows = await this.searchText(query, hardConditions, branchLimit).catch(() => []);
+    const merged = mergeCandidates([...vectorRows, ...textRows], census ? CENSUS_MERGED_LIMIT : MERGED_LIMIT);
+    const { ranked, basis } = census
+      ? await this.rerankCensus(query, merged, input.scoreCache)
+      : await this.rerank(query, merged);
     const gated = applyRelevanceGate(ranked, basis, Boolean(input.filters?.includeBelowThreshold));
+    const limit = census ? gated.length : Math.max(1, Math.min(Number(input.limit || 20), 50));
     const callEligibility = input.fundingCallId
       ? await loadCallEligibility(input.fundingCallId).catch(() => null)
       : null;
 
-    if (input.fundingCallId && input.requesterTenantId) {
+    // A census writes its own durable rows; a bounded search records evidence.
+    if (!census && input.fundingCallId && input.requesterTenantId) {
       const { persistMatchingRun } = await import('@/lib/fundingDept/matchingRun');
       await persistMatchingRun({tenantId:input.requesterTenantId,callId:input.fundingCallId,actorId:input.requesterUserId,
         orgUnitIds:input.filters?.orgUnitIds,filters:input.filters || {},candidateCount:merged.length,

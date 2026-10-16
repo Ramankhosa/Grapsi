@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { getIncomingCalls } from '@/lib/fundingDept/incomingCalls'
+import { isMatchWidth } from '@/lib/fundingDept/matchBands'
 import { getMembership } from '@/lib/fundingDept/membershipService'
+import { getMatchWidth } from '@/lib/fundingDept/settings'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { prisma } from '@/lib/prisma'
 
@@ -41,9 +43,14 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     select: { id: true, name: true }, orderBy: { name: 'asc' },
   })
 
+  // The office's narrow/wide setting, or the width a viewer is trying out on
+  // the control. A preview changes only what is counted, never what is stored.
+  const requested = new URL(request.url).searchParams.get('width')
+  const width = isMatchWidth(requested) ? requested : await getMatchWidth(context.tenantId)
+
   try {
     const result = await getIncomingCalls(context.tenantId, {
-      schoolIds: schools.map(s => s.id), includeExpired: true, callId: call.id, asOf: new Date(), page: 1, pageSize: 1,
+      schoolIds: schools.map(s => s.id), includeExpired: true, callId: call.id, asOf: new Date(), page: 1, pageSize: 1, width,
     })
     const row = result.rows[0] || null
     const listed = new Set(row?.schools.map(s => s.schoolId) || [])
@@ -54,6 +61,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       otherSchools: schools.filter(s => !listed.has(s.id)),
       canAddSchool: Boolean(context.scope.fundingDept.isHead || context.isAdmin),
       matchesRefreshedAt: result.matchesRefreshedAt,
+      width,
     })
   } catch (error) {
     console.error('Call schools panel failed', error)

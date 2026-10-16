@@ -9,6 +9,10 @@ import { buildTimeline, type TimelineCaps } from '@/lib/fundingDept/callTimeline
 import { isNudgeTitle } from '@/lib/fundingDept/escalationService'
 import { getMembership } from '@/lib/fundingDept/membershipService'
 import { queueStateFor } from '@/lib/fundingDept/queueState'
+import { callMatchStates, storedCallMatches } from '@/lib/fundingDept/callMatchCensus'
+import { DEFAULT_MATCH_WIDTH, MATCH_BAND_LABELS, bandForScore, isMatchWidth, type MatchWidth } from '@/lib/fundingDept/matchBands'
+import { getMatchWidth } from '@/lib/fundingDept/settings'
+import { queueSchoolMatchRefresh } from '@/lib/fundingDept/currentMatches'
 import { canOpenSchoolWork } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
@@ -377,23 +381,60 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   )
   const lastAssignmentByUser = new Map(assignments.map((row) => [row.assignee_user_id, row]))
 
-  // The same search the matching page runs, narrowed to this school, so the
-  // scores an officer sees here and there are the same numbers.
+  // The people this call matched in this school, read back from the stored
+  // census — the same rows "Matched faculty" counts on every report, scored
+  // once by the call-to-people pipeline. Reading them (rather than searching
+  // again here) is what stops the number above the list disagreeing with the
+  // list: they are now the same rows.
+  //
+  // A call nobody has censused yet falls back to a live search, flagged, so an
+  // officer is never blocked by a background job that has not run.
   let people: Array<Record<string, unknown>> = []
   let peopleError: string | null = null
+  let peopleBasis: 'census' | 'live' = 'census'
+  let matchWidth: MatchWidth = DEFAULT_MATCH_WIDTH
   try {
-    const search = await researcherSearchService.search({
-      fundingCallId: call.id,
-      filters: { orgUnitIds: scopeIds, tenantOnly: true, includeSelf: true },
-      limit: PEOPLE_LIMIT,
-      requesterUserId: context.user.id,
-      requesterTenantId: context.tenantId,
-    })
+    const requestedWidth = new URL(request.url).searchParams.get('width')
+    matchWidth = isMatchWidth(requestedWidth) ? requestedWidth : await getMatchWidth(context.tenantId)
+    const censusState = (await callMatchStates(context.tenantId, [call.id])).get(call.id)
+    let matched: Array<{ userId: string; name: string; department: string | null; score: number | null; matchTier: string | null; matchReason: string | null; researchAreas: string[] }> =
+      censusState?.refreshedAt
+        ? (await storedCallMatches(context.tenantId, call.id, [school.id], PEOPLE_LIMIT, matchWidth)).map((row) => ({
+            userId: row.userId, name: row.name, department: row.department,
+            score: row.score, matchTier: row.matchTier, matchReason: row.matchReason,
+            researchAreas: row.researchAreas.slice(0, 4),
+          }))
+        : []
+
+    if (!censusState?.refreshedAt) {
+      peopleBasis = 'live'
+      const search = await researcherSearchService.search({
+        fundingCallId: call.id,
+        filters: { orgUnitIds: scopeIds, tenantOnly: true, includeSelf: true },
+        limit: PEOPLE_LIMIT,
+        requesterUserId: context.user.id,
+        requesterTenantId: context.tenantId,
+      })
+      matched = (search.results || []).map((result: any) => ({
+        userId: result.userId, name: result.displayName, department: result.department,
+        score: result.score,
+        // Re-banded at the office's width, exactly as a stored row would be.
+        // The search's own tier comes from the shipped thresholds, so leaving it
+        // alone would make the width control do nothing on a call the census
+        // has not reached yet — the one case where a coordinator is most likely
+        // to be reaching for it.
+        matchTier: bandForScore(result.score, matchWidth, result.matchTier),
+        matchReason: result.matchReason,
+        researchAreas: (result.researchAreas || []).slice(0, 4),
+      }))
+    }
+    if (!censusState?.fresh) queueSchoolMatchRefresh(context.tenantId, school.id)
+
     // Track record for the people this call actually surfaced, over the
     // tenant's period of consideration. Deliberately tenant-wide per person,
     // not school-scoped: a professor's load is their load wherever the work
     // came from, and an officer about to add to it needs the true figure.
-    const searchUserIds = (search.results || []).map((result: any) => result.userId)
+    const searchUserIds = matched.map((result) => result.userId)
     const [periodAssigned, periodSubmitted] =
       searchUserIds.length > 0
         ? await Promise.all([
@@ -425,19 +466,18 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       periodSubmitted.map((row) => [row.assignee_user_id, row._count._all])
     )
 
-    people = (search.results || []).map((result: any) => {
+    people = matched.map((result) => {
       const candidate = candidateByUser.get(result.userId)
       const live = liveAssignmentByUser.get(result.userId)
       const last = lastAssignmentByUser.get(result.userId)
       return {
         userId: result.userId,
-        name: result.displayName,
+        name: result.name,
         department: result.department,
-        careerStage: result.careerStage,
         score: result.score,
         matchTier: result.matchTier,
         matchReason: result.matchReason,
-        researchAreas: (result.researchAreas || []).slice(0, 4),
+        researchAreas: result.researchAreas,
         liveAssignments: liveByUser.get(result.userId) || 0,
         assignedInPeriod: assignedInPeriodByUser.get(result.userId) || 0,
         submittedInPeriod: submittedInPeriodByUser.get(result.userId) || 0,
@@ -576,6 +616,15 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     queueState: queueStateFor(triage?.status, liveCount),
     people,
     peopleError,
+    /**
+     * Where the list came from. `census` means these are the same rows the
+     * "Matched faculty" figures count; `live` means the census has not run for
+     * this call yet and the screen is ranking it on the spot.
+     */
+    peopleBasis,
+    /** The width these bands were derived at, and the words for each band. */
+    matchWidth,
+    matchBandLabels: MATCH_BAND_LABELS,
     assignments: assignments.map(serializeAssignment),
     unattributedAssignments: unattributed.map(serializeAssignment),
     timeline: timeline.events,

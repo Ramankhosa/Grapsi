@@ -22,9 +22,10 @@ import { openCallSql, textArray, visibleCallSql } from './callSql'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { queueSchoolMatchRefresh } from './currentMatches'
 import { coordinatorSql } from './hubScope'
+import { DEFAULT_MATCH_WIDTH, type MatchWidth } from './matchBands'
 import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
 import {
-  ACTION_STATUSES, PENDENCY_MATCH_TIERS, actionStatusSql, indiaDaysToDeadlineSql, rollupActionStatus,
+  ACTION_STATUSES, actionStatusSql, currentQualifyingMatchSql, indiaDaysToDeadlineSql, rollupActionStatus,
   type ActionStatus,
 } from './reportDefinitions'
 
@@ -44,6 +45,8 @@ export type IncomingFilters = {
   page: number
   pageSize: number
   all?: boolean
+  /** How good a score must be to count. Defaults to the tenant's setting. */
+  width?: MatchWidth
 }
 
 export type IncomingSchool = {
@@ -61,10 +64,9 @@ export type IncomingRow = {
 
 export class IncomingError extends Error { constructor(message: string, public status = 400) { super(message) } }
 
-const TIERS = PENDENCY_MATCH_TIERS.map(t => `'${t}'`).join(',')
 const NOT_TAKEN_UP = NOT_TAKEN_UP_STATUSES.map(s => `'${s}'`).join(',')
-/** A current automatic strong/moderate match. */
-const currentDirectMatch = (a: string) => Prisma.raw(`(${a}.is_current AND ${a}.inferred = false AND COALESCE(${a}.source_version,'') <> 'manual-allocation-v1' AND ${a}.match_tier IN (${TIERS}))`)
+/** A current automatic counted match at the chosen width — the shared definition. */
+const currentDirectMatch = (a: string, width: MatchWidth) => currentQualifyingMatchSql(a, width)
 
 function validate(f: IncomingFilters) {
   if (f.action && !INCOMING_ACTION_FILTERS.includes(f.action as never)) throw new IncomingError('Unknown action filter.')
@@ -74,6 +76,7 @@ function validate(f: IncomingFilters) {
 
 /** One row per (call, school) in scope with every fact the report shows or filters on. */
 function pairsSql(tenantId: string, f: IncomingFilters): Prisma.Sql {
+  const width = f.width ?? DEFAULT_MATCH_WIDTH
   const scope = textArray(f.schoolIds)
   const days = indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf)
   const action = actionStatusSql({ actionCompletedAt: 'r.action_completed_at', triageDecidedAt: 'r.triage_decided_at', shortlisted: 'r.shortlisted',
@@ -87,7 +90,7 @@ function pairsSql(tenantId: string, f: IncomingFilters): Prisma.Sql {
        WHERE m.tenant_id=${tenantId} AND m.is_active AND m.school_id = ANY(${scope}) ${f.callId ? Prisma.sql`AND m.call_id = ${f.callId}` : Prisma.empty}
       UNION ALL
       SELECT fom.funding_call_id, fom.school_id, ${MATCHED_FACULTY_SOURCE}::text FROM funding_opportunity_matches fom
-       WHERE fom.tenant_id=${tenantId} AND fom.school_id = ANY(${scope}) AND ${currentDirectMatch('fom')} ${f.callId ? Prisma.sql`AND fom.funding_call_id = ${f.callId}` : Prisma.empty}
+       WHERE fom.tenant_id=${tenantId} AND fom.school_id = ANY(${scope}) AND ${currentDirectMatch('fom', width)} ${f.callId ? Prisma.sql`AND fom.funding_call_id = ${f.callId}` : Prisma.empty}
     ), p AS (
       SELECT call_id, school_id, array_agg(DISTINCT source ORDER BY source) sources FROM raw_pairs GROUP BY call_id, school_id
     ), facts AS (
@@ -96,7 +99,7 @@ function pairsSql(tenantId: string, f: IncomingFilters): Prisma.Sql {
         COALESCE(fc.close_date, fc."deadlineAt") deadline, ${days} days_to_deadline, COALESCE(fc."publishedAt", fc."createdAt") entered_at,
         tri.status triage_status, tri.decided_at triage_decided_at, tri.action_completed_at, tri.action_completed_note,
         COALESCE(cu.name, cu.email) completed_by,
-        (SELECT count(*)::int FROM funding_opportunity_matches fm WHERE fm.tenant_id=${tenantId} AND fm.funding_call_id=p.call_id AND fm.school_id=p.school_id AND ${currentDirectMatch('fm')}) matched_faculty,
+        (SELECT count(*)::int FROM funding_opportunity_matches fm WHERE fm.tenant_id=${tenantId} AND fm.funding_call_id=p.call_id AND fm.school_id=p.school_id AND ${currentDirectMatch('fm', width)}) matched_faculty,
         (SELECT count(*)::int FROM call_candidates cc JOIN researcher_profiles rp ON rp.user_id=cc.user_id JOIN tenant_org_units cu2 ON cu2.id=rp.org_unit_id
           WHERE cc.tenant_id=${tenantId} AND cc.funding_call_id=p.call_id AND cu2.path[1]=p.school_id AND cc.status IN ('SHORTLISTED','APPROACHED')) shortlisted,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id

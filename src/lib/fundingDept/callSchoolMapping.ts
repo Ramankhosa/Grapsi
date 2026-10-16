@@ -28,7 +28,7 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { textArray } from './callSql'
+import { openCallSql, textArray, visibleCallSql } from './callSql'
 import { getDeptSettings } from './settings'
 
 export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK', 'MANUAL_ALLOCATION'] as const
@@ -116,7 +116,14 @@ export async function planTenantMappings(tenantId: string, callIds: string[], op
   const [settings, profiles, calls, areas, origins] = await Promise.all([
     getDeptSettings(tenantId),
     loadSchoolProfiles(tenantId, options.schoolIds),
-    prisma.$queryRaw<Array<{ id: string; disciplines: string[] | null }>>(Prisma.sql`SELECT id, disciplines FROM funding_calls WHERE id = ANY(${ids})`),
+    // Tenant-scoped on purpose. Every caller happens to pass ids it already
+    // scoped, so this changes nothing today — but the function takes a tenant
+    // and a list of call ids as separate arguments, and one caller pairing them
+    // wrongly would map another tenant's private call into this tenant's
+    // schools. A planner that cannot do that is worth one predicate.
+    prisma.$queryRaw<Array<{ id: string; disciplines: string[] | null }>>(Prisma.sql`
+      SELECT id, disciplines FROM funding_calls fc
+       WHERE id = ANY(${ids}) AND ${visibleCallSql(tenantId, 'fc')}`),
     prisma.$queryRaw<Array<CallAreaRow & { funding_call_id: string }>>(Prisma.sql`
       SELECT funding_call_id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_name
         FROM funding_call_research_area_taxonomies WHERE funding_call_id = ANY(${ids})`),
@@ -217,11 +224,16 @@ export async function remapSchoolOpenCalls(tenantId: string, schoolIds: string[]
   const roots = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT DISTINCT path[1] id FROM tenant_org_units WHERE tenant_id = ${tenantId} AND id = ANY(${textArray(schoolIds)})`)
   if (!roots.length) return []
+  // Visibility and openness through the shared fragments, not a private copy.
+  // The copy that used to live here had no status test on the tenant's own
+  // calls, so an unpublished draft was mapped to schools the moment somebody
+  // edited a school's research areas. Nothing displayed it — every report
+  // filters on visibility — but the row carried `mapped_at`, which is the date
+  // "new" ages from, so a call drafted months before publication arrived in the
+  // coordinator's queue already stale.
   const calls = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT fc.id FROM funding_calls fc
-     WHERE ((fc."tenantId" = ${tenantId}) OR (fc."tenantId" IS NULL AND fc.visibility = 'GLOBAL_PUBLISHED' AND fc.status = 'PUBLISHED'))
-       AND (COALESCE(fc.close_date, fc."deadlineAt") IS NULL
-            OR (COALESCE(fc.close_date, fc."deadlineAt") AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
+     WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc')}
        AND EXISTS (SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id)`)
   const planned = await planTenantMappings(tenantId, calls.map(c => c.id), { schoolIds: roots.map(r => r.id) })
   return writeMappings(planned, actorId)

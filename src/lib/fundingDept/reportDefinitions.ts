@@ -19,6 +19,9 @@
 import { Prisma } from '@/lib/prisma-generated'
 
 import { applicationState, deadlineAttention, type ApplicationRow } from './managementRules'
+import {
+  DEFAULT_MATCH_WIDTH, bandForScore, countsAtWidthSql, isCountedBand, type MatchWidth,
+} from './matchBands'
 import { closesOpportunity } from './responsibility'
 
 export { QUEUE_STATES, isCallUntouched, queueStateFor, queueStateSql, untouchedSql } from './queueState'
@@ -305,20 +308,54 @@ export function pendencyStateSql(cols: { daysToDeadline: string; qualifyingMatch
 }
 
 /**
- * Match rows that count as "direct" for pendency: automatic (not reconstructed
- * from past work, not a manual-allocation snapshot), strong or moderate, and
- * first seen no later than the deadline's India day. `is_current` is not
- * required, so a call missed months ago still shows the match it had then.
+ * Scorings whose rows must never be counted.
+ *
+ * `manual-allocation-v1` is a snapshot of a human decision, not a match at all.
+ * `person-call-census-v1` scored each researcher against their own best call,
+ * so everybody's top call came out `strong` however poor the fit — counting
+ * those rows is what put "121 matched faculty" above a list of weak people.
+ * They stay in the table as history and are excluded from every figure.
  */
-export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string): Prisma.Sql {
-  const tiers = PENDENCY_MATCH_TIERS.map(t => `'${t}'`).join(',')
-  return Prisma.raw(`(${matchAlias}.inferred = false AND COALESCE(${matchAlias}.source_version,'') <> 'manual-allocation-v1'
-    AND ${matchAlias}.match_tier IN (${tiers})
-    AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= (${deadlineExpr} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date))`)
+export const UNCOUNTED_MATCH_VERSIONS = ['manual-allocation-v1', 'person-call-census-v1'] as const
+
+/**
+ * Match rows that count as "direct" for pendency: automatic (not reconstructed
+ * from past work, not a manual-allocation snapshot, not a retired scoring),
+ * strong or moderate, and first seen no later than the deadline's India day.
+ * `is_current` is not required, so a call missed months ago still shows the
+ * match it had then.
+ */
+export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string, width: MatchWidth = DEFAULT_MATCH_WIDTH): Prisma.Sql {
+  const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
+  return Prisma.sql`(${Prisma.raw(`${matchAlias}.inferred = false AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
+    AND ${countsAtWidthSql(matchAlias, width)}
+    ${Prisma.raw(`AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= (${deadlineExpr} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date)`)})`
 }
-export const isQualifyingMatch = (m: { inferred: boolean; source_version: string | null; match_tier: string | null; first_seen_at: Date | string }, deadline: Date | string | null) =>
-  !m.inferred && m.source_version !== 'manual-allocation-v1' && PENDENCY_MATCH_TIERS.includes(m.match_tier as never)
+export const isQualifyingMatch = (
+  m: { inferred: boolean; source_version: string | null; match_tier: string | null; match_score?: number | null; first_seen_at: Date | string },
+  deadline: Date | string | null,
+  width: MatchWidth = DEFAULT_MATCH_WIDTH
+) =>
+  !m.inferred && !UNCOUNTED_MATCH_VERSIONS.includes(m.source_version as never)
+  && isCountedBand(bandForScore(m.match_score ?? null, width, m.match_tier))
   && (!deadline || indiaDate(m.first_seen_at) <= indiaDate(deadline))
+
+/**
+ * The same rule for a *live* match: what "matched faculty" means on every
+ * screen that shows a current figure. Incoming calls, the call window's school
+ * table and the member funnel all count exactly these rows.
+ *
+ * `width` is the tenant's narrow/wide setting. It changes how good a score has
+ * to be to count — never which rows exist, and never how they were scored, so
+ * every surface still reads one scoring. Omitted, it is the shipped default, so
+ * a caller that has no tenant context counts exactly as before.
+ */
+export function currentQualifyingMatchSql(matchAlias: string, width: MatchWidth = DEFAULT_MATCH_WIDTH): Prisma.Sql {
+  const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
+  return Prisma.sql`(${Prisma.raw(`${matchAlias}.is_current AND ${matchAlias}.inferred = false
+    AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
+    AND ${countsAtWidthSql(matchAlias, width)})`
+}
 
 /* -------------------------------------------------------------------------- */
 /* Follow-up effort — India weeks                                             */
