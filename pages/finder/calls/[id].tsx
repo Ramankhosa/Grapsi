@@ -6,6 +6,7 @@ import { ArrowLeft, CalendarDays, ExternalLink, Globe2, MapPin } from 'lucide-re
 
 import { useAuth } from '@/lib/auth-context'
 import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
+import { ImportedCallFacts } from '@/components/funding/ImportedCallFacts'
 
 type FundingRulePreview = {
   key?: string | null
@@ -66,7 +67,7 @@ function formatAmount(call: Record<string, any>) {
   const amountMax = call.amountMax ?? call.amount_max ?? null
   if (amountMin == null && amountMax == null) return null
   const currency = call.currency ? `${call.currency} ` : ''
-  if (amountMin != null && amountMax != null) {
+  if (amountMin != null && amountMax != null && Number(amountMin) !== Number(amountMax)) {
     return `${currency}${Number(amountMin).toLocaleString()} to ${currency}${Number(amountMax).toLocaleString()}`
   }
   const value = amountMin ?? amountMax
@@ -252,6 +253,10 @@ export default function FundingCallDetailsPage() {
   }
 
   const officialSourceUrl = call.officialUrls?.[0] || call.sourceUrl || null
+  // Imported catalogue calls carry facts only (no guidelines or template yet),
+  // so the authoring actions that need them are not offered.
+  const catalogImport = call.catalogImport || null
+  const authoringReady = !catalogImport || catalogImport.enrichmentLevel !== 'LITE'
   const geography = call.geography || call.geographyScope || null
   const templateReadyText = call.templateStatus || call.template_status || 'none'
   const guidelineReadyText = call.guidelineStatus || call.guideline_status || 'none'
@@ -269,7 +274,7 @@ export default function FundingCallDetailsPage() {
             Back to Finder
           </Link>
           <div className="flex flex-wrap items-center gap-2">
-            {GRANT_PREP_ENABLED && (call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
+            {GRANT_PREP_ENABLED && authoringReady && (call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
               <button
                 type="button"
                 onClick={() => void handleStartGrantPrep()}
@@ -279,12 +284,14 @@ export default function FundingCallDetailsPage() {
                 {startingGrantPrep ? 'Opening Grant Prep…' : 'Write grant'}
               </button>
             ) : null}
-            <Link
-              href={`/funding/intelligence/idea/new?callId=${encodeURIComponent(call.id)}`}
-              className="cb-btn-secondary cb-btn-sm"
-            >
-              Validate an idea
-            </Link>
+            {authoringReady ? (
+              <Link
+                href={`/funding/intelligence/idea/new?callId=${encodeURIComponent(call.id)}`}
+                className="cb-btn-secondary cb-btn-sm"
+              >
+                Validate an idea
+              </Link>
+            ) : null}
             {officialSourceUrl ? (
               <a href={officialSourceUrl} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm">
                 Official source
@@ -322,6 +329,8 @@ export default function FundingCallDetailsPage() {
             </div>
           </div>
         </section>
+
+        {catalogImport ? <ImportedCallFacts facts={catalogImport} /> : null}
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <section className="cb-card p-4 sm:p-5">

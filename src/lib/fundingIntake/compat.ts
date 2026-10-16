@@ -1,7 +1,7 @@
 import type { FundingDraftValues, FundingInputType, FundingIntakeJobStatus } from '@/lib/fundingIntake/types'
 import type { FundingCallDetail, FundingCallSummary, FundingImportJobView, FundingIntakeLlmExtraction } from '@/types/funding'
 
-type CallCatalogStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'REJECTED' | 'FAILED'
+type CallCatalogStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'REJECTED' | 'FAILED' | 'STAGED'
 
 type FundingCallLike = {
   id: string

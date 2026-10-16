@@ -18,7 +18,8 @@ import type { RecommendationAccessScope } from '@/lib/recommendations/types'
 export function fundingCallAccessWhere(access?: RecommendationAccessScope | null): Prisma.FundingCallWhereInput {
   if (access?.isSuperAdmin) return {}
 
-  const visibility: Prisma.FundingCallWhereInput[] = [{ visibility: 'GLOBAL_PUBLISHED' }]
+  // Chat/doc-QA reads are researcher-facing, so the imported catalogue counts.
+  const visibility: Prisma.FundingCallWhereInput[] = [{ visibility: 'GLOBAL_PUBLISHED' }, { visibility: 'GLOBAL_CATALOG' }]
   if (access?.tenantId) {
     visibility.push({ visibility: 'TENANT_PRIVATE', tenantId: access.tenantId })
   }

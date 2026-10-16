@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 const isoCountries = require('i18n-iso-countries');
 const isoCountriesEnglish = require('i18n-iso-countries/langs/en.json');
+import { countryCodesFor } from '../geo/countries';
 import {
   APPLICATION_LANGUAGE_OPTIONS,
   ELIGIBLE_REGION_OPTIONS,
@@ -160,6 +161,17 @@ export function normalizeCountryInput(
     return countryNameLookup.get(normalizeKey(titled)) || null;
   }
 
+  // Names this lookup never knew ("United States", "Turkey", "Korea",
+  // "Czechia", "Hong Kong, China"…) resolve through the ISO normaliser. Only
+  // inputs that used to fail take this path, so earlier answers are unchanged.
+  const codes = countryCodesFor(value);
+  if (codes.length === 1) {
+    const official = isoCountries.getName(codes[0], 'en', { select: 'official' });
+    if (official) {
+      return countryNameLookup.get(normalizeKey(official)) || official;
+    }
+  }
+
   return null;
 }
 
@@ -191,6 +203,18 @@ export function buildCountryMatchKeys(values: string[]): string[] {
         keys.add(aliasKey);
       }
     });
+
+    // Every spelling of the same country, so a call stored as "United States"
+    // matches a filter for "United States of America" (and vice versa). This
+    // only widens matches; nothing that matched before stops matching.
+    const codes = countryCodesFor(canonical);
+    if (codes.length === 1) {
+      const names = isoCountries.getNames('en', { select: 'all' })[codes[0]];
+      (Array.isArray(names) ? names : [names]).filter(Boolean).forEach((name: string) => keys.add(normalizeKey(name)));
+      countryNameLookup.forEach((mappedCanonical, aliasKey) => {
+        if (countryCodesFor(mappedCanonical)[0] === codes[0]) keys.add(aliasKey);
+      });
+    }
   });
 
   return Array.from(keys);

@@ -1059,6 +1059,10 @@ export async function publishGlobalFundingCall(callId: string, actor: FundingAct
   if (!fundingCall || fundingCall.tenantId) {
     throw new FundingImportError('Global funding call not found', 404, 'FUNDING_CALL_NOT_FOUND')
   }
+  if (fundingCall.import_run_id) {
+    // Imported catalogue calls are released through the import review only.
+    throw new FundingImportError('Imported calls are released from the import review', 409, 'IMPORTED_CALL_USE_IMPORT_REVIEW')
+  }
 
   const updated = await prisma.fundingCall.update({
     where: { id: callId },

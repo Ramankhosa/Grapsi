@@ -485,9 +485,15 @@ export class FundingCatalogService {
     };
   }
 
-  async listFundingCalls(status?: FundingCallStatus | null): Promise<FundingCatalogSummary[]> {
+  async listFundingCalls(
+    status?: FundingCallStatus | null,
+    options: { includeImported?: boolean } = {}
+  ): Promise<FundingCatalogSummary[]> {
+    // The imported external catalogue (GLOBAL_CATALOG, ~10k calls) has its own
+    // review screen; without this the newest 200 rows here would all be imports.
+    const scope: Prisma.FundingCallWhereInput = options.includeImported ? {} : { NOT: { visibility: 'GLOBAL_CATALOG' } };
     const calls = await prisma.fundingCall.findMany({
-      where: status ? { catalog_status: status } : undefined,
+      where: status ? { AND: [scope, { catalog_status: status }] } : scope,
       orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 200,
       select: {
@@ -764,6 +770,17 @@ export class FundingCatalogService {
       throw new Error('Funding call not found');
     }
 
+    // Imported external-catalogue calls are released silently by the import
+    // review (src/lib/fundingCatalogImport/release.ts). This path would embed,
+    // classify, map them to schools, notify officers and alert researchers.
+    if (current.import_run_id) {
+      return {
+        ok: false,
+        reason: 'imported_call_use_import_review',
+        requiredFieldsRemaining: [] as string[],
+      };
+    }
+
     const draftValues = buildDraftValuesFromCall(current);
     const readiness = buildPublishReadiness(draftValues);
     if (!readiness.ready) {
@@ -899,6 +916,8 @@ export class FundingCatalogService {
     const candidates = await prisma.fundingCall.findMany({
       where: {
         catalog_status: 'DRAFT',
+        // Imported calls are released by the import review, never by bulk publish.
+        import_run_id: null,
         ...(options.batchId ? { intake_jobs: { some: { batch_id: options.batchId } } } : {}),
       },
       select: { id: true, agency_name: true, scheme_title: true },

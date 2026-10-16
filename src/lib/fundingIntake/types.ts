@@ -1,6 +1,7 @@
 import type { FundingFieldKey } from './constants';
 
-export type FundingCallStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'REJECTED';
+/** STAGED = imported and awaiting release from the import review. */
+export type FundingCallStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'REJECTED' | 'STAGED';
 export type FundingIntakeJobStatus =
   | 'queued'
   | 'fetching'

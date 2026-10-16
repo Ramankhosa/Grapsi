@@ -56,6 +56,14 @@ const CALL_INGESTION_LINKS: CallIngestionLink[] = [
     access: 'read',
   },
   {
+    href: '/admin/funding/import-review',
+    title: 'Import Review',
+    description: 'Clear or set aside externally imported calls: suspected duplicates, missing facts, release to discovery.',
+    cta: 'Open import review',
+    icon: ClipboardCheck,
+    access: 'read',
+  },
+  {
     href: '/admin/funding/intake#recent-intake-jobs',
     title: 'Review Queue',
     description: 'Open individual intake jobs to resolve duplicates, complete fields, and run extract-all.',

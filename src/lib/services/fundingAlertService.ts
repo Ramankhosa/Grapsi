@@ -123,6 +123,8 @@ function toPreferences(record: {
 }
 
 type AlertableCall = {
+  /** SUPPRESSED (e.g. bulk-imported calls) is never alertable, not even with force. */
+  notification_policy?: string | null;
   id: string;
   tenantId: string | null;
   visibility: string;
@@ -166,6 +168,7 @@ const CALL_SELECT = {
   amount_max: true,
   currency: true,
   metadata: true,
+  notification_policy: true,
 } as const;
 
 function callTitle(call: AlertableCall): string {
@@ -298,6 +301,13 @@ export class FundingAlertService {
 
     if (!call) {
       result.reason = 'not_found';
+      return result;
+    }
+
+    // A suppressed call (bulk catalogue import) never alerts, whatever the
+    // caller asked: the policy lives on the call so every path honours it.
+    if (call.notification_policy === 'SUPPRESSED') {
+      result.reason = 'notifications_suppressed';
       return result;
     }
 
@@ -560,6 +570,7 @@ export class FundingAlertService {
       WHERE (catalog_status::text = 'PUBLISHED' OR status::text = 'PUBLISHED')
         AND COALESCE(is_active, true) = true
         AND COALESCE(metadata ->> 'alerts_dispatched_at', '') = ''
+        AND COALESCE(notification_policy, 'NORMAL') <> 'SUPPRESSED'
         AND (close_date IS NULL OR close_date > NOW())
         AND (expiration_date IS NULL OR expiration_date > NOW())
       ORDER BY "updatedAt" DESC

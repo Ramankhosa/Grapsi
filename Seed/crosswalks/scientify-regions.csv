@@ -1,0 +1,17 @@
+source_value,region_code,notes
+Global,ANY,"the source expands this to ~210 countries; stored as scope ANY, expansion not kept"
+Low- and Middle-Income Countries (LMICs),LMIC,member list taken from the record itself
+Europe+,EUROPE_PLUS,
+Africa,AFRICA,
+Africa+,AFRICA,
+Latin America,LATIN_AMERICA,
+Caribbean,CARIBBEAN,
+Middle East,MIDDLE_EAST,
+Asia,ASIA,
+Nordics,NORDICS,
+Member Countries,MEMBER_COUNTRIES,funder-specific membership; member list taken from the record
+Member countries,MEMBER_COUNTRIES,
+Americas+,AMERICAS,
+Baltics,BALTICS,
+Pacific,PACIFIC,
+High income countries,HIGH_INCOME,

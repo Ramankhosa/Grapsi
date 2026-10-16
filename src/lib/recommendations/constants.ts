@@ -122,6 +122,10 @@ export const FUNDING_KIND_ALIASES: Record<string, string> = {
   'conference funding': 'Conference Grant',
   scholarship: 'Scholarship',
   studentship: 'Scholarship',
+  prize: 'Award or Prize',
+  prizes: 'Award or Prize',
+  'award or prize': 'Award or Prize',
+  'awards and prizes': 'Award or Prize',
 };
 
 export const INSTITUTION_TYPE_ALIASES: Record<string, string> = {

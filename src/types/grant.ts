@@ -287,7 +287,8 @@ export interface GrantBlueprintDimensionTarget {
   dimensionType?: GrantBlueprintDimensionType
 }
 
-export type FundingVisibility = 'GLOBAL_PUBLISHED' | 'TENANT_PRIVATE'
+/** GLOBAL_CATALOG = imported external catalogue (discovery only; not in funding-department flows). */
+export type FundingVisibility = 'GLOBAL_PUBLISHED' | 'TENANT_PRIVATE' | 'GLOBAL_CATALOG'
 
 export type FundingStatus =
   | 'INGESTING'

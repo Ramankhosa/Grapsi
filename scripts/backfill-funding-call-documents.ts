@@ -32,6 +32,8 @@ async function findCandidates() {
   return prisma.fundingCall.findMany({
     where: {
       documents: { none: {} },
+      // Imported (LITE) calls get documents only through deliberate enrichment.
+      import_run_id: null,
       OR: [
         { raw_text: { not: null } },
         { normalized_text: { not: null } },

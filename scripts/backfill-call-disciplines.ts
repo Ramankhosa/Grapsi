@@ -61,6 +61,9 @@ async function main() {
 
   try {
     const calls = await prisma.fundingCall.findMany({
+      // Imported calls carry crosswalk mappings; re-classifying them would spend
+      // LLM calls and (with --force) replace those mappings.
+      where: { import_run_id: null },
       select: { id: true, title: true, scheme_title: true },
       orderBy: { createdAt: 'asc' },
       ...(limit ? { take: limit } : {}),

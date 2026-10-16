@@ -41,6 +41,7 @@ import {
   MULTI_AREA_MATCH_BONUS,
   MULTI_AREA_MIN_SLOTS_PER_AREA,
 } from '../recommendations/constants';
+import { resolveCountryList } from '../geo/countries';
 import {
   buildCountryMatchKeys,
   createRequestHash,
@@ -170,14 +171,54 @@ function buildAccessCondition(access?: RecommendationAccessScope) {
     return Prisma.sql`TRUE`;
   }
 
+  // GLOBAL_CATALOG is the imported external catalogue: discoverable by every
+  // researcher, but kept out of funding-department workflows (which only
+  // read GLOBAL_PUBLISHED).
   if (access?.tenantId) {
     return Prisma.sql`(
-      visibility = 'GLOBAL_PUBLISHED' OR
+      visibility = 'GLOBAL_PUBLISHED' OR visibility = 'GLOBAL_CATALOG' OR
       (visibility = 'TENANT_PRIVATE' AND "tenantId" = ${access.tenantId})
     )`;
   }
 
-  return Prisma.sql`visibility = 'GLOBAL_PUBLISHED'`;
+  return Prisma.sql`(visibility = 'GLOBAL_PUBLISHED' OR visibility = 'GLOBAL_CATALOG')`;
+}
+
+/**
+ * Imported calls carry facts legacy calls do not: the source saying a call is
+ * closed, and a letter-of-intent date after which new applicants cannot
+ * enter. Both columns are NULL on every pre-existing call, so this guard can
+ * only ever remove imported calls.
+ */
+function importedLifecycleGuard() {
+  return Prisma.sql`(
+    source_closed_at IS NULL AND
+    (entry_closes_at IS NULL OR entry_closes_at >= CURRENT_DATE)
+  )`;
+}
+
+/**
+ * Per-dimension country match for imported calls. Legacy rows keep the
+ * name-list match unchanged; an imported row passes when every evaluated
+ * dimension (residence, citizenship) is open to any country, unspecified, a
+ * region with no member list, or names one of the requested countries.
+ */
+function importedDimensionCountryCondition(dimensions: Array<'residence' | 'citizenship' | 'host'>, codes: string[]) {
+  const codeArray = Prisma.sql`ARRAY[${Prisma.join(codes.map((code) => Prisma.sql`${code}`))}]::text[]`;
+  const parts = dimensions.map((dimension) => {
+    const scope = Prisma.raw(`${dimension}_scope`);
+    const list = Prisma.raw(`${dimension}_country_codes`);
+    return Prisma.sql`(
+      ${scope} IS NULL OR ${scope} IN ('ANY', 'UNSPECIFIED') OR
+      (${scope} = 'REGIONS' AND cardinality(${list}) = 0) OR
+      ${list} && ${codeArray}
+    )`;
+  });
+  return Prisma.sql`(import_run_id IS NOT NULL AND ${Prisma.join(parts, ' AND ')})`;
+}
+
+function countryCodesForFilter(values: string[]) {
+  return resolveCountryList(values).codes;
 }
 
 function buildBaseConditions(
@@ -200,6 +241,7 @@ function buildBaseConditions(
         COALESCE(close_date, expiration_date) >= CURRENT_DATE
       )`
     );
+    conditions.push(importedLifecycleGuard());
   }
 
   if (ignoreUserFilters) {
@@ -263,15 +305,33 @@ function buildBaseConditions(
   }
 
   if (filters.eligibleCountries.length > 0) {
-    conditions.push(buildArrayAnyCondition('eligible_countries', buildCountryMatchKeys(filters.eligibleCountries)));
+    const legacy = buildArrayAnyCondition('eligible_countries', buildCountryMatchKeys(filters.eligibleCountries));
+    const codes = countryCodesForFilter(filters.eligibleCountries);
+    conditions.push(
+      codes.length > 0
+        ? Prisma.sql`((import_run_id IS NULL AND ${legacy}) OR ${importedDimensionCountryCondition(['residence', 'citizenship'], codes)})`
+        : legacy
+    );
   }
 
   if (filters.hostCountries.length > 0) {
-    conditions.push(buildArrayAnyCondition('host_countries', buildCountryMatchKeys(filters.hostCountries)));
+    const legacy = buildArrayAnyCondition('host_countries', buildCountryMatchKeys(filters.hostCountries));
+    const codes = countryCodesForFilter(filters.hostCountries);
+    conditions.push(
+      codes.length > 0
+        ? Prisma.sql`((import_run_id IS NULL AND ${legacy}) OR ${importedDimensionCountryCondition(['host'], codes)})`
+        : legacy
+    );
   }
 
   if (filters.funderCountries.length > 0) {
-    conditions.push(buildScalarAnyCondition('funder_country', buildCountryMatchKeys(filters.funderCountries)));
+    const legacy = buildScalarAnyCondition('funder_country', buildCountryMatchKeys(filters.funderCountries));
+    const codes = countryCodesForFilter(filters.funderCountries);
+    conditions.push(
+      codes.length > 0
+        ? Prisma.sql`((import_run_id IS NULL AND ${legacy}) OR (import_run_id IS NOT NULL AND funder_country_code = ANY(ARRAY[${Prisma.join(codes.map((code) => Prisma.sql`${code}`))}]::text[])))`
+        : legacy
+    );
   }
 
   if (filters.citizenshipRequirements.length > 0) {

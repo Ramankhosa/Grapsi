@@ -120,9 +120,16 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const accessWhere = buildFundingCallAccessWhere(auth.actor, {
-      includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor),
-    })
+    const accessWhere: Prisma.FundingCallWhereInput = {
+      AND: [
+        buildFundingCallAccessWhere(auth.actor, {
+          includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor),
+        }),
+        // Intake/import pickers work on the curated catalogue; the imported
+        // external catalogue has its own review screen.
+        { NOT: { visibility: 'GLOBAL_CATALOG' } },
+      ],
+    }
     const searchParams = request.nextUrl.searchParams
     const q = normalizeQuery(searchParams.get('q'), 240)
     const title = normalizeQuery(searchParams.get('title'), 200)

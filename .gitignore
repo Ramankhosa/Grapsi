@@ -76,6 +76,9 @@ public/uploads/
 # Database backups
 database-backup/
 database-backup-*/
+
+# Frozen external-catalogue import inputs and their reports (100+ MB of crawl data)
+storage/import-snapshots/
 prisma/super-admin-settings.snapshot.json
 
 # Local reports and scratch output

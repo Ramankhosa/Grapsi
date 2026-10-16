@@ -1,0 +1,10 @@
+source_value,research_area_codes,notes
+Medicine,MED,used only when no specific discipline mapped
+Life Sciences,LIF,
+"Arts, Humanities and Social Sciences",HUM|SOC,
+Engineering,ENG,
+Physical Sciences,PHY|CHE,
+Mathematics and Computer Sciences,PHY.03|CIS,
+Earth Sciences,PHY.04,
+"Business, Finance and Law",MGT|LAW.01,
+Education,EDU.01,

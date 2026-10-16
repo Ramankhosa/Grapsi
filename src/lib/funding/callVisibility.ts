@@ -24,11 +24,17 @@ const PUBLISHED_AND_ACTIVE: Prisma.FundingCallWhereInput[] = [
 
 export function visibleFundingCallWhere(
   tenantId: string | null,
-  options: { includeTenantDrafts?: boolean } = {}
+  options: { includeTenantDrafts?: boolean; includeCatalog?: boolean } = {}
 ): Prisma.FundingCallWhereInput {
   const branches: Prisma.FundingCallWhereInput[] = [
     { AND: [{ visibility: 'GLOBAL_PUBLISHED' }, ...PUBLISHED_AND_ACTIVE] },
   ]
+  // The imported external catalogue (GLOBAL_CATALOG) is opt-in per reader:
+  // researcher-facing reads pass includeCatalog; funding-department,
+  // assignment and intake reads do not, so imports never enter those flows.
+  if (options.includeCatalog) {
+    branches.push({ AND: [{ visibility: 'GLOBAL_CATALOG' }, ...PUBLISHED_AND_ACTIVE] })
+  }
   if (tenantId) {
     branches.push({
       AND: [

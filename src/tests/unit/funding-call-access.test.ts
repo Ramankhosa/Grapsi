@@ -7,13 +7,19 @@ describe('fundingCallAccessWhere', () => {
     expect(fundingCallAccessWhere({ tenantId: 'tenant-1', isSuperAdmin: true })).toEqual({})
   })
 
-  it('scopes tenant users to published, active, global-or-own-tenant calls', () => {
+  it('scopes tenant users to published, active, global (curated or imported catalogue) or own-tenant calls', () => {
     const where = fundingCallAccessWhere({ tenantId: 'tenant-1', isSuperAdmin: false })
     expect(where).toEqual({
       AND: [
         { OR: [{ status: 'PUBLISHED' }, { catalog_status: 'PUBLISHED' }] },
         { OR: [{ is_active: true }, { is_active: null }] },
-        { OR: [{ visibility: 'GLOBAL_PUBLISHED' }, { visibility: 'TENANT_PRIVATE', tenantId: 'tenant-1' }] },
+        {
+          OR: [
+            { visibility: 'GLOBAL_PUBLISHED' },
+            { visibility: 'GLOBAL_CATALOG' },
+            { visibility: 'TENANT_PRIVATE', tenantId: 'tenant-1' },
+          ],
+        },
       ],
     })
   })

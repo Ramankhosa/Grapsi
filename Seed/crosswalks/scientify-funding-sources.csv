@@ -1,0 +1,7 @@
+source_value,sponsor_type,funder_type,notes
+Foundation and society funding,Foundation,FOUNDATION,
+Government funding,Government,GOVERNMENT,
+Intergovernmental funding,Multilateral,INTERGOVERNMENTAL,
+Corporate funding,Corporate,CORPORATE,
+University funding,University,UNIVERSITY,
+Venture capital,Corporate,VENTURE,

@@ -1,0 +1,29 @@
+source_value,career_stages,institution_types,notes
+Early-career principal investigators,Early Career Faculty|Principal Investigator,,
+Mid-career researchers,Mid Career Researcher,,
+Senior researchers,Senior Researcher,,
+Postdoctoral fellows,Postdoctoral,,
+Organizations,,University|Research Institute|NGO|Non-Profit,applicant is an organisation
+Doctoral students,PhD,,
+Small business & industry,,Startup|Corporate,
+Industry researchers,,Corporate,
+Clinical fellows,Early Career Researcher,Hospital,
+Master's students,Masters,,
+Medical Doctors,,Hospital,profession
+Undergraduate students,Undergraduate,,
+Clinical residents,Early Career Researcher,Hospital,
+Clinical researchers,,Hospital,profession
+Nurses,,Hospital,profession
+Practitioners,,,profession
+Allied Health Professionals,,Hospital,profession
+Psychologists,,,profession
+MD students,,,student of medicine
+All principal investigators,Principal Investigator,,
+Artists,,Individual,
+Pharmacists,,,profession
+Technicians,,,profession
+Journalists,,Individual,
+All researchers in training,Masters|PhD|Postdoctoral,,
+Research administrators,,,profession
+Publishers,,,profession
+Research funders,,,profession

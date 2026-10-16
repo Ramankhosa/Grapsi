@@ -173,11 +173,15 @@ function collectSourceUrls(sourceUrl: string | null | undefined, officialUrls: s
 }
 
 function duplicateVisibilityWhere(operator: IntakeOperator): Prisma.FundingCallWhereInput {
+  // Imported external-catalogue calls are deduplicated by the import review,
+  // not offered as intake merge targets.
+  const notImported: Prisma.FundingCallWhereInput = { NOT: { visibility: 'GLOBAL_CATALOG' } };
   if (operator.role === 'ADMIN' || operator.role === 'CURATOR') {
-    return {};
+    return notImported;
   }
 
   return {
+    AND: [notImported],
     OR: [
       {
         catalog_status: 'PUBLISHED',

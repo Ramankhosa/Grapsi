@@ -172,6 +172,9 @@ export default function FundingCatalogAdminPage() {
             <Link href="/admin/funding/intake" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
               Funding Intake
             </Link>
+            <Link href="/admin/funding/import-review" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+              Import Review
+            </Link>
             <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
               Back to Admin
             </Link>

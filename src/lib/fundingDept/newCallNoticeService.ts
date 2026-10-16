@@ -77,9 +77,14 @@ export async function notifyCoveringOfficers(
       agencyName: true,
       close_date: true,
       deadlineAt: true,
+      notification_policy: true,
+      visibility: true,
     },
   })
   if (!call) return result
+  // Bulk-imported catalogue calls never notify officers (and are not
+  // funding-department calls at all until a curator promotes one).
+  if (call.notification_policy === 'SUPPRESSED' || call.visibility === 'GLOBAL_CATALOG') return result
 
   // Primary coverage only. A deputy is a standby for absence, not a second
   // person to notify about every publish.

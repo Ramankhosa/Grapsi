@@ -116,7 +116,7 @@ export async function actorCanSeeTenantDrafts(actor: FundingActor): Promise<bool
 
 export function buildFundingCallAccessWhere(
   actor: FundingActor,
-  options: { includeTenantDrafts?: boolean } = {}
+  options: { includeTenantDrafts?: boolean; includeCatalog?: boolean } = {}
 ): Prisma.FundingCallWhereInput {
   if (actorHasPlatformReadAccess(actor)) {
     return {}
@@ -126,5 +126,5 @@ export function buildFundingCallAccessWhere(
   // visibility to funding-department members resolve `actorCanSeeTenantDrafts`
   // and pass it in.
   const includeTenantDrafts = options.includeTenantDrafts ?? actorIsTenantCallManager(actor)
-  return visibleFundingCallWhere(actor.tenantId, { includeTenantDrafts })
+  return visibleFundingCallWhere(actor.tenantId, { includeTenantDrafts, includeCatalog: options.includeCatalog })
 }

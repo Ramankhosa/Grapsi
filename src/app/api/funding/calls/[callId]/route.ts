@@ -7,6 +7,7 @@ import { fundingGuidelineService } from '@/lib/fundingGuidelines/service'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 import { fundingTemplateService } from '@/lib/fundingTemplates/service'
 import { sanitizeExternalUrl, sanitizeExternalUrls } from '@/lib/urlSafety'
+import { buildImportedCallFacts } from '@/lib/fundingCatalogImport/callFacts'
 
 export const runtime = 'nodejs'
 
@@ -144,7 +145,11 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   try {
     const call = await prisma.fundingCall.findFirst({
       where: {
-        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) })],
+        AND: [
+          { id: params.callId },
+          // Researcher-facing read: released imported-catalogue calls count.
+          buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor), includeCatalog: true }),
+        ],
       },
     })
 
@@ -224,6 +229,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         uploadedBy: sanitizeText(call.uploaded_by),
         rawTextAvailable: Boolean(call.raw_text),
         normalizedTextAvailable: Boolean(call.normalized_text),
+        catalogImport: call.import_run_id ? await buildImportedCallFacts(call) : null,
       },
       templateWorkspace: summarizeTemplateBundle(templateBundle),
       guidelineWorkspace: summarizeGuidelineBundle(guidelineBundle),

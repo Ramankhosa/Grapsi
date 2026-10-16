@@ -1,0 +1,12 @@
+-- External catalogue import, part 4: the GLOBAL_CATALOG visibility.
+--
+-- Imported calls are released as GLOBAL_CATALOG rather than GLOBAL_PUBLISHED.
+-- Every funding-department predicate (visibleCallSql and its private copies)
+-- tests for GLOBAL_PUBLISHED, so imported calls cannot enter DSR queues, the
+-- match census, backlog counts or reminder escalations unless a curator
+-- promotes one on purpose. Researcher discovery opts in explicitly.
+--
+-- Alone in its own migration for the same reason as
+-- 20260910140000_add_assignment_lapsed_status: the new value cannot be USED in
+-- the transaction that adds it. No row uses it until the importer releases.
+ALTER TYPE "FundingVisibility" ADD VALUE IF NOT EXISTS 'GLOBAL_CATALOG';

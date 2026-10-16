@@ -46,6 +46,12 @@ enum TenantType {
 enum FundingVisibility {
   GLOBAL_PUBLISHED
   TENANT_PRIVATE
+  /// Imported external catalogue (e.g. ScientifyResearch). Shown to
+  /// researchers in discovery (finder, chat, call page) but deliberately NOT
+  /// GLOBAL_PUBLISHED: every funding-department query tests for
+  /// GLOBAL_PUBLISHED, so imported calls stay out of DSR queues, census,
+  /// backlog and reminders until a curator promotes a call on purpose.
+  GLOBAL_CATALOG
 }
 
 enum FundingStatus {
@@ -108,6 +114,9 @@ enum FundingCallStatus {
   PUBLISHED
   ARCHIVED
   REJECTED
+  /// Imported and waiting for release. Every reader filters on PUBLISHED, so a
+  /// STAGED call is invisible everywhere until it is released.
+  STAGED
 }
 
 enum FundingTemplateLifecycleStatus {
@@ -516,6 +525,11 @@ model Tenant {
   reporting_period_end   DateTime?
   /// What the institution calls this window ("AY 2026-27"). Display only.
   reporting_period_label String?
+
+  /// ISO-3166 alpha-2 country of the institution. A discovery default and the
+  /// basis for keeping foreign-only calls out of DSR queues; it never decides
+  /// an individual's eligibility. Null = not configured (legacy behaviour).
+  country_code String? @db.VarChar(2)
 
   users     User[]
   projects  Project[]
@@ -1242,6 +1256,113 @@ model FundingCall {
   updatedByUserId             String
   createdAt                   DateTime                          @default(now())
   updatedAt                   DateTime                          @updatedAt
+
+  // ---- External catalogue import (Oct 2026) -------------------------------
+  // Every column below is additive and nullable (lists default to empty), so
+  // existing rows keep their meaning: a null `*_scope` means "not evaluated
+  // yet" and readers fall back to the legacy name columns above. Legacy
+  // columns are never rewritten by the import or by the backfill.
+
+  /// Funder entity. `agency_name` stays the displayed text.
+  funder_id                  String?
+  funder_country_code        String?   @db.VarChar(2)
+  /// The import run that created this call (null for every call that existed
+  /// before the import, and for calls created by hand).
+  import_run_id              String?
+  /// Import review gate: null = never under import review; NEEDS_REVIEW
+  /// blocks release; CLEAR = reviewed or nothing to review.
+  review_status              String?
+  /// null = NORMAL. SUPPRESSED stops alerts and officer notices for this call
+  /// in every delivery path, not just at import time.
+  notification_policy        String?
+  notification_policy_reason String?
+  /// LITE = facts only, official guidelines not fetched; ENRICHED otherwise.
+  enrichment_level           String?
+  /// Who wrote the displayed description: intake | scientify | official_page.
+  description_source         String?
+  /// Per-field provenance: { field: { source, verified_at, import_run_id } }.
+  field_provenance           Json?
+
+  /// Derived from funding_call_deadlines. `close_date` mirrors
+  /// final_deadline_at and never rolls forward.
+  next_deadline_at           DateTime? @db.Date
+  final_deadline_at          DateTime? @db.Date
+  /// Last date a new applicant can still enter (a required letter of intent
+  /// closes entry before the full-application deadline).
+  entry_closes_at            DateTime? @db.Date
+  deadline_timezone          String?
+  /// When the source last said the call is closed. Closes the call whatever
+  /// its dates say; a source page that disappeared does NOT set this.
+  source_closed_at           DateTime?
+  /// Display copy of the lifecycle (OPEN | FORTHCOMING | ROLLING | CLOSED |
+  /// UNKNOWN). Readers compute open/closed from the facts, never from this.
+  opportunity_status         String?
+  lifecycle_needs_check      Boolean?
+  status_computed_at         DateTime?
+
+  /// Eligibility, one requirement per dimension. Scope: ANY | REGIONS |
+  /// COUNTRIES | UNSPECIFIED (null = not evaluated). Codes are ISO-3166
+  /// alpha-2. "applicant" is the combined dimension used by legacy calls
+  /// (residence OR citizenship), exactly what `eligible_countries` meant.
+  applicant_scope            String?
+  applicant_country_codes    String[]  @default([])
+  applicant_excluded_codes   String[]  @default([])
+  applicant_region_codes     String[]  @default([])
+  residence_scope            String?
+  residence_country_codes    String[]  @default([])
+  residence_excluded_codes   String[]  @default([])
+  residence_region_codes     String[]  @default([])
+  citizenship_scope          String?
+  citizenship_country_codes  String[]  @default([])
+  citizenship_excluded_codes String[]  @default([])
+  citizenship_region_codes   String[]  @default([])
+  host_scope                 String?
+  host_country_codes         String[]  @default([])
+  host_excluded_codes        String[]  @default([])
+  host_region_codes          String[]  @default([])
+  /// e.g. 'global' when a legacy call said Global but listed no countries.
+  eligibility_scope_hint     String?
+  regions_version            String?
+
+  /// Money. amount_min/amount_max above stay as they are.
+  currency_code              String?   @db.VarChar(3)
+  amount_text                String?
+  /// TOTAL | PER_YEAR | PER_MONTH | ONE_OFF | UNSPECIFIED
+  amount_time_basis          String?
+  /// PER_AWARD | PER_PERSON | PER_TEAM_MEMBER | PER_INSTITUTION | UNSPECIFIED
+  amount_recipient_basis     String?
+  /// INCLUDED | DIRECT_ONLY | CO_FUND | UNSPECIFIED
+  indirect_cost_policy       String?
+  indirect_cost_note         String?
+  /// Estimates only, shown with "≈"; the rate and its date are kept beside them.
+  amount_min_usd_est         Float?
+  amount_max_usd_est         Float?
+  fx_rate_used               Float?
+  fx_as_of                   DateTime? @db.Date
+
+  requires_nomination        Boolean?
+  nomination_note            String?
+  required_qualifications    String[]  @default([])
+  target_groups              String[]  @default([])
+  membership_requirements    String[]  @default([])
+  work_rights_required       Boolean?
+  additional_benefits        String[]  @default([])
+  sdg_goals                  Int[]     @default([])
+  challenge_tags             String[]  @default([])
+  programme_framework        String?
+  source_disciplines         String[]  @default([])
+  content_language           String?
+  title_native               String?
+  /// Suggests a recurring programme (same funder + title without years). It
+  /// never decides that two calls are the same opportunity.
+  series_key                 String?
+
+  funder                      Funder?                           @relation("FundingCallFunder", fields: [funder_id], references: [id], onDelete: SetNull)
+  source_records              ExternalSourceRecord[]
+  deadlines                   FundingCallDeadline[]
+  import_review_subjects      FundingImportCandidate[]          @relation("ImportCandidateSubject")
+  import_review_candidates    FundingImportCandidate[]          @relation("ImportCandidateOther")
+
   tenant                      Tenant?                           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   importJobs                  FundingImportJob[]
   assets                      FundingImportAsset[]
@@ -1291,7 +1412,237 @@ model FundingCall {
   @@index([embedding])
   @@index([embedding_voyage_1024])
   @@index([ts_document], map: "funding_calls_ts_idx", type: Gin)
+  @@index([funder_id])
+  @@index([import_run_id])
+  @@index([review_status])
+  @@index([series_key])
   @@map("funding_calls")
+}
+
+/// A funding organisation, independent of any one call. Identity comes from
+/// ExternalSourceRecord (entity_type FUNDER) or from a curator; the normalised
+/// name + country is only matching evidence, which is why it is not unique.
+model Funder {
+  id                 String   @id @default(cuid())
+  name               String
+  normalized_name    String
+  acronym            String?
+  aliases            String[] @default([])
+  country_code       String?  @db.VarChar(2)
+  /// GOVERNMENT | FOUNDATION | CORPORATE | INTERGOVERNMENTAL | UNIVERSITY | VENTURE | OTHER
+  funder_type        String?
+  website_url        String?
+  description        String?
+  parent_funder_id   String?
+  ror_id             String?
+  crossref_funder_id String?
+  metadata           Json?
+  /// The import run that created this funder; null when it pre-dates imports.
+  import_run_id      String?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  parent         Funder?                @relation("FunderParent", fields: [parent_funder_id], references: [id], onDelete: SetNull)
+  children       Funder[]               @relation("FunderParent")
+  calls          FundingCall[]          @relation("FundingCallFunder")
+  source_records ExternalSourceRecord[]
+
+  @@index([normalized_name])
+  @@index([country_code])
+  @@index([import_run_id])
+  @@map("funders")
+}
+
+/// Provenance of one record from an external source. (source_key,
+/// entity_type, external_id) is the only identity a re-import uses. A call can
+/// carry several: a duplicate review may attach an imported record to an
+/// existing call as a LINKED source, which never writes to that call.
+model ExternalSourceRecord {
+  id                  String    @id @default(cuid())
+  source_key          String
+  /// CALL | FUNDER
+  entity_type         String
+  external_id         String
+  external_slug       String?
+  source_url          String?
+  funding_call_id     String?
+  funder_id           String?
+  /// PRIMARY: this record created and maintains the call. LINKED: attached to
+  /// an existing call by a review; changes only ever become suggestions.
+  link_role           String    @default("PRIMARY")
+  raw_payload         Json
+  /// The last value imported for each maintained field (three-way merge base).
+  imported_values     Json?
+  content_hash        String
+  importer_version    String
+  /// AVAILABLE | UNAVAILABLE | NOT_SEEN_IN_SNAPSHOT. Never closes a call.
+  availability        String    @default("AVAILABLE")
+  source_published_at DateTime?
+  source_modified_at  DateTime?
+  first_seen_at       DateTime  @default(now())
+  last_seen_at        DateTime  @default(now())
+  first_import_run_id String?
+  last_import_run_id  String?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  funding_call FundingCall? @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
+  funder       Funder?      @relation(fields: [funder_id], references: [id], onDelete: SetNull)
+
+  @@unique([source_key, entity_type, external_id], map: "external_source_records_identity_key")
+  @@index([funding_call_id])
+  @@index([funder_id])
+  @@map("external_source_records")
+}
+
+/// One run of the catalogue importer, backfill, release or rollback.
+model FundingImportRun {
+  id                 String    @id @default(cuid())
+  source_key         String
+  /// DRY_RUN | APPLY | BACKFILL | RELEASE | ROLLBACK
+  mode               String
+  /// RUNNING | COMPLETED | FAILED | ROLLED_BACK
+  status             String    @default("RUNNING")
+  snapshot_path      String?
+  /// File names, SHA-256 checksums, line counts and the snapshot time.
+  snapshot_manifest  Json?
+  /// Only a completed full snapshot may mark unseen records NOT_SEEN_IN_SNAPSHOT.
+  is_full_snapshot   Boolean   @default(false)
+  importer_version   String
+  crosswalk_versions Json?
+  /// Last external id fully processed, so an interrupted run can resume.
+  checkpoint         String?
+  counts             Json?
+  report             Json?
+  error              String?
+  operator_email     String?
+  target_database    String?
+  started_at         DateTime  @default(now())
+  finished_at        DateTime?
+
+  changes    FundingImportChange[]
+  candidates FundingImportCandidate[]
+
+  @@index([source_key, started_at])
+  @@map("funding_import_runs")
+}
+
+/// Every row an import run inserted and every field it changed, so a run can
+/// be reversed exactly.
+model FundingImportChange {
+  id           String   @id @default(cuid())
+  run_id       String
+  entity_table String
+  entity_id    String
+  /// INSERT | UPDATE
+  operation    String
+  /// The column an UPDATE wrote; null for INSERT.
+  field        String?
+  before_value Json?
+  after_value  Json?
+  created_at   DateTime @default(now())
+
+  run FundingImportRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@index([run_id, entity_table])
+  @@index([entity_table, entity_id])
+  @@map("funding_import_changes")
+}
+
+/// A review item raised by an import: a suspected duplicate pair, or an
+/// imported call that needs a human look before release. No resolution ever
+/// writes to an existing call; it only decides what happens to the imported one.
+model FundingImportCandidate {
+  id                  String    @id @default(cuid())
+  run_id              String
+  /// Stable key so re-runs update the same item instead of adding another.
+  dedupe_key          String    @unique
+  /// POSSIBLE_DUPLICATE | EXISTING_DUPLICATE | FUNDER_MATCH_UNCERTAIN |
+  /// READINESS_FAILED | UNKNOWN_COUNTRY_VALUES | UNPARSED_AMOUNT |
+  /// SOURCE_UNAVAILABLE | SOURCE_CONFLICT
+  reason              String
+  /// LIKELY_DUPLICATE | POSSIBLE_DUPLICATE | RELATED | INFO
+  tier                String
+  /// The imported call under review (for existing↔existing pairs, one of them).
+  subject_call_id     String?
+  /// The other side of a pair: an existing call or another imported call.
+  candidate_call_id   String?
+  subject_funder_id   String?
+  candidate_funder_id String?
+  score               Float?
+  signals             Json?
+  blocks_release      Boolean   @default(false)
+  /// pending | create_new_anyway | merged_to_existing | ignored | deferred | reviewed
+  resolution          String    @default("pending")
+  resolution_note     String?
+  resolved_by_user_id String?
+  resolved_at         DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  run            FundingImportRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  subject_call   FundingCall?     @relation("ImportCandidateSubject", fields: [subject_call_id], references: [id], onDelete: Cascade)
+  candidate_call FundingCall?     @relation("ImportCandidateOther", fields: [candidate_call_id], references: [id], onDelete: Cascade)
+
+  @@index([resolution, reason, tier])
+  @@index([subject_call_id])
+  @@index([candidate_call_id])
+  @@map("funding_import_candidates")
+}
+
+/// Per-source attribution and the basis on which its text is shown.
+model FundingSourceRegistry {
+  source_key          String   @id
+  display_name        String
+  attribution_text    String?
+  homepage_url        String?
+  /// e.g. informal-permission-unverified. Separate from provenance on purpose.
+  republication_basis String?
+  /// FULL_TEXT | FACTS_ONLY | INTERNAL_ONLY
+  display_policy      String   @default("FULL_TEXT")
+  notes               String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@map("funding_source_registry")
+}
+
+/// One stage deadline of a call (open date, letter of intent, full application).
+model FundingCallDeadline {
+  id                 String   @id @default(cuid())
+  funding_call_id    String
+  /// OPEN | LETTER_OF_INTENT | PREPROPOSAL | FULL_APPLICATION | OTHER
+  kind               String
+  label              String?
+  due_date           DateTime @db.Date
+  due_timezone       String?
+  /// SOURCE | FUNDER_COUNTRY_DEFAULT | UNKNOWN
+  due_timezone_basis String   @default("UNKNOWN")
+  /// null = unknown. The importer never guesses whether a stage is mandatory.
+  stage_required     Boolean?
+  /// Who wrote the row: scientify | legacy_backfill | curator.
+  source             String
+  import_run_id      String?
+  created_at         DateTime @default(now())
+
+  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+
+  @@unique([funding_call_id, kind, due_date], map: "funding_call_deadlines_call_kind_date_key")
+  @@index([due_date])
+  @@map("funding_call_deadlines")
+}
+
+/// Static FX snapshots for USD estimates. No live rate feed.
+model CurrencyRate {
+  id           String   @id @default(cuid())
+  currency     String   @db.VarChar(3)
+  usd_per_unit Float
+  as_of        DateTime @db.Date
+  source       String
+  created_at   DateTime @default(now())
+
+  @@unique([currency, as_of])
+  @@map("currency_rates")
 }
 
 model PublicProjectSource {

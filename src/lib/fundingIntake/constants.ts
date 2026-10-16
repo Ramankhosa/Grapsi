@@ -20,6 +20,11 @@ export const FUNDING_KIND_OPTIONS = [
   'Mobility Grant',
   'Conference Grant',
   'Scholarship',
+  // Added Oct 2026 for the external catalogue: 1,165 imported calls are
+  // prizes/awards, which no existing kind describes. Additive: existing
+  // values stay valid. No punctuation: the finder's array filter compares the
+  // punctuation-stripped request with the stored value as written.
+  'Award or Prize',
 ] as const;
 export const ELIGIBLE_REGION_OPTIONS = [
   'Africa',
