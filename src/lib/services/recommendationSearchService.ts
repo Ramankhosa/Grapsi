@@ -516,8 +516,10 @@ function selectCandidateColumns() {
     COALESCE(application_languages, ARRAY[]::text[]) AS "applicationLanguages",
     (visibility::text = 'GLOBAL_CATALOG') AS "isCatalog",
     -- Imported catalogue calls carry facts only until enrichment fetches the
-    -- official guidelines; authoring needs them.
-    (visibility::text <> 'GLOBAL_CATALOG' OR enrichment_level = 'ENRICHED') AS "authoringReady",
+    -- official guidelines; authoring needs them. Grant Prep does not open
+    -- catalogue calls yet (start-grant-prep reads without includeCatalog), so
+    -- even an enriched one is not offered until that ships.
+    (visibility::text <> 'GLOBAL_CATALOG') AS "authoringReady",
     CASE WHEN COALESCE(applicant_scope, residence_scope, citizenship_scope, host_scope) IS NULL THEN NULL
     ELSE jsonb_build_object(
       'applicant_scope', applicant_scope, 'applicant_country_codes', applicant_country_codes,

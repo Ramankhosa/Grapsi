@@ -254,9 +254,10 @@ export default function FundingCallDetailsPage() {
 
   const officialSourceUrl = call.officialUrls?.[0] || call.sourceUrl || null
   // Imported catalogue calls carry facts only (no guidelines or template yet),
-  // so the authoring actions that need them are not offered.
+  // so the authoring actions that need them are not offered. Grant Prep does
+  // not open catalogue calls yet, so this holds for enriched ones too.
   const catalogImport = call.catalogImport || null
-  const authoringReady = !catalogImport || catalogImport.enrichmentLevel !== 'LITE'
+  const authoringReady = !catalogImport
   const geography = call.geography || call.geographyScope || null
   const templateReadyText = call.templateStatus || call.template_status || 'none'
   const guidelineReadyText = call.guidelineStatus || call.guideline_status || 'none'
