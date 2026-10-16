@@ -159,21 +159,19 @@ export function titleOverlap(title: string, pageText: string): number {
   return titleWords.filter((word) => page.has(word)).length / titleWords.length
 }
 
-/** Rules found in a guideline pack: every non-empty string or item in its lists. */
+/** Rules found in a guideline pack: the entries of its top-level rule lists. */
 export function guidelineItemCount(pack: unknown): number {
+  // Rules are the entries of the pack's top-level lists. Each rule carries
+  // lists of its own (sourceAnchors, appliesTo, draftingStage), which are not
+  // rules, and the top-level sourceAnchors list is citations.
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) return 0
   let count = 0
-  const visit = (value: unknown, depth: number) => {
-    if (depth > 4 || value === null || value === undefined) return
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === 'string' ? item.trim().length > 0 : typeof item === 'object' && item !== null) count += 1
-        if (typeof item === 'object') visit(item, depth + 1)
-      }
-    } else if (typeof value === 'object') {
-      for (const child of Object.values(value as Record<string, unknown>)) visit(child, depth + 1)
+  for (const [key, value] of Object.entries(pack as Record<string, unknown>)) {
+    if (key === 'sourceAnchors' || !Array.isArray(value)) continue
+    for (const item of value) {
+      if (typeof item === 'string' ? item.trim().length > 0 : typeof item === 'object' && item !== null) count += 1
     }
   }
-  visit(pack, 0)
   return count
 }
 

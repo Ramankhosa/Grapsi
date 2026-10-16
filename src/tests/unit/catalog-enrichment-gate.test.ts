@@ -33,6 +33,11 @@ describe('enrichment gate', () => {
     expect(guidelineItemCount(null)).toBe(0)
   })
 
+  it('counts each rule once, not its own anchors and tags', () => {
+    const rule = { text: 'No indirect costs.', appliesTo: ['budget', 'all'], draftingStage: ['fit_and_scope'], sourceAnchors: [{ quote: 'no indirect costs' }] }
+    expect(guidelineItemCount({ budgetRules: [rule, { ...rule, text: 'USD 100,000 total.' }], sourceAnchors: [{ quote: 'a' }, { quote: 'b' }] })).toBe(2)
+  })
+
   it('passes only a page about this call, on its own site, with enough rules', () => {
     const base = { title: 'Career Development Award', pageText: 'Career Development Award. '.repeat(80), pageHost: 'www.example.org', officialHost: 'example.org', documents: 1, guidelineItems: 8 }
     expect(enrichmentGate(base)).toEqual([])
