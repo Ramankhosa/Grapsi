@@ -797,7 +797,11 @@ export class ResearcherSearchService {
 
   private async searchSavedAreaVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql, branchLimit = VECTOR_BRANCH_LIMIT) {
     const floor = getVectorSimilarityFloor();
+    // Each researcher's best match first, THEN the best researchers: a LIMIT
+    // directly on DISTINCT ON (ordered by user id) kept the lowest ids, not
+    // the closest matches, once more people cleared the floor than the limit.
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
+      SELECT * FROM (
       SELECT DISTINCT ON (u.id)
         ${profileCandidateColumns(
           'research_area',
@@ -814,13 +818,19 @@ export class ResearcherSearchService {
         AND 1 - (area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
+      ) best_per_person
+      ORDER BY "semanticSimilarity" DESC
       LIMIT ${branchLimit}
     `);
   }
 
   private async searchPublicationVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql, branchLimit = VECTOR_BRANCH_LIMIT) {
     const floor = getVectorSimilarityFloor();
+    // Each researcher's best match first, THEN the best researchers: a LIMIT
+    // directly on DISTINCT ON (ordered by user id) kept the lowest ids, not
+    // the closest matches, once more people cleared the floor than the limit.
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
+      SELECT * FROM (
       SELECT DISTINCT ON (u.id)
         ${profileCandidateColumns(
           'publication',
@@ -839,6 +849,8 @@ export class ResearcherSearchService {
         AND 1 - (ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
+      ) best_per_person
+      ORDER BY "semanticSimilarity" DESC
       LIMIT ${branchLimit}
     `);
   }

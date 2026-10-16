@@ -2372,15 +2372,21 @@ Rules:
     };
     const FACET_LIMIT = 30;
 
-    const [totalRow, facetRows] = await Promise.all([
-      prisma.$queryRaw<Array<{ count: number }>>(
-        Prisma.sql`
-          SELECT COUNT(*)::int AS count
+    // One statement: the filter (base conditions + text match) runs once into
+    // a materialized set that the total and all nine facets read. It used to
+    // run ten times, once per facet query.
+    const rows = await prisma.$queryRaw<FacetRow[]>(Prisma.sql`
+        WITH matched AS MATERIALIZED (
+          SELECT id, disciplines, eligible_countries, funding_kinds, career_stages, sponsor_type,
+                 eligible_regions, institution_types
           FROM funding_calls
           WHERE ${where}
-        `
-      ),
-      prisma.$queryRaw<FacetRow[]>(Prisma.sql`
+        )
+        SELECT 'total' AS dimension, NULL::text AS value, NULL::text AS label, NULL::text AS "level1Code",
+               NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name",
+               COUNT(*)::int AS count
+        FROM matched
+        UNION ALL
         SELECT * FROM (
           SELECT
             'taxonomyArea' AS dimension,
@@ -2394,80 +2400,73 @@ Rules:
             taxonomy.taxonomy_level2_code AS "level2Code",
             taxonomy.taxonomy_level2_name AS "level2Name",
             COUNT(*)::int AS count
-          FROM funding_calls
+          FROM matched
           INNER JOIN funding_call_research_area_taxonomies taxonomy
-            ON taxonomy.funding_call_id = funding_calls.id
-          WHERE ${where}
+            ON taxonomy.funding_call_id = matched.id
           GROUP BY taxonomy.taxonomy_area_id, taxonomy.taxonomy_level1_code, taxonomy.taxonomy_level1_name,
                    taxonomy.taxonomy_level2_code, taxonomy.taxonomy_level2_name
-          ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) tx
         UNION ALL
         SELECT * FROM (
           SELECT 'researchArea' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(disciplines) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.disciplines) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) ra
         UNION ALL
         SELECT * FROM (
           SELECT 'country' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(eligible_countries) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.eligible_countries) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) co
         UNION ALL
         SELECT * FROM (
           SELECT 'fundingKind' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(funding_kinds) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.funding_kinds) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) fk
         UNION ALL
         SELECT * FROM (
           SELECT 'careerStage' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(career_stages) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.career_stages) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) cs
         UNION ALL
         SELECT * FROM (
           SELECT 'discipline' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(disciplines) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.disciplines) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) ds
         UNION ALL
         SELECT * FROM (
           SELECT 'sponsorType' AS dimension, sponsor_type AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls
-          WHERE sponsor_type IS NOT NULL AND ${where}
-          GROUP BY sponsor_type ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched
+          WHERE sponsor_type IS NOT NULL
+          GROUP BY sponsor_type ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) sp
         UNION ALL
         SELECT * FROM (
           SELECT 'region' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(eligible_regions) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.eligible_regions) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) rg
         UNION ALL
         SELECT * FROM (
           SELECT 'institutionType' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
                  NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
-          FROM funding_calls, unnest(institution_types) AS val
-          WHERE ${where}
-          GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
+          FROM matched, unnest(matched.institution_types) AS val
+          GROUP BY val ORDER BY count DESC, value ASC LIMIT ${FACET_LIMIT}
         ) it
-      `),
-    ]);
+      `);
+    const totalRow = rows.filter((row) => row.dimension === 'total');
+    const facetRows = rows.filter((row) => row.dimension !== 'total');
 
     const facets: Record<DirectoryFacetDimension, DirectoryFacetItem[]> = {
       taxonomyArea: [],
