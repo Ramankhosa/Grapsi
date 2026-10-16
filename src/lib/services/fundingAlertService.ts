@@ -12,6 +12,8 @@ import {
 import { snapshotFundingOpportunity } from '../fundingDept/opportunitySnapshot';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
+import { formatDeadlineDate } from '../i18n/format';
+import { getTenantLocale } from '../tenant/locale';
 
 /**
  * Funding opportunity alerts.
@@ -244,20 +246,21 @@ function isAlertable(call: AlertableCall): { ok: boolean; reason?: string } {
   return { ok: true };
 }
 
-function formatDeadline(value: Date | null): string | null {
-  if (!value) {
-    return null;
-  }
-  return value.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+/**
+ * "October 16, 2026". A date-only deadline keeps its date whatever zone the
+ * server runs in; an instant is read in the recipient's organization zone.
+ */
+function formatDeadline(value: Date | null, timeZone?: string): string | null {
+  return formatDeadlineDate(value, { timeZone, locale: 'en-US', month: 'long' });
 }
 
-function notificationBody(call: AlertableCall, match: ResearcherSearchResult): string {
+function notificationBody(call: AlertableCall, match: ResearcherSearchResult, timeZone?: string): string {
   const parts: string[] = [];
   const agency = callAgency(call);
   if (agency) {
     parts.push(agency);
   }
-  const deadline = formatDeadline(callDeadline(call));
+  const deadline = formatDeadline(callDeadline(call), timeZone);
   if (deadline) {
     parts.push(`Deadline ${deadline}`);
   }
@@ -538,7 +541,6 @@ export class FundingAlertService {
     const title = callTitle(call);
     const linkUrl = `/finder/calls/${encodeURIComponent(call.id)}`;
     const callUrl = `${SITE_URL}${linkUrl}`;
-    const deadlineLabel = formatDeadline(callDeadline(call));
     const amountLabel = callAmountLabel(call);
     const agency = callAgency(call);
 
@@ -599,6 +601,8 @@ export class FundingAlertService {
       }
 
       result.alerted += 1;
+      const recipientZone = (await getTenantLocale(user.tenantId)).timezone;
+      const deadlineLabel = formatDeadline(callDeadline(call), recipientZone);
       let inAppStatus = 'skipped';
       let emailStatus = 'skipped';
       let emailError: string | null = null;
@@ -613,7 +617,7 @@ export class FundingAlertService {
               tenant_id: user.tenantId,
               user_id: user.id,
               title: `New funding match: ${title.slice(0, 120)}`,
-              body: notificationBody(call, match) || null,
+              body: notificationBody(call, match, recipientZone) || null,
               category: NOTIFICATION_CATEGORY,
               link_url: linkUrl,
             },
@@ -839,6 +843,7 @@ export class FundingAlertService {
 
       const preferences = preferencesByUser.get(userId) || DEFAULT_PREFERENCES;
       const to = preferences.emailAddress || user.email;
+      const recipientZone = (await getTenantLocale(user.tenantId)).timezone;
       const template = fundingAlertDigestTemplate({
         email: to,
         name: user.name,
@@ -848,7 +853,7 @@ export class FundingAlertService {
           return {
             title: callTitle(call),
             agency: callAgency(call),
-            deadline: formatDeadline(callDeadline(call)),
+            deadline: formatDeadline(callDeadline(call), recipientZone),
             amount: callAmountLabel(call),
             matchReason: alert.match_reason,
             callUrl: `${SITE_URL}/finder/calls/${encodeURIComponent(call.id)}`,

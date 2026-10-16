@@ -165,6 +165,10 @@ in error rates.
 
 ## Not part of this release (deliberately)
 
+- Per-tenant send hours for daily/weekly alert digests and reminders: the
+  jobs still run on the platform schedule; only the dates inside the emails
+  follow the tenant's zone and locale.
+
 - Backfilling new columns on **existing** calls (country codes, deadline rows,
   funder links). Any write to an existing row changes its `xmin`, which the
   match census treats as a change. Do it later, after the census work is live.

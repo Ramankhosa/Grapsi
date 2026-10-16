@@ -17,6 +17,8 @@ import prisma from '@/lib/prisma'
 import { sendEmail } from '@/lib/mailer'
 import { assignmentReminderTemplate } from '@/lib/email-templates'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
+import { formatDeadlineDate } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 /**
  * Deadline ladder, checked longest-first so a freshly created assignment that
@@ -68,13 +70,11 @@ export interface EscalationResult {
   emailFailed: number
 }
 
-function formatDate(value: Date | null) {
+/** A deadline date in the tenant's zone and locale (India unless the tenant set another). */
+async function formatDate(value: Date | null, tenantId: string) {
   if (!value) return null
-  return new Date(value).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
+  const locale = await getTenantLocale(tenantId)
+  return formatDeadlineDate(value, { timeZone: locale.timezone, locale: locale.locale })
 }
 
 function daysUntil(deadline: Date, now: Date) {
@@ -181,7 +181,7 @@ async function sweepMilestones(now: Date, limit: number, result: EscalationResul
             email: milestone.assignment.assignee.email,
             name: milestone.assignment.assignee.name,
             callTitle,
-            deadline: formatDate(milestone.due_at),
+            deadline: await formatDate(milestone.due_at, milestone.tenant_id),
             note: body,
             fromName: null,
           }),
@@ -251,7 +251,7 @@ export async function sweepDeadlineEscalations(
   for (const assignment of candidates) {
     const callTitle =
       assignment.funding_call?.scheme_title || assignment.funding_call?.title || 'a funding call'
-    const deadline = formatDate(assignment.deadline_at)
+    const deadline = await formatDate(assignment.deadline_at, assignment.tenant_id)
     const sent = new Set(assignment.auto_nudge_stages)
 
     // --- Deadline ladder ----------------------------------------------------

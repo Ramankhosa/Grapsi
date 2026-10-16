@@ -36,6 +36,8 @@ import { resolveActivityWindow } from './accountabilityService'
 import { getUnallocatedBacklog, type BacklogCall } from './pendencyService'
 import { getDeptSettingsFor, type DeptSettings } from './settings'
 import { isMemberAway } from './shared'
+import { formatDeadlineDate } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 export const ESCALATION_STAGES = ['OFFICER', 'HEAD', 'ADMIN'] as const
 export type EscalationStage = (typeof ESCALATION_STAGES)[number]
@@ -242,15 +244,12 @@ const STAGE_COPY: Record<EscalationStage, (count: number, school: string) => str
     `${count === 1 ? 'A relevant call in' : `${count} relevant calls in`} ${school} ${count === 1 ? 'remains' : 'remain'} unallocated after both the officer and the department head were told.`,
 }
 
-function describe(calls: BacklogCall[]) {
+function describe(calls: BacklogCall[], locale: { timezone: string; locale: string }) {
   return calls
     .slice(0, 8)
     .map((call) => {
       const closes = call.closesAt
-        ? ` — closes ${new Date(call.closesAt).toLocaleDateString('en-IN', {
-            day: 'numeric',
-            month: 'short',
-          })}`
+        ? ` — closes ${formatDeadlineDate(call.closesAt, { timeZone: locale.timezone, locale: locale.locale, year: false })}`
         : ''
       return `• ${call.title || 'Untitled call'} (${call.daysWaiting} days waiting${closes})`
     })
@@ -271,6 +270,7 @@ async function sweepTenant(
   now: Date,
   result: PendencyEscalationResult
 ): Promise<void> {
+  const tenantLocale = await getTenantLocale(tenantId)
   if (!settings.pendencyEscalationEnabled) {
     result.skippedDisabled += 1
     return
@@ -320,7 +320,7 @@ async function sweepTenant(
     if (userIds.length === 0) continue
 
     const title = `${PENDENCY_NOTICE_PREFIX} in ${batch.school}`
-    const body = `${STAGE_COPY[batch.stage](batch.calls.length, batch.school)}\n\n${describe(batch.calls)}`
+    const body = `${STAGE_COPY[batch.stage](batch.calls.length, batch.school)}\n\n${describe(batch.calls, tenantLocale)}`
 
     try {
       await notifyQuietly({
@@ -351,7 +351,7 @@ async function sweepTenant(
             to: recipient.email,
             subject: title,
             text: body,
-            html: `<p>${STAGE_COPY[batch.stage](batch.calls.length, batch.school)}</p><pre style="font-family:inherit">${describe(batch.calls)}</pre>`,
+            html: `<p>${STAGE_COPY[batch.stage](batch.calls.length, batch.school)}</p><pre style="font-family:inherit">${describe(batch.calls, tenantLocale)}</pre>`,
           })
         } catch (error) {
           result.emailFailed += 1

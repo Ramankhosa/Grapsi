@@ -256,3 +256,24 @@ export function formatMoneyTotals(totals: MoneyTotal[] | null | undefined, optio
   const parts = (totals || []).filter((total) => total.amount).map((total) => formatMoney(total.amount, total.currency, options)).filter(Boolean)
   return parts.length > 0 ? parts.join(' + ') : null
 }
+
+/**
+ * A deadline as a calendar date for emails and notifications: a date-only
+ * deadline (00:00 UTC) shows its own date, an instant the date it falls on
+ * in the zone; in the given locale. Never shifts a date-only deadline to the
+ * day before, whatever zone the server runs in.
+ */
+export function formatDeadlineDate(
+  value: Date | string | number | null | undefined,
+  options: DateFormatOptions & { month?: 'short' | 'long'; year?: boolean } = {}
+): string | null {
+  const date = toDate(value)
+  if (!date) return null
+  const day = deadlineDayKey(date, zoneOf(options))
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(localeOf(options), {
+    timeZone: 'UTC',
+    day: 'numeric',
+    month: options.month || 'short',
+    ...(options.year === false ? {} : { year: 'numeric' }),
+  })
+}

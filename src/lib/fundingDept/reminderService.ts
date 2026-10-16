@@ -13,6 +13,8 @@ import { notifyQuietly } from '@/lib/notifications/notificationService'
 import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
 
 import { isMemberAway, schoolRootFor } from './shared'
+import { formatDeadlineDate } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 /** Statuses where a nudge is pointless — the work is closed, refused or dead. */
 const CLOSED_STATUSES = new Set(['COMPLETED', ...NOT_TAKEN_UP_STATUSES])
@@ -65,13 +67,11 @@ async function ticklerRecipients(
   return [authorUserId, deputyUserId]
 }
 
-function formatDate(value: Date | null) {
+/** A deadline date in the tenant's zone and locale (India unless the tenant set another). */
+async function formatDate(value: Date | null, tenantId: string) {
   if (!value) return null
-  return new Date(value).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
+  const locale = await getTenantLocale(tenantId)
+  return formatDeadlineDate(value, { timeZone: locale.timezone, locale: locale.locale })
 }
 
 export async function sweepDueReminders(
@@ -169,7 +169,7 @@ export async function sweepDueReminders(
 
     const callTitle =
       assignment.funding_call?.scheme_title || assignment.funding_call?.title || 'a funding call'
-    const deadline = formatDate(assignment.deadline_at)
+    const deadline = await formatDate(assignment.deadline_at, assignment.tenant_id)
 
     if (followUp.remind_faculty) {
       await notifyQuietly({

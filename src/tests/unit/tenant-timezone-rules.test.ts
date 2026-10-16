@@ -56,3 +56,15 @@ describe('deadline days for a tenant outside India', () => {
     expect(calendar.label).toBe('2026')
   })
 })
+
+describe('deadline dates in emails', () => {
+  it('shows a date-only deadline as its own date in every zone', async () => {
+    const { formatDeadlineDate } = await import('@/lib/i18n/format')
+    expect(formatDeadlineDate(DATE_ONLY_OCT_16)).toBe('16 Oct 2026')
+    expect(formatDeadlineDate(DATE_ONLY_OCT_16, { timeZone: NY, locale: 'en-US', month: 'long' })).toBe('October 16, 2026')
+    // An instant: 02:00 UTC on the 17th is the 16th in New York, the 17th in India.
+    expect(formatDeadlineDate('2026-10-17T02:00:00Z', { timeZone: NY })).toBe('16 Oct 2026')
+    expect(formatDeadlineDate('2026-10-17T02:00:00Z')).toBe('17 Oct 2026')
+    expect(formatDeadlineDate(null)).toBeNull()
+  })
+})
