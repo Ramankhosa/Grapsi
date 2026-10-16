@@ -137,6 +137,12 @@ export interface ResearcherSearchRequest {
   census?: boolean | null;
   /** Census only: reuse reranker scores for unchanged (call, person) pairs. */
   scoreCache?: RerankScoreCache | null;
+  /**
+   * false: do not record this search as a DSR matching run. Alert fan-out
+   * searches every entitled tenant for a global call; those are deliveries,
+   * not an officer's matching work, and must not appear in DSR reports.
+   */
+  recordRun?: boolean | null;
 }
 
 export interface ResearcherMatchEvidence {
@@ -1057,7 +1063,7 @@ export class ResearcherSearchService {
       : null;
 
     // A census writes its own durable rows; a bounded search records evidence.
-    if (!census && input.fundingCallId && input.requesterTenantId) {
+    if (!census && input.recordRun !== false && input.fundingCallId && input.requesterTenantId) {
       const { persistMatchingRun } = await import('@/lib/fundingDept/matchingRun');
       await persistMatchingRun({tenantId:input.requesterTenantId,callId:input.fundingCallId,actorId:input.requesterUserId,
         orgUnitIds:input.filters?.orgUnitIds,filters:input.filters || {},candidateCount:merged.length,

@@ -92,6 +92,23 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    (the finder's UNION text match against the old OR-EXISTS form);
    `FINDER_FTS_UNION=0` switches back to the old form without a deploy.
 
+## Behaviour changes to announce
+
+- **Funding alerts reach more institutions.** A global call used to be matched
+  in one platform-wide search, and with the reranker on only its top 40 people
+  could clear the relevance gate, across all tenants. Each tenant with
+  researchers and the FUNDING_ALERTS feature is now searched separately and
+  gets its own best matches (up to 50). Expect more alerts per curated call
+  on a multi-tenant deployment, and alerts in tenants that previously got
+  none. These searches are not recorded as DSR matching runs.
+- **Alerts respect stated country eligibility.** A researcher whose profile
+  countries a call explicitly rules out is no longer alerted. Calls without
+  evaluated eligibility (every curated call until the backfill) and profiles
+  without a country behave as before.
+- **"My areas" lists the external catalogue** (open/closed by the imported
+  lifecycle as well as the deadline), and its ranking now keeps the closest
+  calls rather than the lowest ids.
+
 ## Stop conditions and rollback
 
 Stop on: any `silent change` or `missing row` in the safety compare, any

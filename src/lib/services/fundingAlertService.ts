@@ -3,6 +3,8 @@ import { sendEmail, SITE_URL } from '../mailer';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
 import { filterTenantsWithFeature } from '../entitlement-service';
 import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
+import { ELIGIBILITY_DIMENSIONS, dimensionFromRow, evaluateEligibility } from '../funding/eligibility';
+import { resolveCountryList } from '../geo/countries';
 import { snapshotFundingOpportunity } from '../fundingDept/opportunitySnapshot';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
@@ -40,8 +42,11 @@ export type FundingAlertTier = 'strong' | 'moderate' | 'weak';
 
 const TIER_RANK: Record<FundingAlertTier, number> = { strong: 3, moderate: 2, weak: 1 };
 
-/** Search clamps to 50; more than that per call is noise anyway. */
-const MAX_ALERT_RECIPIENTS = 50;
+/**
+ * Recipients per tenant per call (the search clamps to 50, and with the
+ * reranker on only its 40-person window clears the relevance gate).
+ */
+const MAX_ALERT_RECIPIENTS_PER_TENANT = 50;
 /** Pause between instant emails so the mail provider is not burst-hit. */
 const EMAIL_DELAY_MS = 250;
 const NOTIFICATION_CATEGORY = 'FUNDING_MATCH';
@@ -61,6 +66,10 @@ export interface FundingAlertDispatchResult {
   skippedExisting: number;
   /** Matches dropped because the user's tenant plan lacks FUNDING_ALERTS. */
   skippedUnentitled: number;
+  /** Matches dropped because the call's stated eligibility rules out the researcher's countries. */
+  skippedIneligible: number;
+  /** Tenants searched for this call (each entitled tenant separately for a global call). */
+  tenantsSearched: number;
 }
 
 export interface FundingAlertDigestResult {
@@ -169,6 +178,22 @@ const CALL_SELECT = {
   currency: true,
   metadata: true,
   notification_policy: true,
+  applicant_scope: true,
+  applicant_country_codes: true,
+  applicant_excluded_codes: true,
+  applicant_region_codes: true,
+  residence_scope: true,
+  residence_country_codes: true,
+  residence_excluded_codes: true,
+  residence_region_codes: true,
+  citizenship_scope: true,
+  citizenship_country_codes: true,
+  citizenship_excluded_codes: true,
+  citizenship_region_codes: true,
+  host_scope: true,
+  host_country_codes: true,
+  host_excluded_codes: true,
+  host_region_codes: true,
 } as const;
 
 function callTitle(call: AlertableCall): string {
@@ -252,6 +277,94 @@ function asMetadataObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+type AlertCandidate = ResearcherSearchResult & { scoreBasis: string };
+
+/**
+ * Who could be alerted about a call.
+ *
+ * A tenant-private call searches its own tenant. A global call searches each
+ * tenant that has researchers and the FUNDING_ALERTS feature separately: one
+ * platform-wide search keeps only the reranker's window (40 people) across
+ * ALL tenants, so one large tenant could take every slot and the rest would
+ * never hear of the call. These per-tenant searches are not recorded as DSR
+ * matching runs.
+ */
+async function findAlertCandidates(
+  call: AlertableCall
+): Promise<{ candidates: AlertCandidate[]; tenantsSearched: number; entitledTenants: number }> {
+  if (call.visibility === 'TENANT_PRIVATE' && call.tenantId) {
+    const search = await researcherSearchService.search({
+      fundingCallId: call.id,
+      limit: MAX_ALERT_RECIPIENTS_PER_TENANT,
+      requesterTenantId: call.tenantId,
+      filters: { includeSelf: true, tenantOnly: true },
+    });
+    return {
+      candidates: search.results.map((match) => ({ ...match, scoreBasis: search.scoreBasis })),
+      tenantsSearched: 1,
+      entitledTenants: 1,
+    };
+  }
+
+  const tenantRows = await prisma.$queryRaw<Array<{ tenantId: string }>>`
+    SELECT DISTINCT u."tenantId" AS "tenantId"
+    FROM researcher_profiles rp
+    JOIN users u ON u.id = rp.user_id
+    WHERE u."tenantId" IS NOT NULL AND u.status = 'ACTIVE'
+    ORDER BY u."tenantId"
+  `;
+  const tenantIds = tenantRows.map((row) => row.tenantId);
+  const entitled = tenantIds.length > 0 ? await filterTenantsWithFeature(tenantIds, ALERTS_FEATURE_CODE) : new Set<string>();
+  const candidates: AlertCandidate[] = [];
+  const seen = new Set<string>();
+  let tenantsSearched = 0;
+  for (const tenantId of tenantIds.filter((id) => entitled.has(id))) {
+    tenantsSearched += 1;
+    const search = await researcherSearchService.search({
+      fundingCallId: call.id,
+      limit: MAX_ALERT_RECIPIENTS_PER_TENANT,
+      requesterTenantId: tenantId,
+      recordRun: false,
+      filters: { includeSelf: true, tenantOnly: true },
+    });
+    for (const match of search.results) {
+      if (seen.has(match.userId)) continue;
+      seen.add(match.userId);
+      candidates.push({ ...match, scoreBasis: search.scoreBasis });
+    }
+  }
+  return { candidates, tenantsSearched, entitledTenants: entitled.size };
+}
+
+/**
+ * Researchers a call's stated eligibility rules out.
+ *
+ * Only an explicit INELIGIBLE verdict drops someone. A call with no evaluated
+ * dimension (every curated call until the backfill links them) and a
+ * researcher with no country on their profile are treated exactly as before.
+ * Profiles hold country names; they are resolved to ISO codes here.
+ */
+async function ineligibleUserIds(call: AlertableCall, userIds: string[]): Promise<Set<string>> {
+  const ruledOut = new Set<string>();
+  const row = call as unknown as Record<string, unknown>;
+  const dimensions = Object.fromEntries(ELIGIBILITY_DIMENSIONS.map((key) => [key, dimensionFromRow(row, key)]));
+  if (userIds.length === 0 || ELIGIBILITY_DIMENSIONS.every((key) => !dimensions[key].scope)) {
+    return ruledOut;
+  }
+  const profiles = await prisma.researcherProfile.findMany({
+    where: { user_id: { in: userIds } },
+    select: { user_id: true, country_of_residence: true, citizenship_countries: true },
+  });
+  for (const profile of profiles) {
+    const residence = resolveCountryList(profile.country_of_residence ? [profile.country_of_residence] : []).codes;
+    const citizenship = resolveCountryList(profile.citizenship_countries || []).codes;
+    if (evaluateEligibility(dimensions, { residence, citizenship }).overall === 'INELIGIBLE') {
+      ruledOut.add(profile.user_id);
+    }
+  }
+  return ruledOut;
+}
+
 async function stampDispatched(call: AlertableCall, summary: FundingAlertDispatchResult) {
   const metadata = asMetadataObject(call.metadata);
   metadata.alerts_dispatched_at = new Date().toISOString();
@@ -265,6 +378,8 @@ async function stampDispatched(call: AlertableCall, summary: FundingAlertDispatc
     // these matches are not retried — re-dispatch with { force: true } to
     // deliver them.
     unentitled: summary.skippedUnentitled,
+    ineligible: summary.skippedIneligible,
+    tenants_searched: summary.tenantsSearched,
   };
   await prisma.fundingCall.update({
     where: { id: call.id },
@@ -292,6 +407,8 @@ export class FundingAlertService {
       emailsFailed: 0,
       skippedExisting: 0,
       skippedUnentitled: 0,
+      skippedIneligible: 0,
+      tenantsSearched: 0,
     };
 
     const call = (await prisma.fundingCall.findUnique({
@@ -319,22 +436,21 @@ export class FundingAlertService {
 
     // Same embedding search the researcher-matching screen uses: profile,
     // saved research areas flagged for alerts, and tagged publications.
-    const tenantPrivate = call.visibility === 'TENANT_PRIVATE' && call.tenantId;
-    const search = await researcherSearchService.search({
-      fundingCallId,
-      limit: MAX_ALERT_RECIPIENTS,
-      requesterTenantId: tenantPrivate ? call.tenantId : null,
-      filters: {
-        includeSelf: true,
-        ...(tenantPrivate ? { tenantOnly: true } : {}),
-      },
-    });
+    const { candidates, tenantsSearched, entitledTenants: entitledTenantCount } = await findAlertCandidates(call);
+    result.tenantsSearched = tenantsSearched;
+    if (entitledTenantCount === 0) {
+      // No tenant with researchers buys alerts: nothing to search or send.
+      result.dispatched = true;
+      result.reason = 'no_entitled_tenants';
+      await stampDispatched(call, result);
+      return result;
+    }
 
     // Preferences are fetched before the tier filter (not after, with the
     // other batch loads) because a user's saved alert keywords can rescue a
     // weak match: a call whose text hits one of them is promoted to moderate.
     const preferenceRows = await prisma.researcherNotificationPreference.findMany({
-      where: { user_id: { in: search.results.map((match) => match.userId) } },
+      where: { user_id: { in: candidates.map((match) => match.userId) } },
       select: {
         user_id: true,
         in_app_enabled: true,
@@ -353,7 +469,7 @@ export class FundingAlertService {
       description: call.description,
       disciplines: call.disciplines,
     };
-    const matches = search.results
+    const tiered = candidates
       .map((match) => {
         if (match.matchTier !== 'weak') {
           return match;
@@ -377,7 +493,11 @@ export class FundingAlertService {
         };
       })
       .filter((match) => meetsTier(match.matchTier));
-    result.matched = matches.length;
+    result.matched = tiered.length;
+
+    const ineligible = await ineligibleUserIds(call, tiered.map((match) => match.userId));
+    const matches = tiered.filter((match) => !ineligible.has(match.userId));
+    result.skippedIneligible = tiered.length - matches.length;
 
     if (matches.length === 0) {
       result.dispatched = true;
@@ -443,7 +563,7 @@ export class FundingAlertService {
             tenant_id: user.tenantId,
             match_score: match.score,
             match_tier: match.matchTier,
-            score_basis: search.scoreBasis,
+            score_basis: match.scoreBasis,
             matched_sources: match.matchedSources,
             match_reason: match.matchReason || null,
           },
@@ -600,6 +720,8 @@ export class FundingAlertService {
           emailsFailed: 0,
           skippedExisting: 0,
           skippedUnentitled: 0,
+          skippedIneligible: 0,
+          tenantsSearched: 0,
         });
       }
     }

@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   sendEmail: vi.fn(),
   search: vi.fn(),
   filterTenantsWithFeature: vi.fn(),
+  queryRaw: vi.fn(),
+  profileFindMany: vi.fn(),
 }))
 
 const prismaMock = {
@@ -34,6 +36,8 @@ const prismaMock = {
   user: { findMany: mocks.userFindMany },
   researcherNotificationPreference: { findMany: mocks.preferenceFindMany },
   notification: { create: mocks.notificationCreate },
+  researcherProfile: { findMany: mocks.profileFindMany },
+  $queryRaw: mocks.queryRaw,
 }
 
 vi.mock('@/lib/prisma', () => ({ default: prismaMock, prisma: prismaMock }))
@@ -105,44 +109,54 @@ describe('funding alert entitlement gating', () => {
     mocks.preferenceFindMany.mockResolvedValue([])
     mocks.notificationCreate.mockResolvedValue({})
     mocks.sendEmail.mockResolvedValue({})
+    mocks.queryRaw.mockResolvedValue([])
+    mocks.profileFindMany.mockResolvedValue([])
   })
 
-  it('alerts entitled tenants and skips unentitled ones', async () => {
-    mocks.search.mockResolvedValue({
-      scoreBasis: 'voyage',
-      results: [matchFor('user-a'), matchFor('user-b')],
-    })
-    mocks.userFindMany.mockResolvedValue([
-      { id: 'user-a', email: 'a@uni.edu', name: 'A', tenantId: 'tenant-entitled' },
-      { id: 'user-b', email: 'b@corp.com', name: 'B', tenantId: 'tenant-unentitled' },
-    ])
+  it('searches each entitled tenant separately and never the unentitled ones', async () => {
+    mocks.queryRaw.mockResolvedValue([{ tenantId: 'tenant-entitled' }, { tenantId: 'tenant-unentitled' }])
     mocks.filterTenantsWithFeature.mockResolvedValue(new Set(['tenant-entitled']))
+    mocks.search.mockResolvedValue({ scoreBasis: 'voyage', results: [matchFor('user-a')] })
+    mocks.userFindMany.mockResolvedValue([{ id: 'user-a', email: 'a@uni.edu', name: 'A', tenantId: 'tenant-entitled' }])
 
     const service = await loadService()
     const result = await service.dispatchAlertsForFundingCall('call-1')
 
-    expect(mocks.filterTenantsWithFeature).toHaveBeenCalledWith(
-      ['tenant-entitled', 'tenant-unentitled'],
-      'FUNDING_ALERTS'
-    )
-    expect(result.matched).toBe(2)
+    expect(mocks.filterTenantsWithFeature).toHaveBeenCalledWith(['tenant-entitled', 'tenant-unentitled'], 'FUNDING_ALERTS')
+    expect(mocks.search).toHaveBeenCalledTimes(1)
+    expect(mocks.search.mock.calls[0][0]).toMatchObject({
+      requesterTenantId: 'tenant-entitled',
+      recordRun: false,
+      filters: { includeSelf: true, tenantOnly: true },
+    })
+    expect(result.tenantsSearched).toBe(1)
     expect(result.alerted).toBe(1)
-    expect(result.skippedUnentitled).toBe(1)
-    expect(mocks.fundingCallAlertCreate).toHaveBeenCalledTimes(1)
     expect(mocks.fundingCallAlertCreate.mock.calls[0][0].data.user_id).toBe('user-a')
-    expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
     expect(mocks.sendEmail.mock.calls[0][0].to).toBe('a@uni.edu')
   })
 
-  it('creates nothing when no matched tenant is entitled, but still stamps the call', async () => {
-    mocks.search.mockResolvedValue({
+  it('gives every entitled tenant its own recipients', async () => {
+    mocks.queryRaw.mockResolvedValue([{ tenantId: 'tenant-1' }, { tenantId: 'tenant-2' }])
+    mocks.filterTenantsWithFeature.mockResolvedValue(new Set(['tenant-1', 'tenant-2']))
+    mocks.search.mockImplementation(async (input: { requesterTenantId: string }) => ({
       scoreBasis: 'voyage',
-      results: [matchFor('user-a'), matchFor('user-b')],
-    })
+      results: [matchFor(input.requesterTenantId === 'tenant-1' ? 'user-1' : 'user-2')],
+    }))
     mocks.userFindMany.mockResolvedValue([
-      { id: 'user-a', email: 'a@uni.edu', name: 'A', tenantId: 'tenant-1' },
-      { id: 'user-b', email: 'b@uni.edu', name: 'B', tenantId: null },
+      { id: 'user-1', email: '1@uni.edu', name: 'One', tenantId: 'tenant-1' },
+      { id: 'user-2', email: '2@uni.edu', name: 'Two', tenantId: 'tenant-2' },
     ])
+
+    const service = await loadService()
+    const result = await service.dispatchAlertsForFundingCall('call-1')
+
+    expect(mocks.search).toHaveBeenCalledTimes(2)
+    expect(result.tenantsSearched).toBe(2)
+    expect(result.alerted).toBe(2)
+  })
+
+  it('searches nothing when no tenant with researchers is entitled, but still stamps the call', async () => {
+    mocks.queryRaw.mockResolvedValue([{ tenantId: 'tenant-1' }])
     mocks.filterTenantsWithFeature.mockResolvedValue(new Set())
 
     const service = await loadService()
@@ -150,13 +164,78 @@ describe('funding alert entitlement gating', () => {
 
     expect(result.dispatched).toBe(true)
     expect(result.alerted).toBe(0)
-    expect(result.skippedUnentitled).toBe(2)
-    expect(result.reason).toBe('no_entitled_matches')
+    expect(result.reason).toBe('no_entitled_tenants')
+    expect(mocks.search).not.toHaveBeenCalled()
     expect(mocks.fundingCallAlertCreate).not.toHaveBeenCalled()
-    expect(mocks.notificationCreate).not.toHaveBeenCalled()
     expect(mocks.sendEmail).not.toHaveBeenCalled()
     // The dispatch stamp still lands so the healing sweep does not rescan forever.
     expect(mocks.fundingCallUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips matched users of an unentitled tenant on a tenant-private call', async () => {
+    mocks.fundingCallFindUnique.mockResolvedValue({ ...CALL, visibility: 'TENANT_PRIVATE', tenantId: 'tenant-1' })
+    mocks.search.mockResolvedValue({ scoreBasis: 'voyage', results: [matchFor('user-a'), matchFor('user-b')] })
+    mocks.userFindMany.mockResolvedValue([
+      { id: 'user-a', email: 'a@uni.edu', name: 'A', tenantId: 'tenant-1' },
+      { id: 'user-b', email: 'b@uni.edu', name: 'B', tenantId: 'tenant-1' },
+    ])
+    mocks.filterTenantsWithFeature.mockResolvedValue(new Set())
+
+    const service = await loadService()
+    const result = await service.dispatchAlertsForFundingCall('call-1')
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled()
+    expect(mocks.search.mock.calls[0][0]).toMatchObject({ requesterTenantId: 'tenant-1', filters: { tenantOnly: true } })
+    expect(mocks.search.mock.calls[0][0].recordRun).toBeUndefined()
+    expect(result.skippedUnentitled).toBe(2)
+    expect(result.reason).toBe('no_entitled_matches')
+    expect(mocks.fundingCallAlertCreate).not.toHaveBeenCalled()
+  })
+
+  it('drops researchers the call\'s stated eligibility rules out', async () => {
+    mocks.fundingCallFindUnique.mockResolvedValue({
+      ...CALL,
+      residence_scope: 'COUNTRIES',
+      residence_country_codes: ['GB'],
+      residence_excluded_codes: [],
+      residence_region_codes: [],
+    })
+    mocks.queryRaw.mockResolvedValue([{ tenantId: 'tenant-1' }])
+    mocks.filterTenantsWithFeature.mockResolvedValue(new Set(['tenant-1']))
+    mocks.search.mockResolvedValue({
+      scoreBasis: 'voyage',
+      results: [matchFor('user-uk'), matchFor('user-in'), matchFor('user-unknown')],
+    })
+    mocks.profileFindMany.mockResolvedValue([
+      { user_id: 'user-uk', country_of_residence: 'United Kingdom', citizenship_countries: [] },
+      { user_id: 'user-in', country_of_residence: 'India', citizenship_countries: ['India'] },
+      { user_id: 'user-unknown', country_of_residence: null, citizenship_countries: [] },
+    ])
+    mocks.userFindMany.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) =>
+      where.id.in.map((id) => ({ id, email: `${id}@uni.edu`, name: id, tenantId: 'tenant-1' }))
+    )
+
+    const service = await loadService()
+    const result = await service.dispatchAlertsForFundingCall('call-1')
+
+    expect(result.matched).toBe(3)
+    expect(result.skippedIneligible).toBe(1)
+    // No country on the profile is a data gap, not a disqualification.
+    expect(mocks.fundingCallAlertCreate.mock.calls.map(([args]) => args.data.user_id).sort()).toEqual(['user-uk', 'user-unknown'])
+  })
+
+  it('leaves calls without evaluated eligibility exactly as before', async () => {
+    mocks.queryRaw.mockResolvedValue([{ tenantId: 'tenant-1' }])
+    mocks.filterTenantsWithFeature.mockResolvedValue(new Set(['tenant-1']))
+    mocks.search.mockResolvedValue({ scoreBasis: 'voyage', results: [matchFor('user-in')] })
+    mocks.userFindMany.mockResolvedValue([{ id: 'user-in', email: 'in@uni.edu', name: 'IN', tenantId: 'tenant-1' }])
+
+    const service = await loadService()
+    const result = await service.dispatchAlertsForFundingCall('call-1')
+
+    expect(mocks.profileFindMany).not.toHaveBeenCalled()
+    expect(result.skippedIneligible).toBe(0)
+    expect(result.alerted).toBe(1)
   })
 
   it('closes out queued digest alerts whose tenant lost the entitlement', async () => {
