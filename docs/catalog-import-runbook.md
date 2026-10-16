@@ -48,11 +48,16 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
 3. **Rehearse** steps 4–8 on the restored copy (or on the dev machine with the
    dump restored locally). Everything below must pass there first.
 4. **Migrate.**
-   `npx tsx scripts/check-additive-migration.ts` (must print `additive` ×5)
+   `psql "$DATABASE_URL" -Atc "SELECT extversion FROM pg_extension WHERE extname = 'vector'"`
+   — the HNSW migration (`20261016100000`) needs pgvector >= 0.5 and the
+   query-time iterative scan needs >= 0.8 (see `docs/vector-index-benchmark.md`).
+   `npx tsx scripts/check-additive-migration.ts` (must print `additive` ×7)
    `npx tsx scripts/catalog-safety-check.ts capture --out ~/safety-0.json`
    `npx prisma migrate status` → `npx prisma migrate deploy`
    `npx tsx scripts/catalog-safety-check.ts compare --before ~/safety-0.json`
    Migrations take a 5-second lock timeout; if one times out, re-run deploy.
+   The HNSW migration blocks writes to `funding_calls` while it builds (a few
+   seconds at today's size) — not during an intake or import run.
 5. **Deploy the code** (deploy.sh). No STAGED row exists yet, so a code rollback
    is still safe. After step 7 a code rollback must be preceded by an import
    rollback (old builds cannot read STAGED / GLOBAL_CATALOG values).
@@ -68,9 +73,17 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    `npx tsx scripts/import-funding-catalog.ts apply --snapshot <dir> --confirm-target <db name> --operator-email <super admin> --full-snapshot`
    `npx tsx scripts/catalog-safety-check.ts compare --before ~/safety-1.json` → must PASS.
 8. **Review and release.** Curators work `/admin/funding/import-review`
-   (listing variants can be resolved in bulk). Release from the page or
-   `npx tsx scripts/import-funding-catalog.ts release --run <runId> --apply`.
+   (listing variants can be resolved in bulk). Release from the page (2,000
+   per click) or `npx tsx scripts/import-funding-catalog.ts release --source scientify --apply`
+   (by source: picks up every STAGED + CLEAR call, whichever run created it).
    Re-run the safety compare after each release batch.
+9. **Embed the released calls.**
+   `npx tsx scripts/embed-catalog-calls.ts --dry-run` prints the provider,
+   column and token estimate (dev: 8,356 calls, ~3.3M tokens with Voyage
+   voyage-4-large, 111 s). Then run it without `--dry-run`. It writes only the
+   vector column and embedding metadata of imported rows, never `updatedAt`,
+   and is resumable: re-run after a provider error. Re-run it after every
+   re-import or release; it re-embeds only calls whose text changed.
 
 ## Stop conditions and rollback
 
@@ -89,8 +102,7 @@ in error rates.
 - Backfilling new columns on **existing** calls (country codes, deadline rows,
   funder links). Any write to an existing row changes its `xmin`, which the
   match census treats as a change. Do it later, after the census work is live.
-- Embeddings for imported calls (Release 2: they are found by full-text search
-  until then), funding-department access to imported calls, tenant currency /
+- Funding-department access to imported calls, tenant currency /
   timezone (Release 3), fetching official guidelines (Release 4).
 - Starting the production scheduler is its own decision: it also starts alert,
   reminder and monitor jobs that have never run there (see the inventory's
