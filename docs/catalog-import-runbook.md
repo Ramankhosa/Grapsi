@@ -51,7 +51,8 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
    `psql "$DATABASE_URL" -Atc "SELECT extversion FROM pg_extension WHERE extname = 'vector'"`
    — the HNSW migration (`20261016100000`) needs pgvector >= 0.5 and the
    query-time iterative scan needs >= 0.8 (see `docs/vector-index-benchmark.md`).
-   `npx tsx scripts/check-additive-migration.ts` (must print `additive` ×7)
+   `npx tsx scripts/check-additive-migration.ts` (must print `additive` for
+   all ten catalogue migrations)
    `npx tsx scripts/catalog-safety-check.ts capture --out ~/safety-0.json`
    `npx prisma migrate status` → `npx prisma migrate deploy`
    `npx tsx scripts/catalog-safety-check.ts compare --before ~/safety-0.json`
@@ -168,9 +169,35 @@ PLATFORM tenant.
   Eligible / Check eligibility / Not eligible for your profile; the call page
   shows the same for the viewer. On dev, for an India-based profile most top
   catalogue matches were "Not eligible" (17 of 25 for "cancer research").
+- **Browse order: curated calls first.** Every imported call is inserted in
+  one run, so all of them carry that day's `updatedAt` — newer than almost
+  every curated call. The browse listing (the finder with no search text) used
+  to be ordered by recency alone, which put the first curated call 2,096th of
+  2,104 open calls on dev: page 105. It now orders curated calls before
+  imported ones, then by recency. A text search still ranks by text relevance
+  and "closing soonest" still sorts by deadline; curated-first only breaks
+  ties there.
+- **Calls your profile is ruled out of are listed last.** When a search
+  applies the researcher's profile (the finder's own preference), a call whose
+  stated eligibility explicitly excludes every country on that profile sorts
+  after the rest instead of competing for the first page. Only an explicit
+  exclusion counts: "Check eligibility" never moves. `FINDER_DEMOTE_INELIGIBLE=0`
+  turns it off; turning the profile off in the finder also shows everything.
+- **A country filter no longer returns a call that rules that country out.**
+  Imported calls can carry explicit exclusions ("worldwide except …"); the
+  filter now honours them, as the badge on the card already did.
 - **`FINDER_RANK_CURATED_FIRST=1`** (off by default) breaks near-ties (same
   hundredth of a score) in favour of curated, then eligible, calls. On the
   dev sample it moved 0-3 of the top 8 results.
+- **Admin surfaces stay about the curated catalog.** The super-admin
+  researcher-matching picker and its "funding calls" tile, the intake screen's
+  call list, the intake duplicate check and the embedding-coverage card all
+  exclude GLOBAL_CATALOG. Catalogue embeddings are the bulk script's job
+  (step 9), so counting them as "missing an embedding" would leave that
+  dashboard number permanently red.
+- **A full catalog wipe deletes the imported catalogue too** and an import
+  rollback cannot bring it back. The confirmation screen now says how many of
+  the calls it would delete came from an import.
 - **"My areas" lists the external catalogue** (open/closed by the imported
   lifecycle as well as the deadline), and its ranking now keeps the closest
   calls rather than the lowest ids.

@@ -7,7 +7,10 @@
  * department queues, census, backlog and reminders still ignore it, and it
  * never calls publishFundingCall: no embedding, no LLM classification, no
  * school mapping, no officer notices, no alerts. updatedAt is not touched, so
- * the finder's "recently updated" browse order is not flooded by a release.
+ * releasing in batches does not reshuffle the finder between batches. (The
+ * import itself still stamps `updatedAt` at insert, which is why the browse
+ * listing orders curated calls first — see CURATED_FIRST_SQL in
+ * recommendationSearchService.)
  *
  * Release is scoped by SOURCE, not by import run: a crashed run's calls are
  * picked up by the next release just like a completed run's. Every column a

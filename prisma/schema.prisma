@@ -1415,8 +1415,13 @@ model FundingCall {
   @@index([funder_country])
   @@index([expiration_date])
   @@index([is_active])
-  @@index([embedding])
-  @@index([embedding_voyage_1024])
+  /// HNSW, built by 20261016100000_funding_call_vector_hnsw (Prisma cannot
+  /// express the index type, so the names are pinned here: without `map` a
+  /// later `migrate dev` renames these indexes to the Prisma defaults, and the
+  /// next run of that migration's `DROP INDEX funding_calls_embedding_idx`
+  /// would then drop the HNSW index and leave vector search unindexed).
+  @@index([embedding], map: "funding_calls_embedding_hnsw_idx")
+  @@index([embedding_voyage_1024], map: "funding_calls_embedding_voyage_1024_hnsw_idx")
   @@index([ts_document], map: "funding_calls_ts_idx", type: Gin)
   @@index([funder_id])
   @@index([import_run_id])
