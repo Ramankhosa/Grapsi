@@ -14,7 +14,7 @@
  *   node ./node_modules/tsx/dist/cli.cjs scripts/check-additive-migration.ts \
  *     20261015120000_external_catalog_import_tables 20261015120100_funding_call_status_staged
  *
- * With no arguments it checks the five catalogue-import migrations.
+ * With no arguments it checks the catalogue-import migrations.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -26,6 +26,7 @@ const DEFAULT_MIGRATIONS = [
   '20261015120300_funding_visibility_global_catalog',
   '20261015120400_funding_visibility_catalog_check',
   '20261016090000_external_source_checked_at',
+  '20261016100000_funding_call_vector_hnsw',
 ]
 
 const FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
@@ -60,8 +61,22 @@ function withoutCheckReplacements(body: string): string {
   )
 }
 
+/**
+ * Indexes a migration may drop because the same migration builds their
+ * replacement. An index holds no data. These two IVFFlat indexes were trained
+ * on empty columns, and with both present the planner prefers them over the
+ * HNSW replacement (20261016100000_funding_call_vector_hnsw). Any other index
+ * name still fails the check.
+ */
+const REPLACED_INDEXES = new Set(['funding_calls_embedding_idx', 'funding_calls_embedding_voyage_1024_idx'])
+const INDEX_DROP = /DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?("[^"]+"|[\w.]+)\s*;/gi
+
+function withoutReplacedIndexDrops(body: string): string {
+  return body.replace(INDEX_DROP, (match, name: string) => (REPLACED_INDEXES.has(name.replace(/"/g, '')) ? ' ' : match))
+}
+
 export function findForbiddenStatements(sql: string): string[] {
-  const body = withoutCheckReplacements(stripComments(sql))
+  const body = withoutReplacedIndexDrops(withoutCheckReplacements(stripComments(sql)))
   return FORBIDDEN.filter(({ pattern }) => pattern.test(body)).map(({ label }) => label)
 }
 

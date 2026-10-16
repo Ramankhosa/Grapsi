@@ -12,6 +12,7 @@ import {
 } from '../funding/llmRouting';
 import { extractJsonObject } from '../recommendations/conversationUtils';
 import { sanitizeExternalUrls } from '../urlSafety';
+import { withVectorSearchSettings } from '../vectorSearch';
 import type {
   RecommendationDirectoryRequest,
   RecommendationDirectoryResponse,
@@ -2025,7 +2026,9 @@ Rules:
       throw new Error('Embedding generation failed');
     }
 
-    const rows = await prisma.$queryRaw<RecommendationCandidate[]>(
+    // HNSW settings (ef_search, iterative scan) so the filtered nearest-
+    // neighbour scan fills all VECTOR_CANDIDATE_LIMIT slots.
+    const rows = await withVectorSearchSettings(prisma.$queryRaw<RecommendationCandidate[]>(
       Prisma.sql`
         SELECT
           ${selectCandidateColumns()},
@@ -2037,7 +2040,7 @@ Rules:
         ORDER BY ${fundingCallSearchEmbeddingColumnSql()} <=> CAST(${vectorLiteral} AS vector) ASC
         LIMIT ${VECTOR_CANDIDATE_LIMIT}
       `
-    );
+    ));
 
     return {
       candidates: rows,

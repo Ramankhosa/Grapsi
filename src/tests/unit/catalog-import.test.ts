@@ -189,6 +189,10 @@ describe('migration guard', () => {
     expect(findForbiddenStatements('ALTER TABLE "x" DROP CONSTRAINT "c", ADD CONSTRAINT "d" CHECK (true);')).not.toEqual([])
     expect(findForbiddenStatements('ALTER TABLE "x" DROP COLUMN "y";')).not.toEqual([])
     expect(findForbiddenStatements('UPDATE funding_calls SET title = 1;')).not.toEqual([])
+    // Only the two empty-trained IVFFlat indexes the HNSW migration replaces.
+    expect(findForbiddenStatements('DROP INDEX IF EXISTS "funding_calls_embedding_voyage_1024_idx";')).toEqual([])
+    expect(findForbiddenStatements('DROP INDEX IF EXISTS "funding_calls_ts_idx";')).not.toEqual([])
+    expect(findForbiddenStatements('DROP INDEX "funding_calls_embedding_idx"; DROP TABLE "x";')).not.toEqual([])
     expect(findForbiddenStatements('-- a comment that says DROP TABLE\nALTER TABLE "x" ADD COLUMN "z" INT;')).toEqual([])
   })
 })
