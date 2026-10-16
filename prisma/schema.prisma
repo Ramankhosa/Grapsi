@@ -530,6 +530,12 @@ model Tenant {
   /// basis for keeping foreign-only calls out of DSR queues; it never decides
   /// an individual's eligibility. Null = not configured (legacy behaviour).
   country_code String? @db.VarChar(2)
+  /// ISO 4217. NULL = INR (src/lib/tenant/locale.ts).
+  default_currency String? @db.VarChar(3)
+  /// IANA time zone for day boundaries, deadlines and dates. NULL = Asia/Kolkata.
+  timezone String?
+  /// BCP 47 locale for numbers and dates. NULL = en-IN.
+  locale String?
 
   users     User[]
   projects  Project[]
@@ -3118,6 +3124,10 @@ model ResearcherProfile {
   birth_year            Int?
   country_of_residence  String?
   citizenship_countries String[]               @default([])
+  /// ISO 3166 alpha-2 of country_of_residence (names stay the source of truth for display).
+  residence_country_code String? @db.VarChar(2)
+  /// ISO 3166 alpha-2 codes of citizenship_countries.
+  citizenship_country_codes String[] @default([])
   institution_name      String?
   institution_type      String?
   department            String?

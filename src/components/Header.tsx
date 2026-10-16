@@ -434,7 +434,10 @@ export default function Header() {
                 : []),
               { href: '/tenant-admin/faculty', icon: '\u{1F393}', title: 'Faculty & Organization', description: 'Build the school/department tree and import the faculty roster' },
               ...(isOwnerOrAdmin
-                ? [{ href: '/tenant-admin/funding-dept', icon: '\u{1F9ED}', title: 'Funding Department', description: 'Staff the sponsored-research office and assign each member schools' }]
+                ? [
+                    { href: '/tenant-admin/funding-dept', icon: '\u{1F9ED}', title: 'Funding Department', description: 'Staff the sponsored-research office and assign each member schools' },
+                    { href: '/tenant-admin/settings', icon: '\u{1F310}', title: 'Regional Settings', description: 'Currency, time zone and date format for your organization' },
+                  ]
                 : []),
             ],
           },

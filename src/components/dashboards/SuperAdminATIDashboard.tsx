@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import TenantRegionalSettingsCard from './TenantRegionalSettingsCard'
 import { useAuth } from '@/lib/auth-context'
 
 interface ATIToken {
@@ -592,6 +593,8 @@ export default function SuperAdminATIDashboard() {
             )}
           </div>
         </div>
+
+        <TenantRegionalSettingsCard tenants={tenants} />
 
         <div className="bg-white shadow rounded-lg mb-8">
           <div className="px-4 py-5 sm:p-6">

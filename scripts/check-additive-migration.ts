@@ -28,6 +28,7 @@ const DEFAULT_MIGRATIONS = [
   '20261016090000_external_source_checked_at',
   '20261016100000_funding_call_vector_hnsw',
   '20261016110000_funding_call_search_text',
+  '20261016120000_tenant_locale_settings',
 ]
 
 const FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
