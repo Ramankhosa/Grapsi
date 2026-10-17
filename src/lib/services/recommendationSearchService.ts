@@ -73,8 +73,11 @@ const embeddingService = new EmbeddingService();
 
 const VECTOR_CANDIDATE_LIMIT = 60;
 const FULLTEXT_CANDIDATE_LIMIT = 60;
-const MERGED_CANDIDATE_LIMIT = 100;
-const RERANK_CANDIDATE_LIMIT = 50;
+// Every candidate is kept and re-ranked. A re-ranker score and a raw similarity
+// (or none) are on different scales, and mixing them let keyword hits the
+// re-ranker never saw outrank the matches it judged best.
+const MERGED_CANDIDATE_LIMIT = VECTOR_CANDIDATE_LIMIT + FULLTEXT_CANDIDATE_LIMIT;
+const RERANK_CANDIDATE_LIMIT = MERGED_CANDIDATE_LIMIT;
 const NO_RESULT_SCORE_THRESHOLD = 0.2;
 const LOW_CONFIDENCE_THRESHOLD = 0.35;
 const TOPIC_RELEVANCE_SEMANTIC_THRESHOLD = 0.45;
@@ -1411,10 +1414,17 @@ function clearFilterKey(
   }
 }
 
-function scoreCandidate(
+/**
+ * `semanticSearch` is decided once per search, never per call: a call the
+ * meaning search could not measure (no vector yet, re-ranker down) must not
+ * outrank calls it measured and found weak. The keyword formula is for searches
+ * with no meaning signal at all (embeddings down, the directory's word search).
+ */
+export function scoreCandidate(
   candidate: RecommendationCandidate,
   normalized: NormalizedRecommendationSearchRequest,
-  profileMatch: RecommendationProfileMatch | null = null
+  profileMatch: RecommendationProfileMatch | null,
+  semanticSearch: boolean
 ) {
   const textRank = normalizeTextRank(candidate.textRank);
   const researchTags = normalized.normalizedQuery.researchTags;
@@ -1443,9 +1453,7 @@ function scoreCandidate(
   ].reduce((sum, value) => sum + value, 0) / 3;
 
   const deadlineFreshness = computeDeadlineFreshness(candidate.closeDate, candidate.isRolling);
-  const hasSemanticSignal = candidate.semanticSimilarity >= 0.08;
-
-  const baseScore = !hasSemanticSignal
+  const baseScore = !semanticSearch
     ? (
       textRank * 0.5 +
       disciplineOverlap * 0.22 +
@@ -1961,7 +1969,7 @@ export class RecommendationSearchService {
         return {
           candidate,
           profileMatch,
-          score: scoreCandidate(candidate, normalized, profileMatch),
+          score: scoreCandidate(candidate, normalized, profileMatch, hasSemanticCandidates),
         };
       }),
       normalized,
@@ -2507,7 +2515,8 @@ Rules:
   private async searchByFullText(
     normalized: NormalizedRecommendationSearchRequest,
     ignoreUserFilters = false,
-    access?: RecommendationAccessScope
+    access?: RecommendationAccessScope,
+    queryVectorLiteral: string | null = null
   ): Promise<RecommendationCandidate[]> {
     if (!normalized.normalizedQuery.fullTextQuery) {
       return [];
@@ -2515,12 +2524,11 @@ Rules:
 
     const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
     const queryText = normalized.normalizedQuery.fullTextQuery;
-
-    return prisma.$queryRaw<RecommendationCandidate[]>(
+    const run = (similarity: Prisma.Sql) => prisma.$queryRaw<RecommendationCandidate[]>(
       Prisma.sql`
         SELECT
           ${selectCandidateColumns()},
-          0::float AS "semanticSimilarity",
+          ${similarity} AS "semanticSimilarity",
           ts_rank_cd(ts_document, websearch_to_tsquery('english', ${queryText})) AS "textRank"
         FROM funding_calls
         WHERE ${buildFundingCallTextSearchCondition(queryText)}
@@ -2529,6 +2537,20 @@ Rules:
         LIMIT ${FULLTEXT_CANDIDATE_LIMIT}
       `
     );
+
+    if (!queryVectorLiteral) {
+      return run(Prisma.sql`0::float`);
+    }
+    // A keyword hit outside the nearest-neighbour list still gets its real
+    // similarity, so it is scored on meaning like every other candidate (0 only
+    // when the call has no vector yet). If that fails, keywords alone must
+    // still answer: the vector branch may be the thing that is broken.
+    try {
+      return await run(Prisma.sql`COALESCE(1 - (${fundingCallSearchEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)), 0)::float`);
+    } catch (error) {
+      console.warn('Funding full-text similarity failed; keyword ranks only.', error instanceof Error ? error.message : String(error));
+      return run(Prisma.sql`0::float`);
+    }
   }
 
   private mergeCandidates(vectorCandidates: RecommendationCandidate[], fullTextCandidates: RecommendationCandidate[]) {
@@ -2619,7 +2641,7 @@ Rules:
   ): Promise<SearchExecutionResult> {
     const [vectorResult, fullTextResult] = await Promise.allSettled([
       this.searchByVector(normalized, ignoreUserFilters, access, llmContext, options),
-      this.searchByFullText(normalized, ignoreUserFilters, access),
+      this.searchByFullText(normalized, ignoreUserFilters, access, options.queryVectorLiteral ?? null),
     ]);
 
     let degradedMode: 'full_text_only' | null = null;
@@ -3041,7 +3063,7 @@ Rules:
 
     const scoredRows = rows.map((candidate) => {
       const profileMatch = buildProfileMatch(candidate, profileContext);
-      const score = hasQuery || profileMatch ? scoreCandidate(candidate, normalized, profileMatch) : 0;
+      const score = hasQuery || profileMatch ? scoreCandidate(candidate, normalized, profileMatch, false) : 0;
       return { candidate, score, profileMatch };
     });
     const applicant = applicantFromProfile(profileContext);
