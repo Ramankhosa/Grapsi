@@ -28,6 +28,20 @@ export interface RecommendationSearchFilters {
   sdgGoals?: string[];
   /** Programme prefixes: "Horizon Europe" also matches "Horizon Europe › Cluster 5 › Pillar II". */
   programmeFrameworks?: string[];
+  /** Qualification the call asks for (QUALIFICATION_OPTIONS). */
+  qualifications?: string[];
+  /** Project length buckets (PROJECT_DURATION_OPTIONS): the call's range overlaps one. */
+  projectDurations?: string[];
+  /** Groups a call is aimed at (TARGET_GROUP_OPTIONS). */
+  targetGroups?: string[];
+  /** INCLUDED | DIRECT_ONLY | CO_FUND. */
+  indirectCostPolicies?: string[];
+  /** inbound | outbound. */
+  mobility?: string[];
+  /** How applications reach the funder (APPLICATION_ROUTE_OPTIONS). */
+  applicationRoutes?: string[];
+  /** Hide calls open to members of a society only. */
+  noMembershipNeeded?: boolean;
   deadlineFrom?: string;
   deadlineTo?: string;
   rollingOnly?: boolean;
@@ -230,6 +244,8 @@ export interface RecommendationCandidate {
   taxonomyAreaIds?: string[];
   /** Imported external-catalogue call (GLOBAL_CATALOG). */
   isCatalog?: boolean;
+  /** The funder takes a limited number of applications per institution. */
+  limitedSubmissions?: boolean;
   /** False for imported calls whose official guidelines are not fetched yet. */
   authoringReady?: boolean;
   /** The call's stored eligibility dimensions (snake_case), when any is evaluated. */
@@ -263,6 +279,8 @@ export interface RecommendationSearchResultItem {
   matchedAreas?: RecommendationAreaMatch[];
   /** Imported external-catalogue call (GLOBAL_CATALOG). */
   isCatalog?: boolean;
+  /** The funder takes a limited number of applications per institution. */
+  limitedSubmissions?: boolean;
   /** False for imported calls whose official guidelines are not fetched yet. */
   authoringReady?: boolean;
   /**
@@ -356,7 +374,13 @@ export type DirectoryFacetDimension =
   | 'sdgGoal'
   | 'programmeFramework'
   | 'region'
-  | 'geographyScope';
+  | 'geographyScope'
+  | 'qualification'
+  | 'projectDuration'
+  | 'targetGroup'
+  | 'indirectCosts'
+  | 'mobility'
+  | 'applicationRoute';
 
 export interface DirectoryFacetItem {
   value: string;
@@ -377,5 +401,7 @@ export interface DirectoryFacetRequest {
 export interface DirectoryFacetResponse {
   /** Calls matching every filter and the search text: the result count. */
   totalPublished: number;
+  /** For yes/no filters: how many calls each would hide under the other filters. */
+  toggles?: { membershipRequired: number };
   facets: Record<DirectoryFacetDimension, DirectoryFacetItem[]>;
 }

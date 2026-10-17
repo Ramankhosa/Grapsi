@@ -39,6 +39,12 @@ import {
   RECOMMENDATION_REGION_OPTIONS as REGION_VALUES,
   RECOMMENDATION_GEOGRAPHY_SCOPE_OPTIONS as GEOGRAPHY_SCOPE_VALUES,
   RECOMMENDATION_SPONSOR_TYPE_OPTIONS as SPONSOR_TYPE_VALUES,
+  APPLICATION_ROUTE_LABELS,
+  INDIRECT_COST_LABELS,
+  MOBILITY_LABELS,
+  PROJECT_DURATION_BUCKETS,
+  QUALIFICATION_OPTIONS,
+  TARGET_GROUP_OPTIONS,
 } from '../recommendations/constants';
 import type {
   FinderFilterSuggestionChip,
@@ -89,6 +95,12 @@ import {
   normalizeCountryInput,
   normalizeCountryList,
   keepCountries,
+  normalizeQualificationList,
+  normalizeProjectDurationList,
+  normalizeTargetGroupList,
+  normalizeIndirectCostList,
+  normalizeMobilityList,
+  normalizeApplicationRouteList,
   normalizeFundingKindList,
   normalizeGeographyScopeList,
   normalizeInstitutionTypeList,
@@ -914,6 +926,13 @@ const INFERRED_CONFIRMATION_FILTER_KEYS: Array<keyof RecommendationSearchFilters
   'rollingOnly',
   'amountMin',
   'amountMax',
+  'qualifications',
+  'projectDurations',
+  'targetGroups',
+  'indirectCostPolicies',
+  'mobility',
+  'applicationRoutes',
+  'noMembershipNeeded',
 ];
 
 const HIGH_RISK_CONFIRMATION_FILTER_KEYS = new Set<keyof RecommendationSearchFilters>([
@@ -929,6 +948,9 @@ const HIGH_RISK_CONFIRMATION_FILTER_KEYS = new Set<keyof RecommendationSearchFil
   'applicationLanguages',
   'sponsorTypes',
   'taxonomyAreaIds',
+  'qualifications',
+  'targetGroups',
+  'applicationRoutes',
 ]);
 
 const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
@@ -948,6 +970,13 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   funderIds: 'Funders',
   sdgGoals: 'SDGs',
   programmeFrameworks: 'Programmes',
+  qualifications: 'Qualification asked for',
+  projectDurations: 'Project length',
+  targetGroups: 'Aimed at',
+  indirectCostPolicies: 'Indirect costs',
+  mobility: 'Mobility',
+  applicationRoutes: 'How to apply',
+  noMembershipNeeded: 'No society membership needed',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
@@ -970,6 +999,13 @@ function isActiveFilterValue(
   }
   return value !== null && value !== undefined && value !== false && value !== '';
 }
+
+const CODED_FILTER_VALUE_LABELS: Record<'projectDurations' | 'indirectCostPolicies' | 'mobility' | 'applicationRoutes', Record<string, string>> = {
+  projectDurations: Object.fromEntries(Object.entries(PROJECT_DURATION_BUCKETS).map(([value, bucket]) => [value, bucket.label])),
+  indirectCostPolicies: INDIRECT_COST_LABELS,
+  mobility: MOBILITY_LABELS,
+  applicationRoutes: APPLICATION_ROUTE_LABELS,
+};
 
 function formatFilterDescription(
   filters: Required<RecommendationSearchFilters>,
@@ -999,6 +1035,16 @@ function formatFilterDescription(
       return filters.funderIds.length ? `${label}: ${filters.funderIds.length} selected` : null;
     case 'sdgGoals':
       return filters.sdgGoals.length ? `${label}: ${filters.sdgGoals.map((goal) => `SDG ${goal}`).slice(0, 3).join(', ')}` : null;
+    case 'projectDurations':
+    case 'indirectCostPolicies':
+    case 'mobility':
+    case 'applicationRoutes': {
+      const labels = CODED_FILTER_VALUE_LABELS[key];
+      const values = filters[key];
+      return values.length ? `${label}: ${values.slice(0, 3).map((value) => labels[value] || value).join(', ')}` : null;
+    }
+    case 'noMembershipNeeded':
+      return filters.noMembershipNeeded ? label : null;
     default: {
       const value = filters[key];
       if (!Array.isArray(value) || value.length === 0) {
@@ -1040,6 +1086,13 @@ function describeActiveFilters(
     'amountMax',
     'amountCurrency',
     'includeUnknownAmount',
+    'qualifications',
+    'projectDurations',
+    'targetGroups',
+    'indirectCostPolicies',
+    'mobility',
+    'applicationRoutes',
+    'noMembershipNeeded',
   ];
   const seen = new Set<string>();
   const descriptions: string[] = [];
@@ -1109,6 +1162,35 @@ function messageMatchesAliasedValue(
   return Object.entries(aliases).some(([alias, value]) => value === canonicalValue && normalizedMessage.includes(alias));
 }
 
+/** Words that show a user asked for a value outright (normalizeKey form). */
+const EXPLICIT_VALUE_WORDS: Record<string, string[]> = {
+  PhD: ['phd', 'doctorate', 'doctoral'],
+  MD: ['md ', 'medical degree', 'physician'],
+  'MD/PhD': ['md phd', 'mdphd'],
+  DO: ['osteopath'],
+  'Any doctoral degree': ['doctorate', 'doctoral', 'phd'],
+  "Master's degree": ['master'],
+  'Undergraduate degree': ['undergraduate', 'bachelor'],
+  up_to_1_year: ['short', 'one year', '1 year', '12 month', 'months'],
+  '1_to_3_years': ['2 year', 'two year', '3 year', 'three year', 'multi year', 'multi-year'],
+  over_3_years: ['long term', 'long-term', '4 year', 'four year', '5 year', 'five year'],
+  'Women researchers only': ['women', 'woman', 'female'],
+  'Women researchers encouraged': ['women', 'woman', 'female'],
+  'Minority researchers only': ['minorit', 'underrepresented'],
+  'Minority researchers encouraged': ['minorit', 'underrepresented'],
+  'Researchers with disability': ['disab'],
+  'Researchers at risk': ['at risk', 'refugee'],
+  INCLUDED: ['overhead', 'indirect'],
+  DIRECT_ONLY: ['direct cost'],
+  CO_FUND: ['co fund', 'co-fund', 'cofund', 'matching'],
+  inbound: ['abroad', 'inbound', 'visiting', 'mobility'],
+  outbound: ['abroad', 'outbound', 'mobility'],
+  not_stated: ['nominat'],
+  self_nomination: ['self nomination', 'self-nomination', 'nominate myself'],
+  nomination_only: ['nominat'],
+  limited_submissions: ['limited submission'],
+};
+
 function filterValueExplicitlyRequested(
   message: string,
   filters: Required<RecommendationSearchFilters>,
@@ -1152,6 +1234,17 @@ function filterValueExplicitlyRequested(
     }
     case 'rollingOnly':
       return filters.rollingOnly && normalizedMessage.includes('rolling');
+    case 'qualifications':
+    case 'projectDurations':
+    case 'targetGroups':
+    case 'indirectCostPolicies':
+    case 'mobility':
+    case 'applicationRoutes':
+      return (filters[key] as string[]).every((value) =>
+        (EXPLICIT_VALUE_WORDS[value] || [normalizeKey(value)]).some((word) => normalizedMessage.includes(word))
+      );
+    case 'noMembershipNeeded':
+      return filters.noMembershipNeeded && normalizedMessage.includes('member');
     case 'amountMin':
       return filters.amountMin !== null && new RegExp(`\\b${filters.amountMin}\\b`).test(normalizedMessage);
     case 'amountMax':
@@ -1544,6 +1637,14 @@ eligibleCountries: countries a call must be open to (as residence and citizenshi
 citizenshipRequirements: the applicant's citizenship countries ("I am an Indian citizen")
 residencyRequirements: the applicant's country of residence ("I live in the UK"); an Indian citizen living in the UK is citizenshipRequirements ["India"] and residencyRequirements ["United Kingdom"]
 applicationLanguages: languages the applicant can apply in (calls that state no language are kept)
+Set these only when the user asks for them outright:
+qualifications (degree the call asks for): ${QUALIFICATION_OPTIONS.join(', ')}
+projectDurations: up_to_1_year, 1_to_3_years, over_3_years
+targetGroups: ${TARGET_GROUP_OPTIONS.join(', ')}
+indirectCostPolicies: INCLUDED (covers overheads), DIRECT_ONLY, CO_FUND
+mobility: inbound (coming from abroad), outbound (going abroad)
+applicationRoutes: not_stated, self_nomination, nomination_only, limited_submissions ("no nomination needed" = not_stated + self_nomination)
+noMembershipNeeded: true to hide calls open to society members only
 sort: best_match, deadline_soonest`
   );
 
@@ -2424,6 +2525,13 @@ export class RecommendationConversationService {
     if (Array.isArray(filterPatch.applicationLanguages)) cleaned.applicationLanguages = bound(normalizeApplicationLanguageList(filterPatch.applicationLanguages));
     if (Array.isArray(filterPatch.sponsorTypes)) cleaned.sponsorTypes = bound(normalizeSponsorTypeList(filterPatch.sponsorTypes));
     if (Array.isArray(filterPatch.taxonomyAreaIds)) cleaned.taxonomyAreaIds = bound(filterPatch.taxonomyAreaIds);
+    if (Array.isArray(filterPatch.qualifications)) cleaned.qualifications = bound(normalizeQualificationList(filterPatch.qualifications));
+    if (Array.isArray(filterPatch.projectDurations)) cleaned.projectDurations = bound(normalizeProjectDurationList(filterPatch.projectDurations));
+    if (Array.isArray(filterPatch.targetGroups)) cleaned.targetGroups = bound(normalizeTargetGroupList(filterPatch.targetGroups));
+    if (Array.isArray(filterPatch.indirectCostPolicies)) cleaned.indirectCostPolicies = bound(normalizeIndirectCostList(filterPatch.indirectCostPolicies));
+    if (Array.isArray(filterPatch.mobility)) cleaned.mobility = bound(normalizeMobilityList(filterPatch.mobility));
+    if (Array.isArray(filterPatch.applicationRoutes)) cleaned.applicationRoutes = bound(normalizeApplicationRouteList(filterPatch.applicationRoutes));
+    if (typeof filterPatch.noMembershipNeeded === 'boolean') cleaned.noMembershipNeeded = filterPatch.noMembershipNeeded;
     // The applicant's countries; anything that is not a country is dropped.
     if (Array.isArray(filterPatch.citizenshipRequirements)) cleaned.citizenshipRequirements = bound(keepCountries(filterPatch.citizenshipRequirements));
     if (Array.isArray(filterPatch.residencyRequirements)) cleaned.residencyRequirements = bound(keepCountries(filterPatch.residencyRequirements));
@@ -2504,6 +2612,13 @@ Return a JSON object with this schema:
     "residencyRequirements": [],
     "applicationLanguages": [],
     "sponsorTypes": [],
+    "qualifications": [],
+    "projectDurations": [],
+    "targetGroups": [],
+    "indirectCostPolicies": [],
+    "mobility": [],
+    "applicationRoutes": [],
+    "noMembershipNeeded": null,
     "deadlineFrom": null,
     "deadlineTo": null,
     "rollingOnly": null,

@@ -60,6 +60,68 @@ export const SDG_GOAL_LABELS: Record<string, string> = {
   '17': 'Partnerships for the goals',
 };
 
+/**
+ * Filters on facts the external catalogue states (curated intake does not
+ * record them yet). Values are what the data holds; coded values carry a
+ * label for people.
+ */
+export const QUALIFICATION_OPTIONS = [
+  'PhD',
+  'MD',
+  'MD/PhD',
+  'DO',
+  'Any doctoral degree',
+  "Master's degree",
+  'Undergraduate degree',
+] as const;
+
+/** Project length buckets, in months: [from, to] (to null = no upper end). */
+export const PROJECT_DURATION_BUCKETS: Record<string, { label: string; months: [number, number | null] }> = {
+  up_to_1_year: { label: 'Up to 1 year', months: [1, 12] },
+  '1_to_3_years': { label: '1 to 3 years', months: [13, 36] },
+  over_3_years: { label: 'Over 3 years', months: [37, null] },
+};
+export const PROJECT_DURATION_OPTIONS = Object.keys(PROJECT_DURATION_BUCKETS);
+
+export const TARGET_GROUP_OPTIONS = [
+  'Women researchers only',
+  'Women researchers encouraged',
+  'Minority researchers only',
+  'Minority researchers encouraged',
+  'Researchers with disability',
+  'Researchers at risk',
+] as const;
+
+export const INDIRECT_COST_LABELS: Record<string, string> = {
+  INCLUDED: 'Covers indirect costs',
+  DIRECT_ONLY: 'Direct costs only',
+  CO_FUND: 'Co-funding expected',
+};
+export const INDIRECT_COST_OPTIONS = Object.keys(INDIRECT_COST_LABELS);
+
+/** Mobility values, and the source facet each stands for. */
+export const MOBILITY_LABELS: Record<string, string> = {
+  inbound: 'Coming from abroad',
+  outbound: 'Going abroad',
+};
+export const MOBILITY_SOURCE_VALUES: Record<string, string> = {
+  inbound: 'Global mobility - inbound',
+  outbound: 'Global mobility - outbound',
+};
+export const MOBILITY_OPTIONS = Object.keys(MOBILITY_LABELS);
+
+/**
+ * How applications reach the funder, from the call's nomination note. A call
+ * that says nothing about nomination is "not_stated" (every curated call).
+ */
+export const APPLICATION_ROUTE_LABELS: Record<string, string> = {
+  not_stated: 'No nomination stated',
+  self_nomination: 'Self-nomination allowed',
+  nomination_only: 'By nomination only',
+  limited_submissions: 'Limited submissions per institution',
+};
+export const APPLICATION_ROUTE_OPTIONS = Object.keys(APPLICATION_ROUTE_LABELS);
+
 /** Currencies offered for amount filters (others are accepted by the API). */
 export const RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'INR', 'CAD', 'AUD', 'CHF', 'JPY', 'SEK'] as const;
 

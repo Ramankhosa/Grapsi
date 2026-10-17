@@ -16,6 +16,12 @@ export const FACET_DIMENSION_FIELD = {
   programmeFramework: 'programmeFrameworks',
   region: 'eligibleRegions',
   geographyScope: 'geographyScope',
+  qualification: 'qualifications',
+  projectDuration: 'projectDurations',
+  targetGroup: 'targetGroups',
+  indirectCosts: 'indirectCostPolicies',
+  mobility: 'mobility',
+  applicationRoute: 'applicationRoutes',
 } as const satisfies Record<DirectoryFacetDimension, keyof RecommendationSearchFilters>;
 
 export type FacetFilterField = (typeof FACET_DIMENSION_FIELD)[DirectoryFacetDimension];

@@ -43,6 +43,8 @@ import {
   MULTI_AREA_MATCH_BONUS,
   MULTI_AREA_MIN_SLOTS_PER_AREA,
   SDG_GOAL_LABELS,
+  MOBILITY_SOURCE_VALUES,
+  PROJECT_DURATION_BUCKETS,
 } from '../recommendations/constants';
 import { resolveCountryList } from '../geo/countries';
 import { FACET_DIMENSION_FIELD, FACET_FILTER_FIELDS, type FacetFilterField } from '../recommendations/directorySelections';
@@ -58,6 +60,12 @@ import {
   normalizeRecommendationSearchRequest,
   normalizeRegionList,
   normalizeSponsorTypeList,
+  normalizeQualificationList,
+  normalizeTargetGroupList,
+  normalizeIndirectCostList,
+  normalizeMobilityList,
+  normalizeProjectDurationList,
+  normalizeApplicationRouteList,
   normalizeWhitespace,
 } from '../recommendations/utils';
 
@@ -76,7 +84,8 @@ const QUERY_EMBEDDING_CACHE_VERSION_PREFIX = 'funding-query-v1';
 const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
   ['taxonomyAreaIds'],
-  ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sdgGoals', 'programmeFrameworks'],
+  ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sdgGoals', 'programmeFrameworks',
+    'qualifications', 'projectDurations', 'targetGroups', 'indirectCostPolicies', 'mobility', 'applicationRoutes', 'noMembershipNeeded'],
   ['hostCountries', 'eligibleRegions', 'geographyScope', 'funderCountries'],
   ['eligibleCountries'],
   ['fundingKinds', 'funderIds'],
@@ -396,15 +405,59 @@ function countryCodesForFilter(values: string[]) {
  */
 const CURATED_FIRST_SQL = Prisma.sql`(import_run_id IS NULL) DESC`;
 
+/** The source's mobility facet of a call row (imported calls only). */
+const MOBILITY_SQL = Prisma.raw(`(metadata #> '{catalog_import,source_facets,mobility}')`);
+
+/**
+ * Project length buckets: the call's stated range overlaps one. A call that
+ * states only a maximum ("up to 24 months") could run from a month to it; one
+ * that states only a minimum runs for exactly that long.
+ */
+function projectDurationCondition(buckets: string[]) {
+  const low = Prisma.sql`COALESCE(project_duration_min_months, 1)`;
+  const high = Prisma.sql`COALESCE(project_duration_max_months, project_duration_min_months)`;
+  const parts = buckets
+    .map((bucket) => PROJECT_DURATION_BUCKETS[bucket])
+    .filter(Boolean)
+    .map(({ months: [from, to] }) =>
+      to === null ? Prisma.sql`(${high} >= ${from})` : Prisma.sql`(${low} <= ${to} AND ${high} >= ${from})`
+    );
+  if (parts.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`(${high} IS NOT NULL AND (${Prisma.join(parts, ' OR ')}))`;
+}
+
+/**
+ * How applications reach the funder, read from the nomination note ("By
+ * nomination only", "By nomination (including self-nomination)", "Limited
+ * submissions", joined with "; "). No note: nothing stated.
+ */
+const APPLICATION_ROUTE_SQL: Record<string, Prisma.Sql> = {
+  not_stated: Prisma.sql`(COALESCE(nomination_note, '') = '')`,
+  self_nomination: Prisma.sql`(position('self-nomination' in lower(COALESCE(nomination_note, ''))) > 0)`,
+  nomination_only: Prisma.sql`(position('by nomination only' in lower(COALESCE(nomination_note, ''))) > 0)`,
+  limited_submissions: Prisma.sql`(position('limited submissions' in lower(COALESCE(nomination_note, ''))) > 0)`,
+};
+
+function mobilityCondition(values: string[], mobility: Prisma.Sql) {
+  const sourceValues = values.map((value) => MOBILITY_SOURCE_VALUES[value]).filter(Boolean);
+  if (sourceValues.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${mobility}) = 'array' THEN ${mobility} ELSE '[]'::jsonb END) AS mobility_value(value)
+    WHERE mobility_value.value = ANY(${sqlTextArray(sourceValues)})
+  )`;
+}
+
 /**
  * The condition of one facet-able filter (values are alternatives), or null
  * when nothing is chosen. Reads unqualified columns, so the directory facets
- * can apply it to their materialized row set; callId names the row's id there.
+ * can apply it to their materialized row set; callId names the row's id there,
+ * mobility the row's mobility facet.
  */
 function facetFilterCondition(
   field: FacetFilterField,
   filters: Required<RecommendationSearchFilters>,
-  callId: Prisma.Sql = Prisma.raw('funding_calls.id')
+  callId: Prisma.Sql = Prisma.raw('funding_calls.id'),
+  mobility: Prisma.Sql = MOBILITY_SQL
 ): Prisma.Sql | null {
   const values = filters[field];
   if (!values || values.length === 0) return null;
@@ -434,8 +487,25 @@ function facetFilterCondition(
         WHERE LOWER(programme_framework) = LOWER(programme)
            OR starts_with(LOWER(programme_framework), LOWER(programme) || ' › ')
       )`;
+    case 'qualifications':
+      return buildArrayAnyCondition('required_qualifications', values);
+    case 'targetGroups':
+      return buildArrayAnyCondition('target_groups', values);
+    case 'indirectCostPolicies':
+      return buildScalarAnyCondition('indirect_cost_policy', values);
+    case 'projectDurations':
+      return projectDurationCondition(values);
+    case 'mobility':
+      return mobilityCondition(values, mobility);
+    case 'applicationRoutes': {
+      const parts = values.map((value) => APPLICATION_ROUTE_SQL[value]).filter(Boolean);
+      return parts.length > 0 ? Prisma.sql`(${Prisma.join(parts, ' OR ')})` : Prisma.sql`FALSE`;
+    }
   }
 }
+
+/** Members-only calls: a society membership is required to apply. */
+const MEMBERSHIP_REQUIRED_SQL = Prisma.sql`(cardinality(membership_requirements) > 0)`;
 
 /** Facets whose values come from a controlled vocabulary (normalizer per facet). */
 const FACET_VOCABULARY: Partial<Record<DirectoryFacetDimension, (values: string[]) => string[] | null>> = {
@@ -445,6 +515,13 @@ const FACET_VOCABULARY: Partial<Record<DirectoryFacetDimension, (values: string[
   sponsorType: normalizeSponsorTypeList,
   region: normalizeRegionList,
   geographyScope: normalizeGeographyScopeList,
+  qualification: normalizeQualificationList,
+  targetGroup: normalizeTargetGroupList,
+  // UNSPECIFIED is not offered: "not stated" is not a policy.
+  indirectCosts: normalizeIndirectCostList,
+  mobility: normalizeMobilityList,
+  projectDuration: normalizeProjectDurationList,
+  applicationRoute: normalizeApplicationRouteList,
 };
 
 /**
@@ -510,6 +587,10 @@ function buildBaseConditions(
   for (const field of FACET_FILTER_FIELDS) {
     const condition = facetFilterCondition(field, filters);
     if (condition) conditions.push(condition);
+  }
+
+  if (filters.noMembershipNeeded) {
+    conditions.push(Prisma.sql`NOT ${MEMBERSHIP_REQUIRED_SQL}`);
   }
 
   if (filters.applicationLanguages.length > 0) {
@@ -607,6 +688,7 @@ function selectCandidateColumns() {
     COALESCE(residency_requirements, ARRAY[]::text[]) AS "residencyRequirements",
     COALESCE(application_languages, ARRAY[]::text[]) AS "applicationLanguages",
     (visibility::text = 'GLOBAL_CATALOG') AS "isCatalog",
+    (position('limited submissions' in lower(COALESCE(nomination_note, ''))) > 0) AS "limitedSubmissions",
     -- Imported catalogue calls carry facts only until enrichment fetches the
     -- official guidelines; authoring needs them. Grant Prep does not open
     -- catalogue calls yet (start-grant-prep reads without includeCatalog), so
@@ -1194,6 +1276,7 @@ function toPublicResult(
     applicationLanguages: candidate.applicationLanguages,
     taxonomyAreaIds: candidate.taxonomyAreaIds || [],
     isCatalog: Boolean(candidate.isCatalog),
+    limitedSubmissions: Boolean(candidate.limitedSubmissions),
     authoringReady: candidate.authoringReady !== false,
     eligibilityVerdict: eligibilityVerdictFor(candidate, applicant),
     semanticSimilarity: candidate.semanticSimilarity,
@@ -1266,6 +1349,12 @@ function cloneFilters(filters: Required<RecommendationSearchFilters>): Required<
     funderIds: [...filters.funderIds],
     sdgGoals: [...filters.sdgGoals],
     programmeFrameworks: [...filters.programmeFrameworks],
+    qualifications: [...filters.qualifications],
+    projectDurations: [...filters.projectDurations],
+    targetGroups: [...filters.targetGroups],
+    indirectCostPolicies: [...filters.indirectCostPolicies],
+    mobility: [...filters.mobility],
+    applicationRoutes: [...filters.applicationRoutes],
   };
 }
 
@@ -1290,7 +1379,16 @@ function clearFilterKey(
     case 'funderIds':
     case 'sdgGoals':
     case 'programmeFrameworks':
+    case 'qualifications':
+    case 'projectDurations':
+    case 'targetGroups':
+    case 'indirectCostPolicies':
+    case 'mobility':
+    case 'applicationRoutes':
       filters[key] = [] as never;
+      break;
+    case 'noMembershipNeeded':
+      filters[key] = false as never;
       break;
     case 'amountCurrency':
       filters[key] = '' as never;
@@ -2681,18 +2779,32 @@ Rules:
     // calls choosing it as well would give, not the calls that are both.
     const withoutFacetFilters = {
       ...normalized,
-      filters: { ...filters, ...Object.fromEntries(FACET_FILTER_FIELDS.map((field) => [field, []])) },
+      filters: { ...filters, ...Object.fromEntries(FACET_FILTER_FIELDS.map((field) => [field, []])), noMembershipNeeded: false },
     } as NormalizedRecommendationSearchRequest;
     const where = combineConditions([
       ...buildBaseConditions(withoutFacetFilters, false, request.access),
       rawQuery ? directoryTextCondition(rawQuery) : Prisma.sql`TRUE`,
     ]);
     const dimensions = Object.keys(FACET_DIMENSION_FIELD) as DirectoryFacetDimension[];
-    const chosen = dimensions
-      .map((dimension) => ({ dimension, condition: facetFilterCondition(FACET_DIMENSION_FIELD[dimension], filters, Prisma.raw('matched.id')) }))
+    type Chosen = { dimension: DirectoryFacetDimension | 'membership'; condition: Prisma.Sql };
+    const chosen: Chosen[] = dimensions
+      .map((dimension) => ({
+        dimension,
+        condition: facetFilterCondition(FACET_DIMENSION_FIELD[dimension], filters, Prisma.raw('matched.id'), Prisma.raw('matched.source_mobility')),
+      }))
       .filter((entry): entry is { dimension: DirectoryFacetDimension; condition: Prisma.Sql } => entry.condition !== null);
-    const exceptOwn = (dimension: DirectoryFacetDimension) =>
+    if (filters.noMembershipNeeded) chosen.push({ dimension: 'membership', condition: Prisma.sql`NOT ${MEMBERSHIP_REQUIRED_SQL}` });
+    const exceptOwn = (dimension: Chosen['dimension']) =>
       combineConditions(chosen.filter((entry) => entry.dimension !== dimension).map((entry) => entry.condition));
+    // Bucketed facets: one row per value whose condition the call meets.
+    const bucketFacet = (dimension: DirectoryFacetDimension, cases: Record<string, Prisma.Sql>) => Prisma.sql`
+      SELECT * FROM (
+        SELECT ${tag(dimension)} AS dimension, bucket AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
+        FROM matched, unnest(${sqlTextArray(Object.keys(cases))}) AS bucket
+        WHERE ${exceptOwn(dimension)}
+          AND CASE bucket ${Prisma.join(Object.entries(cases).map(([value, condition]) => Prisma.sql`WHEN ${value} THEN ${condition}`), ' ')} ELSE FALSE END
+        GROUP BY bucket
+      ) ${Prisma.raw(`facet_${dimension}`)}`;
 
     type FacetRow = {
       dimension: string;
@@ -2729,7 +2841,10 @@ Rules:
     const rows = await prisma.$queryRaw<FacetRow[]>(Prisma.sql`
         WITH matched AS MATERIALIZED (
           SELECT id, funding_kinds, career_stages, institution_types, sponsor_type, eligible_regions, geography_scope,
-                 funder_id, agency_name, "agencyName", programme_framework, sdg_goals
+                 funder_id, agency_name, "agencyName", programme_framework, sdg_goals,
+                 required_qualifications, target_groups, indirect_cost_policy, nomination_note, membership_requirements,
+                 project_duration_min_months, project_duration_max_months,
+                 ${MOBILITY_SQL} AS source_mobility
           FROM funding_calls
           WHERE ${where}
         )
@@ -2764,6 +2879,16 @@ Rules:
         UNION ALL ${scalarFacet('sponsorType', 'sponsor_type')}
         UNION ALL ${listFacet('region', 'eligible_regions')}
         UNION ALL ${scalarFacet('geographyScope', 'geography_scope')}
+        UNION ALL ${listFacet('qualification', 'required_qualifications')}
+        UNION ALL ${listFacet('targetGroup', 'target_groups')}
+        UNION ALL ${scalarFacet('indirectCosts', 'indirect_cost_policy')}
+        UNION ALL ${bucketFacet('projectDuration', Object.fromEntries(Object.keys(PROJECT_DURATION_BUCKETS).map((bucket) => [bucket, projectDurationCondition([bucket])])))}
+        UNION ALL ${bucketFacet('applicationRoute', APPLICATION_ROUTE_SQL)}
+        UNION ALL ${bucketFacet('mobility', Object.fromEntries(Object.keys(MOBILITY_SOURCE_VALUES).map((value) => [value, mobilityCondition([value], Prisma.raw('matched.source_mobility'))])))}
+        UNION ALL
+        SELECT 'toggle:membershipRequired' AS dimension, NULL::text AS value, NULL::text AS label, ${noLevels}, COUNT(*)::int AS count
+        FROM matched
+        WHERE ${exceptOwn('membership')} AND ${MEMBERSHIP_REQUIRED_SQL}
         UNION ALL
         SELECT * FROM (
           SELECT 'funder' AS dimension, funder.id AS value, funder.name AS label, ${noLevels}, COUNT(*)::int AS count
@@ -2802,9 +2927,14 @@ Rules:
       DirectoryFacetItem[]
     >;
     let total = 0;
+    let membershipRequired = 0;
     for (const row of rows) {
       if (row.dimension === 'total') {
         total = row.count;
+        continue;
+      }
+      if (row.dimension === 'toggle:membershipRequired') {
+        membershipRequired = row.count;
         continue;
       }
       const dim = row.dimension as DirectoryFacetDimension;
@@ -2831,6 +2961,7 @@ Rules:
     return {
       totalPublished: total,
       facets,
+      toggles: { membershipRequired },
     };
   }
 

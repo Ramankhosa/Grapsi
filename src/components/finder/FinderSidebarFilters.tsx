@@ -32,6 +32,12 @@ const ARRAY_FILTER_KEYS: Array<keyof RecommendationSearchFilters> = [
   'funderIds',
   'sdgGoals',
   'programmeFrameworks',
+  'qualifications',
+  'projectDurations',
+  'targetGroups',
+  'indirectCostPolicies',
+  'mobility',
+  'applicationRoutes',
 ];
 
 /**
@@ -65,6 +71,7 @@ export default function FinderSidebarFilters({
   if (filters.amountMin !== null) scalarChips.push({ key: 'amountMin', label: `Min amount: ${filters.amountMin.toLocaleString()}${amountUnit}` });
   if (filters.amountMax !== null) scalarChips.push({ key: 'amountMax', label: `Max amount: ${filters.amountMax.toLocaleString()}${amountUnit}` });
   if (filters.includeUnknownAmount) scalarChips.push({ key: 'includeUnknownAmount', label: 'Include unknown amounts' });
+  if (filters.noMembershipNeeded) scalarChips.push({ key: 'noMembershipNeeded', label: 'No society membership needed' });
 
   const totalActive = groups.reduce((sum, group) => sum + group.values.length, 0) + scalarChips.length;
 

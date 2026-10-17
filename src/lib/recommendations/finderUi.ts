@@ -79,7 +79,7 @@ export function buildClearedScalarFilters(
   key: keyof RecommendationSearchFilters
 ) {
   const nextFilters = cloneRequiredFilters(filters);
-  if (key === 'rollingOnly' || key === 'includeExpired' || key === 'includeUnknownAmount') {
+  if (key === 'rollingOnly' || key === 'includeExpired' || key === 'includeUnknownAmount' || key === 'noMembershipNeeded') {
     nextFilters[key] = false as never;
   } else if (key === 'amountMin' || key === 'amountMax') {
     nextFilters[key] = null as never;

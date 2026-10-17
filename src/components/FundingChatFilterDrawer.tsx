@@ -14,6 +14,16 @@ import {
   RECOMMENDATION_SORT_OPTIONS,
   RECOMMENDATION_SPONSOR_TYPE_OPTIONS,
   SDG_GOAL_LABELS,
+  APPLICATION_ROUTE_LABELS,
+  APPLICATION_ROUTE_OPTIONS,
+  INDIRECT_COST_LABELS,
+  INDIRECT_COST_OPTIONS,
+  MOBILITY_LABELS,
+  MOBILITY_OPTIONS,
+  PROJECT_DURATION_BUCKETS,
+  PROJECT_DURATION_OPTIONS,
+  QUALIFICATION_OPTIONS,
+  TARGET_GROUP_OPTIONS,
 } from '../lib/recommendations/constants';
 
 type FilterCategoryKey = 'geography' | 'funding' | 'eligibility' | 'timing' | 'search';
@@ -236,6 +246,23 @@ export default function FundingChatFilterDrawer({
                   labelFor={(goal) => `${goal} · ${SDG_GOAL_LABELS[goal]}`}
                   onToggle={(value) => update({ sdgGoals: toggleListValue(filters.sdgGoals, value) })}
                 />
+                <FilterChips
+                  label="Project length"
+                  values={filters.projectDurations}
+                  options={PROJECT_DURATION_OPTIONS}
+                  labelFor={(value) => PROJECT_DURATION_BUCKETS[value]?.label || value}
+                  onToggle={(value) => update({ projectDurations: toggleListValue(filters.projectDurations, value) })}
+                />
+                <div>
+                  <FilterChips
+                    label="Indirect costs"
+                    values={filters.indirectCostPolicies}
+                    options={INDIRECT_COST_OPTIONS}
+                    labelFor={(value) => INDIRECT_COST_LABELS[value] || value}
+                    onToggle={(value) => update({ indirectCostPolicies: toggleListValue(filters.indirectCostPolicies, value) })}
+                  />
+                  <p className="cb-hint mt-1.5">Only calls that state this are shown.</p>
+                </div>
               </div>
             ) : null}
 
@@ -280,6 +307,47 @@ export default function FundingChatFilterDrawer({
                     onChange={(value) => update({ residencyRequirements: value })}
                   />
                 </div>
+                <div>
+                  <FilterChips
+                    label="Qualification asked for"
+                    values={filters.qualifications}
+                    options={QUALIFICATION_OPTIONS}
+                    onToggle={(value) => update({ qualifications: toggleListValue(filters.qualifications, value) })}
+                  />
+                  <p className="cb-hint mt-1.5">Only calls that state this are shown.</p>
+                </div>
+                <FilterChips
+                  label="Aimed at"
+                  values={filters.targetGroups}
+                  options={TARGET_GROUP_OPTIONS}
+                  onToggle={(value) => update({ targetGroups: toggleListValue(filters.targetGroups, value) })}
+                />
+                <div>
+                  <FilterChips
+                    label="How to apply"
+                    values={filters.applicationRoutes}
+                    options={APPLICATION_ROUTE_OPTIONS}
+                    labelFor={(value) => APPLICATION_ROUTE_LABELS[value] || value}
+                    onToggle={(value) => update({ applicationRoutes: toggleListValue(filters.applicationRoutes, value) })}
+                  />
+                  <p className="cb-hint mt-1.5">For calls you can apply to without a nominator, choose “No nomination stated” and “Self-nomination allowed”.</p>
+                </div>
+                <FilterChips
+                  label="Mobility"
+                  values={filters.mobility}
+                  options={MOBILITY_OPTIONS}
+                  labelFor={(value) => MOBILITY_LABELS[value] || value}
+                  onToggle={(value) => update({ mobility: toggleListValue(filters.mobility, value) })}
+                />
+                <label className="flex cursor-pointer items-center gap-2.5 text-[13px] text-ink">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(filters.noMembershipNeeded)}
+                    onChange={(event) => update({ noMembershipNeeded: event.target.checked })}
+                    className="h-4 w-4 accent-cobalt-600"
+                  />
+                  No society membership needed
+                </label>
               </div>
             ) : null}
 

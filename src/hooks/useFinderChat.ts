@@ -95,6 +95,7 @@ export function countActiveFilters(filters: RecommendationSearchFilters): number
     'funderCountries', 'fundingKinds', 'institutionTypes', 'careerStages',
     'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sponsorTypes',
     'taxonomyAreaIds', 'funderIds', 'sdgGoals', 'programmeFrameworks',
+    'qualifications', 'projectDurations', 'targetGroups', 'indirectCostPolicies', 'mobility', 'applicationRoutes',
   ];
   for (const key of arrayKeys) {
     const val = filters[key];
@@ -107,6 +108,7 @@ export function countActiveFilters(filters: RecommendationSearchFilters): number
   if (filters.amountMin !== null && filters.amountMin !== undefined) count += 1;
   if (filters.amountMax !== null && filters.amountMax !== undefined) count += 1;
   if (filters.includeUnknownAmount) count += 1;
+  if (filters.noMembershipNeeded) count += 1;
   return count;
 }
 

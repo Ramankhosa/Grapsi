@@ -2,7 +2,10 @@
  * Funding directory filters, checked against an independent reading of the
  * data. Read-only.
  *
- *   node ./node_modules/tsx/dist/cli.cjs scripts/verify-directory-filters.ts [--combos 300] [--seed 7] [--verbose]
+ *   node ./node_modules/tsx/dist/cli.cjs scripts/verify-directory-filters.ts [--combos 300] [--seed 7] [--verbose] [--ai-path]
+ *
+ * --ai-path also runs the AI advisor's search (embedding + reranker: a few
+ * paid API calls) and checks every result it returns obeys the filters.
  *
  * The rules being checked (the directory's contract):
  *   - inside one filter, the chosen values are alternatives (OR);
@@ -23,6 +26,14 @@ import prisma from '../src/lib/prisma'
 import { evaluateDimension, type EligibilityDimension } from '../src/lib/funding/eligibility'
 import { resolveCountryList } from '../src/lib/geo/countries'
 import {
+  APPLICATION_ROUTE_OPTIONS,
+  INDIRECT_COST_OPTIONS,
+  MOBILITY_OPTIONS,
+  MOBILITY_SOURCE_VALUES,
+  PROJECT_DURATION_BUCKETS,
+  PROJECT_DURATION_OPTIONS,
+  QUALIFICATION_OPTIONS,
+  TARGET_GROUP_OPTIONS,
   RECOMMENDATION_CAREER_STAGE_OPTIONS,
   RECOMMENDATION_FUNDING_KIND_OPTIONS,
   RECOMMENDATION_GEOGRAPHY_SCOPE_OPTIONS,
@@ -92,6 +103,14 @@ type Row = {
   usd_min: number | null
   usd_max: number | null
   tax: string[]
+  required_qualifications: string[]
+  target_groups: string[]
+  indirect_cost_policy: string | null
+  nomination_note: string | null
+  membership_requirements: string[]
+  duration_min: number | null
+  duration_max: number | null
+  mobility: string[]
   dims: Record<'applicant' | 'residence' | 'citizenship' | 'host', EligibilityDimension>
 }
 
@@ -112,6 +131,10 @@ async function loadRows(tenantId: string) {
            UPPER(COALESCE(fc.currency_code, fc.currency, '')) AS currency_key,
            fc.amount_min_usd_est AS usd_min, fc.amount_max_usd_est AS usd_max,
            COALESCE((SELECT array_agg(t.taxonomy_area_id) FROM funding_call_research_area_taxonomies t WHERE t.funding_call_id = fc.id), ARRAY[]::text[]) AS tax,
+           fc.required_qualifications, fc.target_groups, fc.indirect_cost_policy, fc.nomination_note, fc.membership_requirements,
+           fc.project_duration_min_months AS duration_min, fc.project_duration_max_months AS duration_max,
+           COALESCE(ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(fc.metadata #> '{catalog_import,source_facets,mobility}') = 'array'
+             THEN fc.metadata #> '{catalog_import,source_facets,mobility}' ELSE '[]'::jsonb END)), ARRAY[]::text[]) AS mobility,
            ${DIMENSION_COLUMNS('applicant')}, ${DIMENSION_COLUMNS('residence')}, ${DIMENSION_COLUMNS('citizenship')}, ${DIMENSION_COLUMNS('host')}
     FROM funding_calls fc
     WHERE (fc.status = 'PUBLISHED' OR fc.catalog_status = 'PUBLISHED') AND COALESCE(fc.is_active, true)
@@ -162,6 +185,24 @@ function residentOk(row: Row, codes: string[]) {
   if (row.imported) return codes.some((code) => notIneligible(row.dims.residence, code))
   if (row.eligible_countries.length === 0 && (row.dims.applicant?.scope ?? 'UNSPECIFIED') === 'UNSPECIFIED') return true
   return eligibleFor(row, codes)
+}
+
+/** The call's stated length (only a maximum: from a month to it) overlaps the bucket. */
+function durationIn(row: Row, bucket: string) {
+  const high = row.duration_max ?? row.duration_min
+  if (high === null) return false
+  const low = row.duration_min ?? 1
+  const [from, to] = PROJECT_DURATION_BUCKETS[bucket].months
+  return high >= from && (to === null || low <= to)
+}
+
+function routeIs(row: Row, route: string) {
+  const note = (row.nomination_note || '').toLowerCase()
+  if (route === 'not_stated') return note === ''
+  if (route === 'self_nomination') return note.includes('self-nomination')
+  if (route === 'nomination_only') return note.includes('by nomination only')
+  if (route === 'limited_submissions') return note.includes('limited submissions')
+  return false
 }
 
 function hostedIn(row: Row, codes: string[]) {
@@ -220,6 +261,13 @@ function matches(row: Row, f: RecommendationSearchFilters, ctx: { today: string;
     const pf = row.programme_framework
     if (!pf || !f.programmeFrameworks.some((value) => key(pf) === key(value) || pf.startsWith(`${value} › `))) return false
   }
+  if (f.qualifications?.length && !anyOf(row.required_qualifications, f.qualifications)) return false
+  if (f.targetGroups?.length && !anyOf(row.target_groups, f.targetGroups)) return false
+  if (f.indirectCostPolicies?.length && !oneOf(row.indirect_cost_policy, f.indirectCostPolicies)) return false
+  if (f.projectDurations?.length && !f.projectDurations.some((bucket) => durationIn(row, bucket))) return false
+  if (f.mobility?.length && !f.mobility.some((value) => row.mobility.includes(MOBILITY_SOURCE_VALUES[value]))) return false
+  if (f.applicationRoutes?.length && !f.applicationRoutes.some((route) => routeIs(row, route))) return false
+  if (f.noMembershipNeeded && row.membership_requirements.length > 0) return false
   if (f.funderIds?.length) {
     const byLink = row.funder_id !== null && f.funderIds.includes(row.funder_id)
     const byName = row.funder_id === null && row.agency !== null &&
@@ -303,6 +351,12 @@ async function main() {
     ['citizenshipRequirements', ['India', 'United States', 'Singapore', 'Canada', 'Australia', 'Citizens of EU member states']],
     ['residencyRequirements', ['India', 'United Kingdom', 'Germany', 'Brazil', 'Must reside in Canada']],
     ['applicationLanguages', ['English', 'French', 'German']],
+    ['qualifications', [...QUALIFICATION_OPTIONS]],
+    ['projectDurations', [...PROJECT_DURATION_OPTIONS]],
+    ['targetGroups', [...TARGET_GROUP_OPTIONS]],
+    ['indirectCostPolicies', [...INDIRECT_COST_OPTIONS]],
+    ['mobility', [...MOBILITY_OPTIONS]],
+    ['applicationRoutes', [...APPLICATION_ROUTE_OPTIONS]],
     ['sdgGoals', Array.from({ length: 17 }, (_, i) => String(i + 1))],
     ['programmeFrameworks', ['Horizon Europe', ...pick(distinct((r) => [r.programme_framework]), 4)]],
     ['taxonomyAreaIds', pick(distinct((r) => r.tax), 12)],
@@ -327,6 +381,8 @@ async function main() {
       ['amount ≤ 20,000 EUR', { amountMax: 20000, amountCurrency: 'EUR' }],
       ['amount 10–100 lakh INR', { amountMin: 1_000_000, amountMax: 10_000_000, amountCurrency: 'INR' }],
       ['amount ≥ 50,000 USD + unknown', { amountMin: 50000, amountCurrency: 'USD', includeUnknownAmount: true }],
+      ['no society membership needed', { noMembershipNeeded: true }],
+      ['no membership + PhD + rolling', { noMembershipNeeded: true, qualifications: ['PhD'], rollingOnly: true }],
       ['closed calls + deadline last 30 days', { includeExpired: true, deadlineFrom: plus(-30), deadlineTo: today }],
     ]
     for (const [label, filters] of cases) await compare(c, label, filters)
@@ -403,7 +459,7 @@ async function main() {
     // others must show what adding them brings (counted without the
     // dimension's own selection), not their overlap with it.
     const disjunctive = check('facet counts with a value already chosen (OR within a group)')
-    for (const dimension of ['fundingKind', 'careerStage', 'sponsorType', 'sdgGoal'] as DirectoryFacetDimension[]) {
+    for (const dimension of ['fundingKind', 'careerStage', 'sponsorType', 'sdgGoal', 'qualification', 'applicationRoute', 'projectDuration'] as DirectoryFacetDimension[]) {
       const [first, second] = facets.facets[dimension] || []
       if (!first || !second) continue
       const chosen = toggleFacetValue({}, dimension, first.value)
@@ -415,6 +471,14 @@ async function main() {
       if (shown !== alone) disjunctive.fail(`${dimension}: "${first.value}" chosen, "${second.value}" shows ${shown}, alone it gives ${alone}`)
       else if (both < Math.max(shown, after.totalPublished)) disjunctive.fail(`${dimension}: choosing both gives ${both}, fewer than either`)
       else disjunctive.pass()
+    }
+    // A yes/no filter's "hides N" is what turning it on removes.
+    const toggles = check('toggle counts = calls the toggle hides')
+    for (const filters of [{}, { fundingKinds: ['Fellowship'] }, { eligibleCountries: ['India'], rollingOnly: true }] as RecommendationSearchFilters[]) {
+      const shown = (await recommendationSearchService.getDirectoryFacets({ access, filters })).toggles?.membershipRequired ?? -1
+      const hides = (await serviceCount(filters)) - (await serviceCount({ ...filters, noMembershipNeeded: true }))
+      if (shown === hides) toggles.pass()
+      else toggles.fail(`${JSON.stringify(filters)}: says it hides ${shown}, hides ${hides}`)
     }
     // The facet total is the result count under every filter, facets included.
     const totals = check('facet total = result count, with facets and other filters chosen')
@@ -428,6 +492,31 @@ async function main() {
       const got = await serviceCount(filters, query)
       if (after.totalPublished === got) totals.pass()
       else totals.fail(`${JSON.stringify(filters)}${query ? ` + "${query}"` : ''}: facets total ${after.totalPublished}, results ${got}`)
+    }
+  }
+
+  // 7. The AI advisor's search obeys the same filters (opt-in: paid API calls).
+  if (process.argv.includes('--ai-path')) {
+    const c = check('AI advisor results obey the filters')
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    const cases: Array<[string, RecommendationSearchFilters]> = [
+      ['cancer immunotherapy', { qualifications: ['PhD', 'MD'] }],
+      ['climate adaptation', { projectDurations: ['up_to_1_year'], noMembershipNeeded: true }],
+      ['neuroscience', { applicationRoutes: ['not_stated', 'self_nomination'], eligibleCountries: ['India'] }],
+      ['public health', { targetGroups: ['Women researchers encouraged', 'Women researchers only'] }],
+      ['materials science', { indirectCostPolicies: ['INCLUDED'], mobility: ['inbound'] }],
+      ['machine learning', { citizenshipRequirements: ['India'], residencyRequirements: ['India'], fundingKinds: ['Fellowship'] }],
+    ]
+    for (const [topic, filters] of cases) {
+      const response = await recommendationSearchService.search({ inputMode: 'research_area', query: { researchArea: topic }, filters, access })
+      // When nothing matched, the search relaxes filters on purpose and says which.
+      const applied = response.strictFilterRecovery?.retryFilters || filters
+      const offending = response.results.filter((result) => {
+        const row = byId.get(result.id)
+        return !row || !matches(row, applied, ctx)
+      })
+      if (offending.length === 0) c.pass()
+      else c.fail(`"${topic}" ${JSON.stringify(filters)}: ${offending.length}/${response.results.length} results break the filters (e.g. ${offending[0].id})`)
     }
   }
 

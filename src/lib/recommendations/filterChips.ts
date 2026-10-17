@@ -1,7 +1,21 @@
 import type { FinderFilterSuggestionChip, RecommendationFilterMode } from './chatTypes';
 import type { RecommendationSearchFilters } from './types';
 import { createDefaultFilters } from './conversationUtils';
-import { SDG_GOAL_LABELS } from './constants';
+import {
+  APPLICATION_ROUTE_LABELS,
+  INDIRECT_COST_LABELS,
+  MOBILITY_LABELS,
+  PROJECT_DURATION_BUCKETS,
+  SDG_GOAL_LABELS,
+} from './constants';
+
+/** Coded filter values and how they read. */
+const CODED_VALUE_LABELS: Partial<Record<keyof RecommendationSearchFilters, Record<string, string>>> = {
+  projectDurations: Object.fromEntries(Object.entries(PROJECT_DURATION_BUCKETS).map(([value, bucket]) => [value, bucket.label])),
+  indirectCostPolicies: INDIRECT_COST_LABELS,
+  mobility: MOBILITY_LABELS,
+  applicationRoutes: APPLICATION_ROUTE_LABELS,
+};
 
 export const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
   geographyScope: 'Geography scope',
@@ -20,6 +34,13 @@ export const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, st
   funderIds: 'Funders',
   sdgGoals: 'SDGs',
   programmeFrameworks: 'Programmes',
+  qualifications: 'Qualification asked for',
+  projectDurations: 'Project length',
+  targetGroups: 'Aimed at',
+  indirectCostPolicies: 'Indirect costs',
+  mobility: 'Mobility',
+  applicationRoutes: 'How to apply',
+  noMembershipNeeded: 'No society membership needed',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
@@ -37,7 +58,7 @@ export function filterValueLabel(
 ): string {
   if (key === 'funderIds') return funderNames[value] || 'Selected funder';
   if (key === 'sdgGoals') return SDG_GOAL_LABELS[value] ? `SDG ${value} · ${SDG_GOAL_LABELS[value]}` : `SDG ${value}`;
-  return value;
+  return CODED_VALUE_LABELS[key]?.[value] || value;
 }
 
 const ARRAY_FILTER_KEYS = [
@@ -57,6 +78,12 @@ const ARRAY_FILTER_KEYS = [
   'funderIds',
   'sdgGoals',
   'programmeFrameworks',
+  'qualifications',
+  'projectDurations',
+  'targetGroups',
+  'indirectCostPolicies',
+  'mobility',
+  'applicationRoutes',
 ] as const;
 
 type ArrayFilterKey = (typeof ARRAY_FILTER_KEYS)[number];
@@ -73,6 +100,7 @@ const SEARCH_SPACE_FILTER_KEYS: Array<keyof RecommendationSearchFilters> = [
   'amountCurrency',
   'includeUnknownAmount',
   'includeExpired',
+  'noMembershipNeeded',
 ];
 
 const MAX_SUGGESTION_CHIPS = 4;
@@ -122,12 +150,14 @@ export function formatFilterDescription(
       return filters.sdgGoals.length ? `${label}: ${filters.sdgGoals.slice(0, 3).map((goal) => filterValueLabel('sdgGoals', goal)).join(', ')}` : null;
     case 'funderIds':
       return filters.funderIds.length ? `${label}: ${filters.funderIds.length} selected` : null;
+    case 'noMembershipNeeded':
+      return filters.noMembershipNeeded ? label : null;
     default: {
       const value = filters[key];
       if (!Array.isArray(value) || value.length === 0) {
         return null;
       }
-      return `${label}: ${value.slice(0, 3).join(', ')}`;
+      return `${label}: ${value.slice(0, 3).map((item) => filterValueLabel(key, item)).join(', ')}`;
     }
   }
 }
@@ -159,7 +189,7 @@ export function buildFilterSuggestionChips(
     const added = proposed[key].filter((value) => !currentValues.has(value.toLowerCase()));
     if (added.length > 0) {
       chips.push({
-        label: `${FILTER_LABELS[key] || key}: ${added.slice(0, 3).join(', ')}`,
+        label: `${FILTER_LABELS[key] || key}: ${added.slice(0, 3).map((value) => filterValueLabel(key, value)).join(', ')}`,
         patch: { [key]: added } as Partial<RecommendationSearchFilters>,
         source,
       });
@@ -187,6 +217,10 @@ export function buildFilterSuggestionChips(
 
   if (proposed.amountMax !== null && proposed.amountMax !== current.amountMax) {
     chips.push({ label: `Maximum amount: ${proposed.amountMax}`, patch: { amountMax: proposed.amountMax }, source });
+  }
+
+  if (proposed.noMembershipNeeded && !current.noMembershipNeeded) {
+    chips.push({ label: 'No society membership needed', patch: { noMembershipNeeded: true }, source });
   }
 
   if (proposed.includeExpired && !current.includeExpired) {

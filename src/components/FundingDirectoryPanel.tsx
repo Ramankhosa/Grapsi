@@ -5,7 +5,13 @@ import CountryPicker from './finder/CountryPicker';
 import FunderPicker from './finder/FunderPicker';
 import { ELIGIBILITY_BADGE } from './funding/eligibilityBadge';
 import { useFunderNames } from '../hooks/useFunderNames';
-import { RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS } from '../lib/recommendations/constants';
+import {
+  APPLICATION_ROUTE_LABELS,
+  INDIRECT_COST_LABELS,
+  MOBILITY_LABELS,
+  PROJECT_DURATION_BUCKETS,
+  RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS,
+} from '../lib/recommendations/constants';
 import { facetValues, toggleFacetValue } from '../lib/recommendations/directorySelections';
 import type {
   DirectoryFacetDimension,
@@ -28,7 +34,24 @@ const FACET_LABEL: Record<DirectoryFacetDimension, string> = {
   programmeFramework: 'Programme',
   region: 'Region',
   geographyScope: 'Geographic scope',
+  qualification: 'Qualification asked for',
+  projectDuration: 'Project length',
+  targetGroup: 'Aimed at',
+  indirectCosts: 'Indirect costs',
+  mobility: 'Mobility',
+  applicationRoute: 'How to apply',
 };
+
+/** Coded facet values and their labels. */
+const VALUE_LABELS: Partial<Record<DirectoryFacetDimension, Record<string, string>>> = {
+  projectDuration: Object.fromEntries(Object.entries(PROJECT_DURATION_BUCKETS).map(([value, bucket]) => [value, bucket.label])),
+  indirectCosts: INDIRECT_COST_LABELS,
+  mobility: MOBILITY_LABELS,
+  applicationRoute: APPLICATION_ROUTE_LABELS,
+};
+
+/** Facts only the external catalogue states: choosing one leaves out calls that say nothing about it. */
+const CATALOGUE_ONLY_HINT = 'Only calls that state this are shown.';
 
 const VISIBLE_FACET_VALUES = 8;
 /** A facet gets its own search box only when its list is long. */
@@ -97,6 +120,9 @@ function appliedChips(filters: Filters, labelFor: (dimension: DirectoryFacetDime
     chips.push({ key: 'deadline', label, remove: (current) => ({ ...current, deadlineFrom: '', deadlineTo: '' }) });
   }
   if (filters.rollingOnly) chips.push({ key: 'rolling', label: 'Rolling calls only', remove: (current) => ({ ...current, rollingOnly: false }) });
+  if (filters.noMembershipNeeded) {
+    chips.push({ key: 'membership', label: 'No society membership needed', remove: (current) => ({ ...current, noMembershipNeeded: false }) });
+  }
   if (filters.includeExpired) chips.push({ key: 'closed', label: 'Including closed calls', remove: (current) => ({ ...current, includeExpired: false }) });
   if (filters.amountMin !== null || filters.amountMax !== null) {
     const currency = filters.amountCurrency ? ` ${filters.amountCurrency}` : '';
@@ -165,6 +191,7 @@ function FacetGroup({
   onChange,
   defaultOpen,
   footer,
+  hint,
 }: {
   dimension: DirectoryFacetDimension;
   items: DirectoryFacetItem[];
@@ -173,6 +200,7 @@ function FacetGroup({
   onChange: (filters: Filters) => void;
   defaultOpen?: boolean;
   footer?: React.ReactNode;
+  hint?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const [search, setSearch] = useState('');
@@ -246,6 +274,7 @@ function FacetGroup({
         </button>
       ) : null}
       {selected.length > 1 ? <p className="cb-hint mt-1.5 px-1.5">Showing calls that match any of these.</p> : null}
+      {hint && rows.length > 0 ? <p className="cb-hint mt-1.5 px-1.5">{hint}</p> : null}
       {footer}
     </Disclosure>
   );
@@ -455,6 +484,11 @@ function ExpandableCard({
           ) : null}
 
           <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {result.limitedSubmissions ? (
+              <span className="cb-badge" title="The funder takes a limited number of applications per institution: your research office may need to pre-select.">
+                Limited submissions
+              </span>
+            ) : null}
             {result.isCatalog ? (
               <span
                 className="cb-badge"
@@ -664,7 +698,7 @@ export default function FundingDirectoryPanel({
     }
     return (dimension: DirectoryFacetDimension, value: string) => {
       if (dimension === 'funder') return fromFacets.get(`funder:${value}`) || funderNames[value] || 'Selected funder';
-      return fromFacets.get(`${dimension}:${value}`) || facetLabels[`${dimension}:${value}`] || value;
+      return VALUE_LABELS[dimension]?.[value] || fromFacets.get(`${dimension}:${value}`) || facetLabels[`${dimension}:${value}`] || value;
     };
   }, [facets, facetLabels, funderNames]);
 
@@ -689,6 +723,23 @@ export default function FundingDirectoryPanel({
         />
         <FacetGroup dimension="careerStage" items={items('careerStage')} filters={filters} labelFor={labelFor} onChange={set} defaultOpen />
         <FacetGroup dimension="institutionType" items={items('institutionType')} filters={filters} labelFor={labelFor} onChange={set} />
+        <FacetGroup dimension="qualification" items={items('qualification')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
+        <FacetGroup dimension="targetGroup" items={items('targetGroup')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
+        <FacetGroup dimension="applicationRoute" items={items('applicationRoute')} filters={filters} labelFor={labelFor} onChange={set} />
+        <label className="flex min-h-[40px] cursor-pointer items-center gap-2.5 text-[13px] text-ink">
+          <input
+            type="checkbox"
+            checked={filters.noMembershipNeeded}
+            onChange={(event) => set({ ...filters, noMembershipNeeded: event.target.checked })}
+            className="h-3.5 w-3.5 shrink-0 accent-cobalt-600"
+          />
+          <span className="flex-1 font-medium">No society membership needed</span>
+          {facets?.toggles ? (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-soft" title="Members-only calls this hides">
+              hides {facets.toggles.membershipRequired.toLocaleString()}
+            </span>
+          ) : null}
+        </label>
       </RailSection>
 
       <RailSection title="Deadline">
@@ -719,6 +770,8 @@ export default function FundingDirectoryPanel({
           }
         />
         <FacetGroup dimension="sponsorType" items={items('sponsorType')} filters={filters} labelFor={labelFor} onChange={set} />
+        <FacetGroup dimension="projectDuration" items={items('projectDuration')} filters={filters} labelFor={labelFor} onChange={set} />
+        <FacetGroup dimension="indirectCosts" items={items('indirectCosts')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
       </RailSection>
 
       <RailSection title="Research">
@@ -730,6 +783,7 @@ export default function FundingDirectoryPanel({
       <RailSection title="More filters">
         <FacetGroup dimension="region" items={items('region')} filters={filters} labelFor={labelFor} onChange={set} />
         <FacetGroup dimension="geographyScope" items={items('geographyScope')} filters={filters} labelFor={labelFor} onChange={set} />
+        <FacetGroup dimension="mobility" items={items('mobility')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
         <Disclosure label="Where the work is done" count={filters.hostCountries.length} defaultOpen={filters.hostCountries.length > 0}>
           <CountryPicker
             id="directory-host-countries"

@@ -24,6 +24,12 @@ import {
   RESEARCH_AREA_EXPANSIONS,
   RESEARCH_AREA_MAX_LENGTH,
   SPONSOR_TYPE_ALIASES,
+  APPLICATION_ROUTE_OPTIONS,
+  INDIRECT_COST_OPTIONS,
+  MOBILITY_OPTIONS,
+  PROJECT_DURATION_OPTIONS,
+  QUALIFICATION_OPTIONS,
+  TARGET_GROUP_OPTIONS,
 } from './constants';
 import type {
   NormalizedRecommendationSearchRequest,
@@ -454,6 +460,30 @@ function normalizeDateString(value?: string): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : undefined;
 }
 
+/**
+ * Values of a fixed vocabulary, matched without regard to case or
+ * punctuation ("masters degree" → "Master's degree"); null if any value is
+ * not in it.
+ */
+function normalizeVocabularyList(values: string[], options: readonly string[]): string[] | null {
+  const out: string[] = [];
+  for (const value of values) {
+    const key = normalizeKey(String(value));
+    if (!key) continue;
+    const match = options.find((option) => normalizeKey(option) === key);
+    if (!match) return null;
+    if (!out.includes(match)) out.push(match);
+  }
+  return out;
+}
+
+export const normalizeQualificationList = (values: string[]) => normalizeVocabularyList(values, QUALIFICATION_OPTIONS);
+export const normalizeProjectDurationList = (values: string[]) => normalizeVocabularyList(values, PROJECT_DURATION_OPTIONS);
+export const normalizeTargetGroupList = (values: string[]) => normalizeVocabularyList(values, TARGET_GROUP_OPTIONS);
+export const normalizeIndirectCostList = (values: string[]) => normalizeVocabularyList(values, INDIRECT_COST_OPTIONS);
+export const normalizeMobilityList = (values: string[]) => normalizeVocabularyList(values, MOBILITY_OPTIONS);
+export const normalizeApplicationRouteList = (values: string[]) => normalizeVocabularyList(values, APPLICATION_ROUTE_OPTIONS);
+
 /** "13", "SDG 13", "sdg13" → "13"; null if any value is not a goal 1-17. */
 export function normalizeSdgGoalList(values: string[]): string[] | null {
   const out: string[] = [];
@@ -507,6 +537,13 @@ export function normalizeRecommendationSearchRequest(
     funderIds: clampArray(filters.funderIds || [], 20).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id)),
     sdgGoals: normalizeSdgGoalList(clampArray(filters.sdgGoals || [], 17)) || [],
     programmeFrameworks: clampArray(filters.programmeFrameworks || [], 10).map((value) => value.slice(0, 160)),
+    qualifications: normalizeQualificationList(clampArray(filters.qualifications || [], 10)) || [],
+    projectDurations: normalizeProjectDurationList(clampArray(filters.projectDurations || [], 3)) || [],
+    targetGroups: normalizeTargetGroupList(clampArray(filters.targetGroups || [], 10)) || [],
+    indirectCostPolicies: normalizeIndirectCostList(clampArray(filters.indirectCostPolicies || [], 3)) || [],
+    mobility: normalizeMobilityList(clampArray(filters.mobility || [], 2)) || [],
+    applicationRoutes: normalizeApplicationRouteList(clampArray(filters.applicationRoutes || [], 4)) || [],
+    noMembershipNeeded: Boolean(filters.noMembershipNeeded),
     deadlineFrom: normalizeDateString(filters.deadlineFrom) || '',
     deadlineTo: normalizeDateString(filters.deadlineTo) || '',
     rollingOnly: Boolean(filters.rollingOnly),
@@ -590,6 +627,19 @@ export function validateNormalizedControlledFilters(filters: RecommendationSearc
   if (filters.sdgGoals && normalizeSdgGoalList(filters.sdgGoals) === null) {
     return 'Unknown sdgGoals value. Use goal numbers 1-17.';
   }
+  const vocabularies: Array<[string, string[] | undefined, (values: string[]) => string[] | null, readonly string[]]> = [
+    ['qualifications', filters.qualifications, normalizeQualificationList, QUALIFICATION_OPTIONS],
+    ['projectDurations', filters.projectDurations, normalizeProjectDurationList, PROJECT_DURATION_OPTIONS],
+    ['targetGroups', filters.targetGroups, normalizeTargetGroupList, TARGET_GROUP_OPTIONS],
+    ['indirectCostPolicies', filters.indirectCostPolicies, normalizeIndirectCostList, INDIRECT_COST_OPTIONS],
+    ['mobility', filters.mobility, normalizeMobilityList, MOBILITY_OPTIONS],
+    ['applicationRoutes', filters.applicationRoutes, normalizeApplicationRouteList, APPLICATION_ROUTE_OPTIONS],
+  ];
+  for (const [name, values, normalize, options] of vocabularies) {
+    if (values && normalize(values) === null) {
+      return `Unknown ${name} value. Allowed values include: ${options.join(', ')}`;
+    }
+  }
   if (filters.amountCurrency && normalizeCurrencyCode(filters.amountCurrency) === null) {
     return 'Unknown amountCurrency value. Use an ISO 4217 code such as USD, EUR or INR.';
   }
@@ -614,6 +664,13 @@ export function summarizeFilters(filters: RecommendationSearchFilters): string {
     filters.funderIds?.length ? `funderIds=${filters.funderIds.length}` : '',
     filters.sdgGoals?.length ? `sdgGoals=${filters.sdgGoals.length}` : '',
     filters.programmeFrameworks?.length ? `programmeFrameworks=${filters.programmeFrameworks.length}` : '',
+    filters.qualifications?.length ? `qualifications=${filters.qualifications.length}` : '',
+    filters.projectDurations?.length ? `projectDurations=${filters.projectDurations.length}` : '',
+    filters.targetGroups?.length ? `targetGroups=${filters.targetGroups.length}` : '',
+    filters.indirectCostPolicies?.length ? `indirectCostPolicies=${filters.indirectCostPolicies.length}` : '',
+    filters.mobility?.length ? `mobility=${filters.mobility.length}` : '',
+    filters.applicationRoutes?.length ? `applicationRoutes=${filters.applicationRoutes.length}` : '',
+    filters.noMembershipNeeded ? 'noMembershipNeeded=true' : '',
     filters.amountCurrency ? `amountCurrency=${filters.amountCurrency}` : '',
     filters.deadlineFrom ? 'deadlineFrom=1' : '',
     filters.deadlineTo ? 'deadlineTo=1' : '',
