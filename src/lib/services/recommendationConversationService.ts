@@ -88,6 +88,7 @@ import {
   normalizeCareerStageList,
   normalizeCountryInput,
   normalizeCountryList,
+  keepCountries,
   normalizeFundingKindList,
   normalizeGeographyScopeList,
   normalizeInstitutionTypeList,
@@ -939,9 +940,9 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   fundingKinds: 'Funding types',
   institutionTypes: 'Institution types',
   careerStages: 'Career stages',
-  citizenshipRequirements: 'Citizenship',
-  residencyRequirements: 'Residency',
-  applicationLanguages: 'Application languages',
+  citizenshipRequirements: 'Citizen of',
+  residencyRequirements: 'Living in',
+  applicationLanguages: 'Language (or not stated)',
   sponsorTypes: 'Sponsor types',
   taxonomyAreaIds: 'Research taxonomy',
   funderIds: 'Funders',
@@ -1539,6 +1540,10 @@ institutionTypes: ${[...INSTITUTION_TYPE_VALUES].join(', ')}
 geographyScope: ${[...GEOGRAPHY_SCOPE_VALUES].join(', ')}
 sponsorTypes: ${[...SPONSOR_TYPE_VALUES].join(', ')}
 eligibleRegions: ${[...REGION_VALUES].join(', ')}
+eligibleCountries: countries a call must be open to (as residence and citizenship)
+citizenshipRequirements: the applicant's citizenship countries ("I am an Indian citizen")
+residencyRequirements: the applicant's country of residence ("I live in the UK"); an Indian citizen living in the UK is citizenshipRequirements ["India"] and residencyRequirements ["United Kingdom"]
+applicationLanguages: languages the applicant can apply in (calls that state no language are kept)
 sort: best_match, deadline_soonest`
   );
 
@@ -2419,8 +2424,9 @@ export class RecommendationConversationService {
     if (Array.isArray(filterPatch.applicationLanguages)) cleaned.applicationLanguages = bound(normalizeApplicationLanguageList(filterPatch.applicationLanguages));
     if (Array.isArray(filterPatch.sponsorTypes)) cleaned.sponsorTypes = bound(normalizeSponsorTypeList(filterPatch.sponsorTypes));
     if (Array.isArray(filterPatch.taxonomyAreaIds)) cleaned.taxonomyAreaIds = bound(filterPatch.taxonomyAreaIds);
-    if (Array.isArray(filterPatch.citizenshipRequirements)) cleaned.citizenshipRequirements = bound(filterPatch.citizenshipRequirements);
-    if (Array.isArray(filterPatch.residencyRequirements)) cleaned.residencyRequirements = bound(filterPatch.residencyRequirements);
+    // The applicant's countries; anything that is not a country is dropped.
+    if (Array.isArray(filterPatch.citizenshipRequirements)) cleaned.citizenshipRequirements = bound(keepCountries(filterPatch.citizenshipRequirements));
+    if (Array.isArray(filterPatch.residencyRequirements)) cleaned.residencyRequirements = bound(keepCountries(filterPatch.residencyRequirements));
     if (typeof filterPatch.deadlineFrom === 'string') cleaned.deadlineFrom = filterPatch.deadlineFrom.slice(0, 32);
     if (typeof filterPatch.deadlineTo === 'string') cleaned.deadlineTo = filterPatch.deadlineTo.slice(0, 32);
     if (typeof filterPatch.rollingOnly === 'boolean') cleaned.rollingOnly = filterPatch.rollingOnly;

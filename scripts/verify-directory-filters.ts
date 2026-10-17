@@ -150,6 +150,20 @@ function eligibleFor(row: Row, codes: string[]) {
   return Boolean(row.dims.applicant?.scope) && codes.some((code) => evaluateDimension(row.dims.applicant, [code]) === 'ELIGIBLE')
 }
 
+/** Citizenship: imported calls by their dimension; curated free text is never read, so they pass. */
+function citizenOk(row: Row, codes: string[]) {
+  if (codes.length === 0 || !row.imported) return true
+  return codes.some((code) => notIneligible(row.dims.citizenship, code))
+}
+
+/** Residence: imported calls by their dimension; curated by their country list, worldwide, or no country information. */
+function residentOk(row: Row, codes: string[]) {
+  if (codes.length === 0) return true
+  if (row.imported) return codes.some((code) => notIneligible(row.dims.residence, code))
+  if (row.eligible_countries.length === 0 && (row.dims.applicant?.scope ?? 'UNSPECIFIED') === 'UNSPECIFIED') return true
+  return eligibleFor(row, codes)
+}
+
 function hostedIn(row: Row, codes: string[]) {
   if (row.imported) return codes.some((code) => notIneligible(row.dims.host, code))
   const listed = codesOf(row.host_countries)
@@ -192,9 +206,11 @@ function matches(row: Row, f: RecommendationSearchFilters, ctx: { today: string;
   if (f.careerStages?.length && !anyOf(row.career_stages, f.careerStages)) return false
   if (f.sponsorTypes?.length && !oneOf(row.sponsor_type, f.sponsorTypes)) return false
   if (f.eligibleRegions?.length && !anyOf(row.eligible_regions, f.eligibleRegions)) return false
-  if (f.applicationLanguages?.length && !anyOf(row.application_languages, f.applicationLanguages)) return false
-  if (f.citizenshipRequirements?.length && !anyOf(row.citizenship_requirements, f.citizenshipRequirements)) return false
-  if (f.residencyRequirements?.length && !anyOf(row.residency_requirements, f.residencyRequirements)) return false
+  // Language: accepts it, or does not say.
+  if (f.applicationLanguages?.length && row.application_languages.length > 0 && !anyOf(row.application_languages, f.applicationLanguages)) return false
+  // The applicant's citizenship / residence: only a call that rules them out goes.
+  if (f.citizenshipRequirements?.length && !citizenOk(row, codesOf(f.citizenshipRequirements))) return false
+  if (f.residencyRequirements?.length && !residentOk(row, codesOf(f.residencyRequirements))) return false
   if (f.eligibleCountries?.length && !eligibleFor(row, codesOf(f.eligibleCountries))) return false
   if (f.hostCountries?.length && !hostedIn(row, codesOf(f.hostCountries))) return false
   if (f.funderCountries?.length && !funderIn(row, codesOf(f.funderCountries))) return false
@@ -283,7 +299,10 @@ async function main() {
     ['eligibleCountries', ['India', 'IN', 'United States', 'Germany', 'Iran', 'Kenya', 'Brazil', 'Korea, Republic of', 'Côte d’Ivoire', ...pick(distinct((r) => r.eligible_countries), 12)]],
     ['hostCountries', ['India', 'United Kingdom', 'Singapore', 'Germany', ...pick(distinct((r) => r.host_countries), 8)]],
     ['funderCountries', ['India', 'United States', 'Germany', 'Belgium', 'Korea, Republic of', ...pick(distinct((r) => [r.funder_country]), 8)]],
-    ['citizenshipRequirements', pick(distinct((r) => r.citizenship_requirements), 4)],
+    // Countries, plus free text an older link may carry (dropped, so no filter).
+    ['citizenshipRequirements', ['India', 'United States', 'Singapore', 'Canada', 'Australia', 'Citizens of EU member states']],
+    ['residencyRequirements', ['India', 'United Kingdom', 'Germany', 'Brazil', 'Must reside in Canada']],
+    ['applicationLanguages', ['English', 'French', 'German']],
     ['sdgGoals', Array.from({ length: 17 }, (_, i) => String(i + 1))],
     ['programmeFrameworks', ['Horizon Europe', ...pick(distinct((r) => [r.programme_framework]), 4)]],
     ['taxonomyAreaIds', pick(distinct((r) => r.tax), 12)],

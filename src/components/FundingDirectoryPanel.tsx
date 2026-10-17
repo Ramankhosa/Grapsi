@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ExternalLink, Globe2, Search, SlidersHorizontal, X } from 'lucide-react';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
+import CountryPicker from './finder/CountryPicker';
 import FunderPicker from './finder/FunderPicker';
 import { ELIGIBILITY_BADGE } from './funding/eligibilityBadge';
 import { useFunderNames } from '../hooks/useFunderNames';
-import { allCountryCodes, countryNameFor, resolveCountryList } from '../lib/geo/countries';
 import { RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS } from '../lib/recommendations/constants';
 import { facetValues, toggleFacetValue } from '../lib/recommendations/directorySelections';
 import type {
@@ -30,8 +30,6 @@ const FACET_LABEL: Record<DirectoryFacetDimension, string> = {
   geographyScope: 'Geographic scope',
 };
 
-const COUNTRY_NAMES = Array.from(new Set(allCountryCodes().map(countryNameFor))).sort((a, b) => a.localeCompare(b));
-const COUNTRY_LIST_ID = 'directory-country-names';
 const VISIBLE_FACET_VALUES = 8;
 /** A facet gets its own search box only when its list is long. */
 const SEARCHABLE_FACET_VALUES = 12;
@@ -57,11 +55,6 @@ function formatAmount(result: RecommendationRawResultItem) {
   return `${result.currency || ''} ${Number(result.amountMin ?? result.amountMax).toLocaleString()}`.trim();
 }
 
-const sameCountry = (a: string, b: string) => {
-  const [codeA] = resolveCountryList([a]).codes;
-  const [codeB] = resolveCountryList([b]).codes;
-  return Boolean(codeA) && codeA === codeB;
-};
 
 // ------------------------------------------------------------- applied filters
 
@@ -91,9 +84,9 @@ function appliedChips(filters: Filters, labelFor: (dimension: DirectoryFacetDime
   list('hostCountries', 'Work carried out in', filters.hostCountries);
   list('funderCountries', 'Funder based in', filters.funderCountries);
   // Filters the directory does not offer, but a shared link or the AI advisor may carry.
-  list('applicationLanguages', 'Language', filters.applicationLanguages);
-  list('citizenshipRequirements', 'Citizenship', filters.citizenshipRequirements);
-  list('residencyRequirements', 'Residency', filters.residencyRequirements);
+  list('applicationLanguages', 'Language (or not stated)', filters.applicationLanguages);
+  list('citizenshipRequirements', 'Citizen of', filters.citizenshipRequirements);
+  list('residencyRequirements', 'Living in', filters.residencyRequirements);
 
   if (filters.deadlineFrom || filters.deadlineTo) {
     const label = filters.deadlineFrom && filters.deadlineTo
@@ -255,92 +248,6 @@ function FacetGroup({
       {selected.length > 1 ? <p className="cb-hint mt-1.5 px-1.5">Showing calls that match any of these.</p> : null}
       {footer}
     </Disclosure>
-  );
-}
-
-function CountryPicker({
-  id,
-  label,
-  hint,
-  values,
-  onChange,
-  suggestion,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  values: string[];
-  onChange: (values: string[]) => void;
-  suggestion?: string | null;
-}) {
-  const [text, setText] = useState('');
-  const [unknown, setUnknown] = useState(false);
-  const add = (raw: string) => {
-    const [code] = resolveCountryList([raw.trim()]).codes;
-    if (!code) {
-      setUnknown(Boolean(raw.trim()));
-      return;
-    }
-    const name = countryNameFor(code);
-    if (!values.some((value) => sameCountry(value, name))) onChange([...values, name]);
-    setText('');
-    setUnknown(false);
-  };
-  const showSuggestion = suggestion && !values.some((value) => sameCountry(value, suggestion));
-
-  return (
-    <div className="py-1">
-      <label htmlFor={id} className="cb-label">{label}</label>
-      {values.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {values.map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => onChange(values.filter((item) => item !== value))}
-              className="cb-chip cb-chip-active"
-              aria-label={`Remove ${value}`}
-            >
-              {value}
-              <X className="h-3 w-3" />
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="mt-2 flex gap-1.5">
-        <input
-          id={id}
-          list={COUNTRY_LIST_ID}
-          value={text}
-          onChange={(event) => {
-            const value = event.target.value;
-            setText(value);
-            setUnknown(false);
-            // Picked from the list (not typed letter by letter): add it now.
-            const inputType = (event.nativeEvent as InputEvent).inputType;
-            if ((!inputType || inputType === 'insertReplacementText') && COUNTRY_NAMES.includes(value)) add(value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              add(text);
-            }
-          }}
-          placeholder="Type a country"
-          className="cb-input py-2 text-[13px]"
-        />
-        <button type="button" onClick={() => add(text)} disabled={!text.trim()} className="cb-btn-secondary cb-btn-sm shrink-0">
-          Add
-        </button>
-      </div>
-      {unknown ? <p className="mt-1 text-[12px] text-amber-700">Not a country we recognise.</p> : null}
-      {showSuggestion ? (
-        <button type="button" onClick={() => add(suggestion)} className="mt-1.5 text-[12px] font-medium text-cobalt-700 hover:underline">
-          + {suggestion} (your profile)
-        </button>
-      ) : null}
-      {hint ? <p className="cb-hint mt-1.5">{hint}</p> : null}
-    </div>
   );
 }
 
@@ -770,11 +677,6 @@ export default function FundingDirectoryPanel({
 
   const rail = (
     <div className={facetsLoading ? 'opacity-70 transition-opacity' : 'transition-opacity'}>
-      <datalist id={COUNTRY_LIST_ID}>
-        {COUNTRY_NAMES.map((name) => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
 
       <RailSection title="Who can apply">
         <CountryPicker

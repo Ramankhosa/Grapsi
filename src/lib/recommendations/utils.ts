@@ -187,6 +187,18 @@ export function normalizeCountryList(values: string[]): string[] | null {
   return Array.from(new Set(normalized));
 }
 
+/**
+ * The recognisable countries among the values, dropping the rest. For the
+ * applicant's citizenship and residence: saved conversations and older links
+ * may still carry free text ("Citizens of EU member states") from when these
+ * filters matched call text, and a resumed chat must not fail on it.
+ */
+export function keepCountries(values: string[]): string[] {
+  return Array.from(
+    new Set(values.map((value) => normalizeCountryInput(value)).filter((value): value is string => Boolean(value)))
+  );
+}
+
 export function buildCountryMatchKeys(values: string[]): string[] {
   const keys = new Set<string>();
 
@@ -485,8 +497,9 @@ export function normalizeRecommendationSearchRequest(
     fundingKinds: normalizeFundingKindList(clampArray(filters.fundingKinds || [], 20)) || [],
     institutionTypes: normalizeInstitutionTypeList(clampArray(filters.institutionTypes || [], 20)) || [],
     careerStages: normalizeCareerStageList(clampArray(filters.careerStages || [], 20)) || [],
-    citizenshipRequirements: clampArray(filters.citizenshipRequirements || [], 20),
-    residencyRequirements: clampArray(filters.residencyRequirements || [], 20),
+    // The applicant's countries (citizen of / living in), not call text.
+    citizenshipRequirements: keepCountries(clampArray(filters.citizenshipRequirements || [], 20)),
+    residencyRequirements: keepCountries(clampArray(filters.residencyRequirements || [], 20)),
     applicationLanguages:
       normalizeApplicationLanguageList(clampArray(filters.applicationLanguages || [], 20)) || [],
     sponsorTypes: normalizeSponsorTypeList(clampArray(filters.sponsorTypes || [], 20)) || [],

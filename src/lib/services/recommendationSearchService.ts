@@ -513,7 +513,11 @@ function buildBaseConditions(
   }
 
   if (filters.applicationLanguages.length > 0) {
-    conditions.push(buildArrayAnyCondition('application_languages', filters.applicationLanguages));
+    // "Accepts this language, or does not say". Few calls state one (no
+    // imported call does), so a plain match hid nearly the whole catalogue.
+    conditions.push(
+      Prisma.sql`(cardinality(application_languages) = 0 OR ${buildArrayAnyCondition('application_languages', filters.applicationLanguages)})`
+    );
   }
 
   if (filters.eligibleCountries.length > 0) {
@@ -546,12 +550,28 @@ function buildBaseConditions(
     );
   }
 
+  // The applicant's citizenship and residence (countries). They only remove
+  // calls that rule the applicant out; a call that does not say is kept.
   if (filters.citizenshipRequirements.length > 0) {
-    conditions.push(buildArrayAnyCondition('citizenship_requirements', filters.citizenshipRequirements));
+    const codes = countryCodesForFilter(filters.citizenshipRequirements);
+    // A curated call's citizenship rule is free text that cannot be read
+    // safely ("any country except India", Niger vs Nigeria), so curated
+    // calls are kept; imported calls state it as a dimension.
+    if (codes.length > 0) {
+      conditions.push(Prisma.sql`(import_run_id IS NULL OR ${importedDimensionCountryCondition(['citizenship'], codes)})`);
+    }
   }
 
   if (filters.residencyRequirements.length > 0) {
-    conditions.push(buildArrayAnyCondition('residency_requirements', filters.residencyRequirements));
+    const codes = countryCodesForFilter(filters.residencyRequirements);
+    if (codes.length > 0) {
+      // A curated call's one country list means residence or citizenship;
+      // one with no country information at all is kept.
+      const unstated = Prisma.sql`(import_run_id IS NULL AND cardinality(eligible_countries) = 0 AND COALESCE(applicant_scope, 'UNSPECIFIED') = 'UNSPECIFIED')`;
+      conditions.push(
+        Prisma.sql`(${curatedCountryCondition(filters.residencyRequirements, codes)} OR ${unstated} OR ${importedDimensionCountryCondition(['residence'], codes)})`
+      );
+    }
   }
 
   return conditions;

@@ -27,12 +27,12 @@ function renderChipValues(filters: Required<RecommendationSearchFilters>) {
   filters.funderCountries.forEach((value) => chips.push({ key: 'funderCountries', label: 'Funder', value, action: 'remove_array_value' }));
   filters.institutionTypes.forEach((value) => chips.push({ key: 'institutionTypes', label: 'Institution', value, action: 'remove_array_value' }));
   filters.careerStages.forEach((value) => chips.push({ key: 'careerStages', label: 'Career', value, action: 'remove_array_value' }));
-  filters.applicationLanguages.forEach((value) => chips.push({ key: 'applicationLanguages', label: 'Language', value, action: 'remove_array_value' }));
+  filters.applicationLanguages.forEach((value) => chips.push({ key: 'applicationLanguages', label: 'Language (or not stated)', value, action: 'remove_array_value' }));
   filters.citizenshipRequirements.forEach((value) =>
-    chips.push({ key: 'citizenshipRequirements', label: 'Citizenship', value, action: 'remove_array_value' })
+    chips.push({ key: 'citizenshipRequirements', label: 'Citizen of', value, action: 'remove_array_value' })
   );
   filters.residencyRequirements.forEach((value) =>
-    chips.push({ key: 'residencyRequirements', label: 'Residency', value, action: 'remove_array_value' })
+    chips.push({ key: 'residencyRequirements', label: 'Living in', value, action: 'remove_array_value' })
   );
   if (filters.deadlineFrom) chips.push({ key: 'deadlineFrom', label: 'From', value: filters.deadlineFrom, action: 'clear_scalar' });
   if (filters.deadlineTo) chips.push({ key: 'deadlineTo', label: 'To', value: filters.deadlineTo, action: 'clear_scalar' });

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Check, Clock, Globe2, SlidersHorizontal, Search, Wallet, X } from 'lucide-react';
 import type { RecommendationSearchFilters } from '../lib/recommendations/types';
+import CountryPicker from './finder/CountryPicker';
 import FunderPicker from './finder/FunderPicker';
 import {
   RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS,
@@ -254,23 +255,28 @@ export default function FundingChatFilterDrawer({
                     onToggle={(value) => update({ careerStages: toggleListValue(filters.careerStages, value) })}
                   />
                 </div>
-                <FilterChips
-                  label="Application language"
-                  values={filters.applicationLanguages}
-                  options={RECOMMENDATION_APPLICATION_LANGUAGE_OPTIONS}
-                  onToggle={(value) => update({ applicationLanguages: toggleListValue(filters.applicationLanguages, value) })}
-                />
+                <div>
+                  <FilterChips
+                    label="Application language"
+                    values={filters.applicationLanguages}
+                    options={RECOMMENDATION_APPLICATION_LANGUAGE_OPTIONS}
+                    onToggle={(value) => update({ applicationLanguages: toggleListValue(filters.applicationLanguages, value) })}
+                  />
+                  <p className="cb-hint mt-1.5">Calls that do not state a language are kept.</p>
+                </div>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <TextArrayField
-                    label="Citizenship requirements"
-                    placeholder="Citizens of EU member states"
-                    values={filters.citizenshipRequirements}
+                  <CountryPicker
+                    id="chat-filter-citizenship"
+                    label="My citizenship"
+                    hint="Hides calls whose citizenship rules leave these countries out."
+                    values={filters.citizenshipRequirements || []}
                     onChange={(value) => update({ citizenshipRequirements: value })}
                   />
-                  <TextArrayField
-                    label="Residency requirements"
-                    placeholder="Must reside in Canada"
-                    values={filters.residencyRequirements}
+                  <CountryPicker
+                    id="chat-filter-residence"
+                    label="Where I live"
+                    hint="Hides calls that do not take applicants living there."
+                    values={filters.residencyRequirements || []}
                     onChange={(value) => update({ residencyRequirements: value })}
                   />
                 </div>
