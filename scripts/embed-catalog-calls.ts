@@ -14,9 +14,8 @@
  *
  *   node ./node_modules/tsx/dist/cli.cjs scripts/embed-catalog-calls.ts [--dry-run] [--limit N] [--batch 128]
  */
-import crypto from 'node:crypto'
-
 import prisma from '../src/lib/prisma'
+import { embeddingInputHash } from '../src/lib/fundingCatalogImport/embed'
 import { EmbeddingService } from '../src/lib/services/embeddingService'
 import { fundingCallEmbeddingInput, fundingCallEmbeddingTarget } from '../src/lib/services/fundingCatalogService'
 
@@ -26,10 +25,6 @@ function arg(name: string): string | undefined {
 }
 const flag = (name: string) => process.argv.includes(`--${name}`)
 
-export function embeddingInputHash(input: { text: string; title: string }): string {
-  return crypto.createHash('sha256').update(`${input.title}\n${input.text}`).digest('hex').slice(0, 32)
-}
-
 async function main() {
   const dryRun = flag('dry-run')
   const limit = arg('limit') ? Number(arg('limit')) : Infinity
@@ -38,12 +33,13 @@ async function main() {
   const column = target.column
   console.log(`Provider ${target.provider} · model ${target.modelName} · ${target.outputDimensionality} dims → ${column} · version ${target.version}`)
 
-  // Candidates: released imported calls, open ones first.
+  // Candidates: released imported calls (in the catalogue, or promoted to
+  // the funding department), open ones first.
   const rows = await prisma.$queryRawUnsafe<Array<{ id: string; has_vector: boolean; version: string | null; input_hash: string | null }>>(`
     SELECT id, (${column} IS NOT NULL) AS has_vector,
            metadata->>'embedding_version' AS version, metadata->>'embedding_input_hash' AS input_hash
     FROM funding_calls
-    WHERE import_run_id IS NOT NULL AND visibility::text = 'GLOBAL_CATALOG'
+    WHERE import_run_id IS NOT NULL AND visibility::text IN ('GLOBAL_CATALOG', 'GLOBAL_PUBLISHED')
       AND catalog_status::text = 'PUBLISHED' AND COALESCE(is_active, true) = true
     ORDER BY CASE WHEN source_closed_at IS NULL AND (COALESCE(is_rolling, false)
                OR COALESCE(entry_closes_at, close_date::date) >= CURRENT_DATE) THEN 0 ELSE 1 END, id`)

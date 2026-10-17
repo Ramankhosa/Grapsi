@@ -2,6 +2,8 @@ import { createNotifications } from '@/lib/notifications/notificationService'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { formatDeadlineDate } from '@/lib/i18n/format'
+import { getTenantLocale } from '@/lib/tenant/locale'
 
 import { isMemberAway } from './shared'
 
@@ -57,6 +59,48 @@ async function recipientsForSchool(
   return { userIds: [deputyUserId], rerouted: true }
 }
 
+type CoverageRow = {
+  tenant_id: string
+  org_unit_id: string
+  org_unit: { id: string; name: string; is_active: boolean } | null
+  member: { user_id: string; away_from: Date | null; away_until: Date | null }
+}
+
+/**
+ * The covered schools a call is relevant to (primary coverage, mapped schools
+ * only), by the same rule the notice below uses, so a preview of who would be
+ * told and the notice itself cannot disagree.
+ */
+export async function coveredSchoolsForCall(callId: string, tenantIds?: string[]): Promise<CoverageRow[]> {
+  // Primary coverage only. A deputy is a standby for absence, not a second
+  // person to notify about every publish.
+  const coverage = await prisma.fundingDeptSchoolAssignment.findMany({
+    where: { is_deputy: false, member: { is_active: true }, ...(tenantIds ? { tenant_id: { in: tenantIds } } : {}) },
+    select: {
+      tenant_id: true,
+      org_unit_id: true,
+      org_unit: { select: { id: true, name: true, is_active: true } },
+      member: { select: { user_id: true, away_from: true, away_until: true } },
+    },
+  })
+  const relevant: CoverageRow[] = []
+  for (const row of coverage) {
+    if (!row.org_unit?.is_active) continue
+    const profile = await loadUnitAreaProfile(row.tenant_id, [row.org_unit_id])
+    // An unmapped school matches everything, which would make this notice a
+    // firehose rather than a signal. Silence until the school is mapped is the
+    // right trade: the call is still in their queue either way.
+    if (profile.isUnmapped) continue
+    const matches = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT fc.id FROM funding_calls fc
+       WHERE fc.id = ${callId}
+         AND ${relevantCallWhereSql(profile, 'fc', { includeUnclassified: false })}
+    `)
+    if (matches.length > 0) relevant.push(row)
+  }
+  return relevant
+}
+
 export async function notifyCoveringOfficers(
   fundingCallId: string
 ): Promise<NewCallNoticeResult> {
@@ -86,38 +130,12 @@ export async function notifyCoveringOfficers(
   // funding-department calls at all until a curator promotes one).
   if (call.notification_policy === 'SUPPRESSED' || call.visibility === 'GLOBAL_CATALOG') return result
 
-  // Primary coverage only. A deputy is a standby for absence, not a second
-  // person to notify about every publish.
-  const coverage = await prisma.fundingDeptSchoolAssignment.findMany({
-    where: { is_deputy: false, member: { is_active: true } },
-    select: {
-      tenant_id: true,
-      org_unit_id: true,
-      org_unit: { select: { id: true, name: true, is_active: true } },
-      member: { select: { user_id: true, away_from: true, away_until: true } },
-    },
-  })
-
   const title = call.scheme_title || call.title || 'A new funding call'
   const agency = call.agency_name || call.agencyName
   const closesAt = call.close_date || call.deadlineAt
 
-  for (const row of coverage) {
-    if (!row.org_unit?.is_active) continue
-
-    const profile = await loadUnitAreaProfile(row.tenant_id, [row.org_unit_id])
-    // An unmapped school matches everything, which would make this notice a
-    // firehose rather than a signal. Silence until the school is mapped is the
-    // right trade: the call is still in their queue either way.
-    if (profile.isUnmapped) continue
-
-    const matches = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT fc.id FROM funding_calls fc
-       WHERE fc.id = ${call.id}
-         AND ${relevantCallWhereSql(profile, 'fc', { includeUnclassified: false })}
-    `)
-    if (matches.length === 0) continue
-
+  for (const row of await coveredSchoolsForCall(call.id)) {
+    if (!row.org_unit) continue
     result.schoolsMatched += 1
 
     const { userIds, rerouted } = await recipientsForSchool(
@@ -127,13 +145,12 @@ export async function notifyCoveringOfficers(
     )
     if (rerouted) result.reroutedForLeave += 1
 
+    // The deadline in the tenant's zone and date style; a date-only deadline keeps its date.
+    const tenantLocale = await getTenantLocale(row.tenant_id)
+    const closes = formatDeadlineDate(closesAt, { timeZone: tenantLocale.timezone, locale: tenantLocale.locale })
     const bodyParts = [
       agency ? `From ${agency}.` : null,
-      closesAt ? `Closes ${new Date(closesAt).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      })}.` : null,
+      closes ? `Closes ${closes}.` : null,
       `Matches ${row.org_unit.name}.`,
     ].filter(Boolean)
 

@@ -95,12 +95,16 @@ export async function releaseImportedCalls(input: {
            )
            UPDATE funding_calls fc
               SET catalog_status = 'PUBLISHED', status = 'PUBLISHED', is_active = true,
-                  "publishedAt" = COALESCE(fc."publishedAt", $2)
+                  -- publishedAt is a timestamp without time zone holding UTC
+                  -- (Prisma's convention). A bound Date is read in the session's
+                  -- zone, which stamped Indian time as UTC (+5:30) on a DB in
+                  -- Asia/Calcutta; converting explicitly stores the UTC instant.
+                  "publishedAt" = COALESCE(fc."publishedAt", ($2::timestamptz AT TIME ZONE 'UTC'))
              FROM old
             WHERE fc.id = old.id
         RETURNING fc.id, old.old_status, old.old_active, old.old_published`,
           ids,
-          now
+          now.toISOString()
         )
         if (flipped.length > 0) {
           const changes = flipped.flatMap((row) => [
@@ -157,6 +161,11 @@ export async function unreleaseImportedCalls(input: {
     select: { id: true },
   })
   const ids = published.map((row) => row.id)
+  // Promoted calls (GLOBAL_PUBLISHED) are outside this scope by design.
+  const promotedCount = await db.fundingCall.count({
+    where: { import_run_id: { not: null }, source: importSourceLabel(input.sourceKey), visibility: 'GLOBAL_PUBLISHED', ...(input.ids && input.ids.length > 0 ? { id: { in: input.ids } } : {}) },
+  })
+  if (promotedCount > 0) log(`${promotedCount} promoted to the funding department are left alone: withdraw them first.`)
   const attached = await callsWithAttachedWork(db, ids)
   const restore = ids.filter((id) => !attached.has(id))
   const archive = ids.filter((id) => attached.has(id))

@@ -43,7 +43,12 @@ export async function rollbackImportRun(input: {
   const run = await db.fundingImportRun.findUnique({ where: { id: input.runId } })
   if (!run) throw new Error(`No import run ${input.runId}.`)
 
-  const created = await db.fundingCall.findMany({ where: { import_run_id: input.runId }, select: { id: true, catalog_status: true } })
+  const createdRows = await db.fundingCall.findMany({ where: { import_run_id: input.runId }, select: { id: true, catalog_status: true, visibility: true } })
+  // A call promoted to the funding department is department work now: a
+  // rollback never pulls it out silently. Withdraw it from DSR first.
+  const promoted = createdRows.filter((c) => c.visibility === 'GLOBAL_PUBLISHED')
+  if (promoted.length > 0) log(`${promoted.length} of the run's calls are promoted to the funding department and are left alone: withdraw them first.`)
+  const created = createdRows.filter((c) => c.visibility !== 'GLOBAL_PUBLISHED')
   const createdIds = created.map((c) => c.id)
   const attached = await callsWithAttachedWork(db, createdIds)
   const toDelete = createdIds.filter((id) => !attached.has(id))

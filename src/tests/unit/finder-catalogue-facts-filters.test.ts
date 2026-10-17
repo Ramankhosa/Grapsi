@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { filterValueLabel, formatFilterDescription } from '@/lib/recommendations/filterChips'
 import { createDefaultFilters } from '@/lib/recommendations/conversationUtils'
 import { FACET_DIMENSION_FIELD, toggleFacetValue } from '@/lib/recommendations/directorySelections'
+import type { RecommendationSearchFilters } from '@/lib/recommendations/types'
 import {
   normalizeApplicationRouteList,
   normalizeProjectDurationList,
@@ -49,7 +50,8 @@ describe('filters on facts the catalogue states', () => {
 
   it('are directory facets whose values are alternatives', () => {
     expect(FACET_DIMENSION_FIELD.applicationRoute).toBe('applicationRoutes')
-    const once = toggleFacetValue({}, 'applicationRoute', 'not_stated')
+    const none: RecommendationSearchFilters = {}
+    const once = toggleFacetValue(none, 'applicationRoute', 'not_stated')
     const twice = toggleFacetValue(once, 'applicationRoute', 'self_nomination')
     expect(twice.applicationRoutes).toEqual(['not_stated', 'self_nomination'])
     expect(toggleFacetValue(twice, 'applicationRoute', 'not_stated').applicationRoutes).toEqual(['self_nomination'])

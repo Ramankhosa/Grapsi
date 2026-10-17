@@ -96,7 +96,7 @@ function Chips({ values }: { values: string[] }) {
   )
 }
 
-export function ImportedCallFacts({ facts }: { facts: ImportedCallFactsView }) {
+export function ImportedCallFacts({ facts, promotedToDsr = false }: { facts: ImportedCallFactsView; promotedToDsr?: boolean }) {
   const status = facts.opportunityStatus ? STATUS_LABEL[facts.opportunityStatus] : null
   const usd = formatUsd(facts.award.usdEstimateMin, facts.award.usdEstimateMax)
   const bases = [facts.award.timeBasis, facts.award.recipientBasis].map((b) => (b ? BASIS_LABEL[b] : null)).filter(Boolean)
@@ -135,7 +135,9 @@ export function ImportedCallFacts({ facts }: { facts: ImportedCallFactsView }) {
         <div className="mt-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
           <p>
-            Official guidelines not yet fetched. Check the funder&rsquo;s page for the full rules before you apply; Grant Prep becomes available once the guidelines are added.
+            {promotedToDsr
+              ? 'No official guidelines yet: check the funder’s page for the full rules. Grant Prep works from the details above until they are fetched.'
+              : 'Official guidelines not yet fetched. Check the funder’s page for the full rules before you apply; Grant Prep becomes available once the guidelines are added.'}
           </p>
         </div>
       ) : null}

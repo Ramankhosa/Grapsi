@@ -1099,6 +1099,18 @@ export async function archiveFundingCall(callId: string, actor: FundingActor) {
   if (!fundingCall || fundingCall.tenantId) {
     throw new FundingImportError('Global funding call not found', 404, 'FUNDING_CALL_NOT_FOUND')
   }
+  // Imported catalogue calls change through the import review (set aside,
+  // unrelease) or the funding-department withdraw, which log every column and
+  // check for attached work. Archiving here would skip both.
+  if (fundingCall.import_run_id) {
+    throw new FundingImportError(
+      fundingCall.visibility === 'GLOBAL_PUBLISHED'
+        ? 'This catalogue call is in the funding department: withdraw it there first.'
+        : 'Imported catalogue calls are set aside from the import review, not archived here.',
+      409,
+      'IMPORTED_CALL'
+    )
+  }
 
   const updated = await prisma.fundingCall.update({
     where: { id: callId },

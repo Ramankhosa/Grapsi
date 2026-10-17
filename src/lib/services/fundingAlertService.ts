@@ -431,7 +431,9 @@ export class FundingAlertService {
 
     // A suppressed call (bulk catalogue import) never alerts, whatever the
     // caller asked: the policy lives on the call so every path honours it.
-    if (call.notification_policy === 'SUPPRESSED') {
+    // OFFICERS_ONLY (a catalogue call promoted to the funding department
+    // without researcher alerts) tells officers, never researchers.
+    if (call.notification_policy === 'SUPPRESSED' || call.notification_policy === 'OFFICERS_ONLY') {
       result.reason = 'notifications_suppressed';
       return result;
     }
@@ -699,7 +701,7 @@ export class FundingAlertService {
       WHERE (catalog_status::text = 'PUBLISHED' OR status::text = 'PUBLISHED')
         AND COALESCE(is_active, true) = true
         AND COALESCE(metadata ->> 'alerts_dispatched_at', '') = ''
-        AND COALESCE(notification_policy, 'NORMAL') <> 'SUPPRESSED'
+        AND COALESCE(notification_policy, 'NORMAL') NOT IN ('SUPPRESSED', 'OFFICERS_ONLY')
         AND (close_date IS NULL OR close_date > NOW())
         AND (expiration_date IS NULL OR expiration_date > NOW())
       ORDER BY "updatedAt" DESC

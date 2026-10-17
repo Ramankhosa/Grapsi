@@ -7,6 +7,7 @@ import { ArrowLeft, CalendarDays, ExternalLink, Globe2, MapPin } from 'lucide-re
 import { useAuth } from '@/lib/auth-context'
 import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import { ImportedCallFacts } from '@/components/funding/ImportedCallFacts'
+import PromoteToDsrPanel, { canPromoteToDsr } from '@/components/funding/PromoteToDsrPanel'
 
 type FundingRulePreview = {
   key?: string | null
@@ -254,10 +255,12 @@ export default function FundingCallDetailsPage() {
 
   const officialSourceUrl = call.officialUrls?.[0] || call.sourceUrl || null
   // Imported catalogue calls carry facts only (no guidelines or template yet),
-  // so the authoring actions that need them are not offered. Grant Prep does
-  // not open catalogue calls yet, so this holds for enriched ones too.
+  // so the authoring actions that need them are not offered — unless a
+  // curator promoted the call to the funding department, which makes it a
+  // department call (its official guidelines are fetched on promotion).
   const catalogImport = call.catalogImport || null
-  const authoringReady = !catalogImport
+  const promotedToDsr = Boolean(catalogImport) && call.visibility === 'GLOBAL_PUBLISHED'
+  const authoringReady = !catalogImport || promotedToDsr
   const geography = call.geography || call.geographyScope || null
   const templateReadyText = call.templateStatus || call.template_status || 'none'
   const guidelineReadyText = call.guidelineStatus || call.guideline_status || 'none'
@@ -292,6 +295,9 @@ export default function FundingCallDetailsPage() {
               >
                 Validate an idea
               </Link>
+            ) : null}
+            {catalogImport && canPromoteToDsr(user) && (call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
+              <PromoteToDsrPanel callId={call.id} onChanged={() => window.location.reload()} />
             ) : null}
             {officialSourceUrl ? (
               <a href={officialSourceUrl} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm">
@@ -331,7 +337,7 @@ export default function FundingCallDetailsPage() {
           </div>
         </section>
 
-        {catalogImport ? <ImportedCallFacts facts={catalogImport} /> : null}
+        {catalogImport ? <ImportedCallFacts facts={catalogImport} promotedToDsr={promotedToDsr} /> : null}
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <section className="cb-card p-4 sm:p-5">

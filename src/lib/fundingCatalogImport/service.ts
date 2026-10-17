@@ -525,6 +525,30 @@ export async function runCatalogImport(options: RunImportOptions): Promise<{ run
         where: { source_key: options.sourceKey, entity_type: 'CALL', external_id: { notIn: seen } },
         data: { availability: 'NOT_SEEN_IN_SNAPSHOT' },
       })
+      // A promoted call stays in the funding department whatever the source
+      // does; a curator is told when the source stops listing it.
+      const unseenPromoted = await db.$queryRawUnsafe<Array<{ id: string }>>(
+        `SELECT fc.id FROM funding_calls fc
+           JOIN external_source_records esr ON esr.funding_call_id = fc.id AND esr.entity_type = 'CALL' AND esr.link_role = 'PRIMARY'
+          WHERE esr.source_key = $1 AND esr.availability = 'NOT_SEEN_IN_SNAPSHOT'
+            AND fc.import_run_id IS NOT NULL AND fc.visibility::text = 'GLOBAL_PUBLISHED'`,
+        options.sourceKey
+      )
+      for (const row of unseenPromoted) {
+        await db.fundingImportCandidate.upsert({
+          where: { dedupe_key: `promoted-not-seen:${row.id}` },
+          update: { run_id: run.id },
+          create: {
+            run_id: run.id,
+            dedupe_key: `promoted-not-seen:${row.id}`,
+            reason: 'SOURCE_UNAVAILABLE',
+            tier: 'INFO',
+            subject_call_id: row.id,
+            signals: { promoted: true, note: 'In the funding department, but the source no longer lists this call.' } as any,
+            blocks_release: false,
+          },
+        })
+      }
     }
     await db.fundingImportRun.update({
       where: { id: run.id },

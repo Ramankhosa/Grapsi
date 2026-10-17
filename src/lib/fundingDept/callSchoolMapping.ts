@@ -110,7 +110,11 @@ export type PlannedMapping = {
  * classification, school profiles and origin evidence. Plans only; the writer
  * decides what is new.
  */
-export async function planTenantMappings(tenantId: string, callIds: string[], options: { schoolIds?: string[]; mappedAt?: Date; backfilled?: boolean } = {}): Promise<PlannedMapping[]> {
+export async function planTenantMappings(
+  tenantId: string,
+  callIds: string[],
+  options: { schoolIds?: string[]; mappedAt?: Date; backfilled?: boolean; ignoreVisibility?: boolean } = {}
+): Promise<PlannedMapping[]> {
   if (!callIds.length) return []
   const mappedAt = options.mappedAt ?? new Date()
   const ids = textArray(callIds)
@@ -122,9 +126,12 @@ export async function planTenantMappings(tenantId: string, callIds: string[], op
     // and a list of call ids as separate arguments, and one caller pairing them
     // wrongly would map another tenant's private call into this tenant's
     // schools. A planner that cannot do that is worth one predicate.
+    // ignoreVisibility: a preview of where a catalogue call WOULD land before
+    // it is promoted (it is not visible to the department yet). Plans only;
+    // nothing is written from it.
     prisma.$queryRaw<Array<{ id: string; disciplines: string[] | null }>>(Prisma.sql`
       SELECT id, disciplines FROM funding_calls fc
-       WHERE id = ANY(${ids}) AND ${visibleCallSql(tenantId, 'fc')}`),
+       WHERE id = ANY(${ids}) AND ${options.ignoreVisibility ? Prisma.sql`fc.import_run_id IS NOT NULL` : visibleCallSql(tenantId, 'fc')}`),
     prisma.$queryRaw<Array<CallAreaRow & { funding_call_id: string }>>(Prisma.sql`
       SELECT funding_call_id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_name
         FROM funding_call_research_area_taxonomies WHERE funding_call_id = ANY(${ids})`),
@@ -207,6 +214,28 @@ export async function mapCallToSchools(callId: string, options: { tenantIds?: st
   const tenantIds = options.tenantIds ?? await tenantsForCall(callId)
   const planned = (await Promise.all(tenantIds.map(tenantId => planTenantMappings(tenantId, [callId])))).flat()
   return writeMappings(planned, options.actorId ?? null)
+}
+
+/**
+ * A call promoted again after a withdraw: the withdraw ended its mappings
+ * (rows are history and never deleted), and writeMappings leaves ended rows
+ * as they are, so they are reinstated here, each with an audit event.
+ */
+export async function reinstateEndedMappings(callId: string, endedReason: string, actorId: string | null) {
+  const rows = await prisma.$queryRaw<Array<{ tenant_id: string; school_id: string }>>(Prisma.sql`
+    WITH before AS (
+      SELECT * FROM dsr_call_school_mappings WHERE call_id = ${callId} AND NOT is_active AND ended_reason = ${endedReason} FOR UPDATE
+    ), upd AS (
+      UPDATE dsr_call_school_mappings m SET is_active = true, ended_at = NULL, ended_by = NULL, ended_reason = NULL, mapped_at = now(), mapped_by = ${actorId}
+        FROM before b WHERE m.tenant_id = b.tenant_id AND m.call_id = b.call_id AND m.school_id = b.school_id
+      RETURNING m.*
+    ), evt AS (
+      INSERT INTO dsr_events(tenant_id, school_id, entity_type, entity_id, actor_user_id, kind, before_data, after_data, reason, occurred_at)
+      SELECT u.tenant_id, u.school_id, 'MAPPING', u.call_id, ${actorId}, 'REINSTATED', to_jsonb(b), to_jsonb(u), 'Promoted to the funding department again', now()
+        FROM upd u JOIN before b ON b.tenant_id = u.tenant_id AND b.school_id = u.school_id
+    )
+    SELECT tenant_id, school_id FROM upd`)
+  return rows
 }
 
 /** Fire-and-forget form for publish and classification paths, which must never fail because of routing. */

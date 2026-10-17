@@ -238,9 +238,80 @@ async function main() {
     check('release logs all four columns it changes', ['catalog_status', 'status', 'is_active', 'publishedAt'].every((f) => loggedFields.some((g) => g.field === f && g._count._all === released.released)))
     const afterRelease = await db.fundingCall.findMany({ where: { import_run_id: { not: null }, catalog_status: 'PUBLISHED' }, select: { id: true, updatedAt: true, visibility: true, notification_policy: true } })
     check('release does not bump updatedAt', afterRelease.every((r) => updatedAtBefore.get(r.id) === r.updatedAt.toISOString()))
+    const stamped = await db.fundingCall.findFirst({ where: { import_run_id: { not: null }, catalog_status: 'PUBLISHED' }, select: { publishedAt: true } })
+    check('release stamps the true instant, whatever the DB time zone', Boolean(stamped?.publishedAt && Math.abs(Date.now() - stamped.publishedAt.getTime()) < 120000), stamped?.publishedAt?.toISOString())
     check('released calls stay GLOBAL_CATALOG and suppressed', afterRelease.every((r) => r.visibility === 'GLOBAL_CATALOG' && r.notification_policy === 'SUPPRESSED'))
     const dsrVisible = await db.$queryRawUnsafe<Array<{ n: number }>>(`SELECT count(*)::int AS n FROM funding_calls WHERE "tenantId" IS NULL AND visibility = 'GLOBAL_PUBLISHED' AND status = 'PUBLISHED' AND import_run_id IS NOT NULL`)
     check('funding-department scope still sees no imported call', dsrVisible[0].n === 0)
+
+    console.log('\nPromotion to the funding department')
+    const { previewPromotion, promoteToDsr, withdrawFromDsr, PromotionError, WITHDRAW_REASON } = await import('../src/lib/fundingCatalogImport/promote')
+    const { fundingAlertService } = await import('../src/lib/services/fundingAlertService')
+    const { archiveFundingCall } = await import('../src/lib/funding/ingestion-service')
+    // A tenant with a funding department (no country set: India) and one school.
+    const officer = await db.user.create({ data: { email: `officer-${Date.now()}@verify.test`, tenantId: tenant.id } })
+    await db.fundingDeptMember.create({ data: { tenant_id: tenant.id, user_id: officer.id } })
+    const school = await db.tenantOrgUnit.create({ data: { tenant_id: tenant.id, kind: 'SCHOOL', name: 'Verify School' } })
+    const operator = { userId: officer.id, email: officer.email, role: 'ADMIN' as const, tenantId: tenant.id }
+    const superAdmin = { id: officer.id, email: officer.email, roles: ['SUPER_ADMIN'], tenantId: null, tenantAtiId: 'PLATFORM', isSuperAdmin: true, isSuperAdminWriter: true, platformPermissions: ['funding.publisher.write'] }
+    const releasedCalls = await db.fundingCall.findMany({ where: { import_run_id: { not: null }, catalog_status: 'PUBLISHED', review_status: 'CLEAR' }, orderBy: { id: 'asc' } })
+    // No country set: India is assumed, and these US-only calls are blocked.
+    const blockedForIndia = (await previewPromotion(releasedCalls[0].id)).blockers
+    check('a call that rules out the department country cannot be promoted', blockedForIndia.some((b) => /Not open to researchers in India/.test(b)))
+    await db.tenant.update({ where: { id: tenant.id }, data: { country_code: 'US' } })
+    let target: (typeof releasedCalls)[number] | null = null
+    const seen: string[] = []
+    for (const candidate of releasedCalls) {
+      const preview = await previewPromotion(candidate.id)
+      if (preview.promotable) { target = candidate; break }
+      seen.push(`${candidate.scheme_title}: ${preview.blockers.join(' ')}`)
+    }
+    check('a released, clear, open call can be promoted', Boolean(target), seen.slice(0, 4).join(' | '))
+    const stagedCall = await db.fundingCall.findFirst({ where: { import_run_id: { not: null }, catalog_status: 'STAGED' } })
+    if (stagedCall) check('an unreleased call cannot be promoted', (await previewPromotion(stagedCall.id)).blockers.some((b) => /Release/.test(b)))
+
+    const t = target!
+    const publishedBefore = t.publishedAt
+    const promotion = await promoteToDsr(t.id, operator, { notifyOfficers: true, alertResearchers: false }, { runEnrichment: false })
+    const promoted = await db.fundingCall.findUnique({ where: { id: t.id } })
+    check('promotion makes it a department call, officers only', promoted?.visibility === 'GLOBAL_PUBLISHED' && promoted?.notification_policy === 'OFFICERS_ONLY')
+    check('promotion dates it now, not at its catalogue release', Boolean(promoted?.publishedAt && Math.abs(Date.now() - promoted.publishedAt.getTime()) < 120000))
+    const promoteFields = (await db.fundingImportChange.findMany({ where: { run_id: promotion.runId }, select: { field: true } })).map((r) => r.field)
+    check('promotion logs every column it changes', ['visibility', 'notification_policy', 'notification_policy_reason', 'publishedAt'].every((f) => promoteFields.includes(f)))
+    const dsrVisibleNow = await db.$queryRawUnsafe<Array<{ n: number }>>(`SELECT count(*)::int AS n FROM funding_calls WHERE "tenantId" IS NULL AND visibility = 'GLOBAL_PUBLISHED' AND status = 'PUBLISHED' AND import_run_id IS NOT NULL`)
+    check('the funding department sees exactly the promoted call', dsrVisibleNow[0].n === 1)
+    const dispatch = await fundingAlertService.dispatchAlertsForFundingCall(t.id, { force: true })
+    check('officers only: researchers are never alerted', dispatch.reason === 'notifications_suppressed' && (await db.fundingCallAlert.count()) === 0)
+    check('a second promotion is refused', await promoteToDsr(t.id, operator, { notifyOfficers: true, alertResearchers: false }, { runEnrichment: false }).then(() => false, (e) => e instanceof PromotionError))
+    check('archive refuses a promoted call', await archiveFundingCall(t.id, superAdmin as any).then(() => false, (e) => /withdraw/i.test(String(e?.message))))
+    check('unrelease leaves a promoted call alone', (await unreleaseImportedCalls({ db: db as any, sourceKey: 'scientify', dryRun: true, ids: [t.id] })).inScope === 0)
+    const rollbackPlan = await rollbackImportRun({ db: db as any, runId: t.import_run_id!, dryRun: true })
+    const runCalls = await db.fundingCall.count({ where: { import_run_id: t.import_run_id! } })
+    check('rollback leaves a promoted call alone', rollbackPlan.toDelete! + rollbackPlan.toArchive! === runCalls - 1)
+
+    const reimport = await runCatalogImport({ ...common, mode: 'APPLY', confirmTarget: database })
+    const afterReimport = await db.fundingCall.findUnique({ where: { id: t.id } })
+    check('a re-import keeps the promotion', Boolean(reimport.runId) && afterReimport?.visibility === 'GLOBAL_PUBLISHED' && afterReimport?.notification_policy === 'OFFICERS_ONLY' && afterReimport?.publishedAt?.getTime() === promoted?.publishedAt?.getTime())
+
+    // A school took the call, and an officer assigned it.
+    await db.$executeRawUnsafe(`INSERT INTO dsr_call_school_mappings(tenant_id, call_id, school_id, source, tier, reason) VALUES ($1, $2, $3, 'INGESTION_DIRECT', 'direct', 'verify')`, tenant.id, t.id, school.id)
+    const assignment = await db.callAssignment.create({ data: { tenant_id: tenant.id, funding_call_id: t.id, assignee_user_id: officer.id, assigned_by_user_id: officer.id } })
+    check('withdraw is refused while work is attached', await withdrawFromDsr(t.id, operator).then(() => false, (e) => /assignments/.test(String(e?.message))))
+    await db.callAssignment.delete({ where: { id: assignment.id } })
+    await withdrawFromDsr(t.id, operator)
+    const withdrawn = await db.fundingCall.findUnique({ where: { id: t.id } })
+    const mapping = async () => (await db.$queryRawUnsafe<Array<{ is_active: boolean; ended_reason: string | null }>>(`SELECT is_active, ended_reason FROM dsr_call_school_mappings WHERE call_id = $1`, t.id))[0]
+    check('withdraw restores the catalogue state', withdrawn?.visibility === 'GLOBAL_CATALOG' && withdrawn?.notification_policy === 'SUPPRESSED' && withdrawn?.publishedAt?.getTime() === publishedBefore?.getTime())
+    const ended = await mapping()
+    check('withdraw ends the school mapping, kept as history', ended?.is_active === false && ended?.ended_reason === WITHDRAW_REASON)
+    await promoteToDsr(t.id, operator, { notifyOfficers: false, alertResearchers: false }, { runEnrichment: false })
+    check('promoting again reinstates the mapping', (await mapping())?.is_active === true)
+    check('no ticks: nobody is told', (await db.fundingCall.findUnique({ where: { id: t.id } }))?.notification_policy === 'SUPPRESSED')
+    await withdrawFromDsr(t.id, operator)
+    check('nothing notified anyone while promoting', (await db.notification.count()) === notificationsBefore)
+    // Test scaffolding: the mapping row inserted above is history now, and
+    // history counts as attached work for unrelease and rollback below.
+    await db.$executeRawUnsafe(`DELETE FROM dsr_call_school_mappings WHERE call_id = $1`, t.id)
     const un = await unreleaseImportedCalls({ db: db as any, sourceKey: 'scientify', dryRun: false })
     const restoredRows = await db.fundingCall.findMany({ where: { import_run_id: { not: null }, catalog_status: 'STAGED', review_status: 'CLEAR' }, select: { status: true, is_active: true, publishedAt: true } })
     check('unrelease restores every released column', un.restored === released.released && restoredRows.every((r) => r.status === 'READY_FOR_REVIEW' && r.is_active === false && r.publishedAt === null))

@@ -134,6 +134,34 @@ lists unresolved names) then `--apply`. Profile saves keep them in step after.
 After it, curated calls' stated country eligibility also gates alerts and
 shows badges, and the funder filter matches them by funder link.
 
+## Promoting a catalogue call to the funding department
+
+Imported calls stay out of DSR. A curator (publisher) sends one in from its
+page in the finder or the super-admin call page: **Send to funding department**.
+
+- The dialog lists every institution with a funding department, its country
+  (India when none is set), the eligibility verdict for a researcher living,
+  working and holding citizenship there, and the schools reached (stored
+  mapping plus the officers' new-call notice). It refuses a call that is not
+  released, not review-clear, closed, a likely duplicate of a curated call, or
+  **Not eligible** for any of those countries; "Check eligibility" only warns.
+- Promotion makes the call GLOBAL_PUBLISHED, dates it now (`publishedAt`, so
+  it does not arrive already overdue), maps it to schools, notifies covering
+  officers if ticked (default on) and alerts matched researchers if ticked
+  (default off). It also fetches that call's official guidelines (about a cent
+  or two; a refusal or failed quality check leaves a review item and Grant Prep
+  works from the facts with a banner).
+- Every changed column is logged under a PROMOTE run. **Withdraw** (call page or
+  the "Promoted to the funding department" list on the import review) ends the
+  school mappings and restores the catalogue state, but is refused while any
+  department or faculty work is attached (assignments, follow-ups, triage,
+  shortlists, Grant Prep, proposals).
+- Unrelease, import rollback and archive leave promoted calls alone: withdraw
+  first. A re-import keeps the promotion and updates the content; if the
+  source stops listing a promoted call, a review item says so.
+- The list re-checks eligibility live: a DSR institution added later, or one
+  that changes its country, is flagged there.
+
 ## Enrichment (official guidelines for catalogue calls)
 
 `scripts/enrich-catalog-calls.ts` fetches each eligible call's official page

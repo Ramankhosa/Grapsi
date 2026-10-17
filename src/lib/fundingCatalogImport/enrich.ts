@@ -206,6 +206,18 @@ async function mergeEnrichmentMetadata(db: PrismaClient, callId: string, patch: 
   `)
 }
 
+/**
+ * A catalogue call (GLOBAL_CATALOG), or one a curator promoted to the funding
+ * department: promotion fetches that call's guidelines, so faculty writing
+ * for it work from the funder's own rules.
+ */
+function enrichableVisibility(call: { visibility: unknown; metadata: unknown }) {
+  const visibility = String(call.visibility)
+  if (visibility === 'GLOBAL_CATALOG') return true
+  const promotion = (call.metadata as Record<string, unknown> | null)?.dsr_promotion
+  return visibility === 'GLOBAL_PUBLISHED' && Boolean(promotion)
+}
+
 export async function enrichImportedCall(input: {
   db: PrismaClient
   callId: string
@@ -228,7 +240,7 @@ export async function enrichImportedCall(input: {
     descriptionUpdated: false,
   }
   if (!call) return { ...outcome, reasons: ['call not found'] }
-  if (!call.import_run_id || String(call.visibility) !== 'GLOBAL_CATALOG' || String(call.catalog_status) !== 'PUBLISHED') {
+  if (!call.import_run_id || !enrichableVisibility(call) || String(call.catalog_status) !== 'PUBLISHED') {
     return { ...outcome, reasons: ['not a released catalogue call'] }
   }
   if (call.enrichment_level && call.enrichment_level !== 'LITE') return { ...outcome, reasons: [`already ${call.enrichment_level}`] }
@@ -364,7 +376,7 @@ export async function enrichImportedCall(input: {
     })
 
     const current = await db.fundingCall.findUnique({ where: { id: callId } })
-    if (!current || !current.import_run_id || String(current.visibility) !== 'GLOBAL_CATALOG' || (current.enrichment_level && current.enrichment_level !== 'LITE')) {
+    if (!current || !current.import_run_id || !enrichableVisibility(current) || (current.enrichment_level && current.enrichment_level !== 'LITE')) {
       return { ...outcome, status: 'SKIPPED', reasons: ['call changed during enrichment'] }
     }
 
@@ -426,7 +438,7 @@ export async function enrichImportedCall(input: {
     const message = error instanceof Error ? error.message : String(error)
     await discardAttempt().catch((cleanupError) => log(`    cleanup failed: ${String(cleanupError).slice(0, 120)}`))
     // The site refuses automated access: retrying will not change that.
-    if (/status code (401|403)/.test(message)) {
+    if (/status code (401|403)\b/.test(message)) {
       const reasons = [`official site refused automated access (${message.match(/40[13]/)?.[0]})`]
       await db.fundingImportCandidate
         .upsert({

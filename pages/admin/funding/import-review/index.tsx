@@ -115,6 +115,96 @@ function CallPanel({ label, call }: { label: string; call: CallSummary | null })
   );
 }
 
+type PromotedCall = {
+  callId: string;
+  title: string;
+  agency: string | null;
+  closeDate: string | null;
+  promotedAt: string;
+  promotedBy: string;
+  activeMappings: number;
+  work: Array<{ table: string; rows: number }>;
+  enrichmentLevel: string | null;
+  ineligibleFor: string[];
+  sourceAvailability: string | null;
+};
+
+/** Catalogue calls promoted to the funding department, with live checks and Withdraw. */
+function PromotedCalls({ canWithdraw }: { canWithdraw: boolean }) {
+  const [calls, setCalls] = useState<PromotedCall[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const response = await fetch('/api/admin/funding/import-review/promoted');
+    const data = await response.json().catch(() => ({}));
+    setCalls(response.ok ? data.calls || [] : []);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function withdraw(call: PromotedCall) {
+    if (!window.confirm(`Take “${call.title}” out of the funding department?\n\nIts school mappings end and it returns to the global catalogue.`)) return;
+    setBusy(call.callId);
+    try {
+      const response = await fetch('/api/admin/funding/import-review/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: call.callId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Withdraw failed');
+      toast.success('Withdrawn from the funding department');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Withdraw failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!calls || calls.length === 0) return null;
+  return (
+    <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-900">Promoted to the funding department ({calls.length})</h2>
+      <p className="mt-1 text-[12px] text-slate-500">Send a call from its page in the finder. Withdraw works while no department or faculty work is attached.</p>
+      <ul className="mt-3 divide-y divide-slate-100">
+        {calls.map((call) => {
+          const workRows = call.work.reduce((n, item) => n + item.rows, 0);
+          return (
+            <li key={call.callId} className="flex flex-col gap-2 py-3 md:flex-row md:items-start md:justify-between">
+              <div className="min-w-0">
+                <a href={`/finder/calls/${call.callId}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-slate-900 hover:underline">{call.title}</a>
+                <p className="mt-0.5 text-[12px] text-slate-500">
+                  {call.agency || 'Unknown funder'} · sent {new Date(call.promotedAt).toISOString().slice(0, 10)} by {call.promotedBy} · {call.activeMappings} school
+                  {call.activeMappings === 1 ? '' : 's'} · {call.enrichmentLevel === 'ENRICHED' ? 'official guidelines fetched' : 'no official guidelines yet'}
+                  {workRows ? ` · ${workRows} work item${workRows === 1 ? '' : 's'} attached` : ''}
+                </p>
+                {call.ineligibleFor.length ? (
+                  <p className="mt-1 text-[12px] text-rose-700">Now not open to researchers in: {call.ineligibleFor.join(', ')}</p>
+                ) : null}
+                {call.sourceAvailability === 'NOT_SEEN_IN_SNAPSHOT' ? (
+                  <p className="mt-1 text-[12px] text-amber-700">The source no longer lists this call.</p>
+                ) : null}
+              </div>
+              {canWithdraw ? (
+                <button
+                  type="button"
+                  disabled={busy === call.callId || workRows > 0}
+                  title={workRows > 0 ? 'Close or move the attached work first' : undefined}
+                  onClick={() => void withdraw(call)}
+                  className="shrink-0 rounded-md border border-slate-300 px-2.5 py-1 text-[12px] font-medium text-slate-700 disabled:opacity-50"
+                >
+                  Withdraw
+                </button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export default function ImportReviewPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
@@ -304,6 +394,8 @@ export default function ImportReviewPage() {
             </div>
           ))}
         </div>
+
+        {user && canView ? <PromotedCalls canWithdraw={canRelease} /> : null}
 
         <div className="mt-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <label className="text-[12px] text-slate-600">

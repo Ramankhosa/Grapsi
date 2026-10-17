@@ -9,6 +9,7 @@ import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import type { FundingCallDetail } from '@/types/funding'
 import CallResearchAreas from '@/components/funding/CallResearchAreas'
 import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
+import PromoteToDsrPanel, { canPromoteToDsr } from '@/components/funding/PromoteToDsrPanel'
 
 type FundingCallDetailPageProps = {
   callId: string
@@ -177,6 +178,8 @@ export default function FundingCallDetailPage({
     }
   }
 
+  const importedCall = Boolean((call as { catalogImport?: unknown } | null)?.catalogImport)
+
   if (requireSuperAdmin && (authLoading || !isSuperAdmin)) {
     return <div className="p-8 text-sm text-gray-600">Checking platform access...</div>
   }
@@ -219,7 +222,12 @@ export default function FundingCallDetailPage({
             </div>
           ) : null}
 
-          {call && isSuperAdminWriter && call.visibility === 'GLOBAL_PUBLISHED' ? (
+          {call && importedCall && canPromoteToDsr(user) && call.catalogStatus === 'PUBLISHED' ? (
+            <PromoteToDsrPanel callId={callId} onChanged={() => void fetchCall()} />
+          ) : null}
+
+          {/* Imported catalogue calls are set aside or withdrawn, never archived here. */}
+          {call && isSuperAdminWriter && call.visibility === 'GLOBAL_PUBLISHED' && !importedCall ? (
             <div className="flex gap-2">
               <button
                 type="button"

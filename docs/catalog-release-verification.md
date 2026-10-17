@@ -27,6 +27,7 @@ named); **OPEN** a decision or a cost that is not a code defect.
 | A4 | Officer "new call" notices never fire for them | `newCallNoticeService` returns early on `notification_policy = SUPPRESSED` **or** `GLOBAL_CATALOG` | PASS |
 | A5 | The reviewer workspace picker stays curated | `pages/api/reviewer/funding-calls.ts` filters `GLOBAL_PUBLISHED` or own tenant | PASS |
 | A6 | Intake pickers, duplicate-merge targets, bulk publish and global publish refuse them | explicit `NOT GLOBAL_CATALOG` / `import_run_id IS NULL` guards in `fundingIntake/service`, `funding/calls`, `fundingCatalogService`, `ingestion-service` | PASS |
+| A8 | The one way in is a curator's promotion, one call at a time | `src/lib/fundingCatalogImport/promote.ts`: released, review-clear, open, no likely curated twin, not INELIGIBLE for any DSR tenant's country; publishedAt = promotion time; policy SUPPRESSED / OFFICERS_ONLY / NORMAL from the curator's ticks; withdraw blocked while work is attached; unrelease, rollback and archive refuse promoted calls. `verify-catalog-import` promotion section (20 checks) | PASS |
 | A7 | The super-admin researcher-matching picker and its "funding calls" tile stay curated | they were `where: { status: 'PUBLISHED' }` ordered by `updatedAt`, `take: 50` — after release the picker would have listed **only** catalogue calls and the tile would have read ~8,371 | **FIXED** `src/app/api/super-admin/researcher-matching/route.ts` |
 
 ## B. Researcher discovery must stay useful

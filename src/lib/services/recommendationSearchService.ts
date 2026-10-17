@@ -403,7 +403,8 @@ function countryCodesForFilter(values: string[]) {
  * where the listing has a stronger signal (a text rank, a nearer deadline)
  * that still decides, and this only breaks the tie.
  */
-const CURATED_FIRST_SQL = Prisma.sql`(import_run_id IS NULL) DESC`;
+// A catalogue call promoted to the funding department ranks with the curated ones.
+const CURATED_FIRST_SQL = Prisma.sql`(import_run_id IS NULL OR visibility::text = 'GLOBAL_PUBLISHED') DESC`;
 
 /** The source's mobility facet of a call row (imported calls only). */
 const MOBILITY_SQL = Prisma.raw(`(metadata #> '{catalog_import,source_facets,mobility}')`);
