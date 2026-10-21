@@ -92,3 +92,27 @@ review and zero unmapped labels. The actual Linux/PM2 rehearsal must finish
 before production migration/import.
 The rehearsal is isolated in `grapsi_catalog_rehearsal_20261021_101626` and a
 separate application checkout. Production remains unchanged at this checkpoint.
+
+## Production completion — 21 October 2026
+
+Production deployment passed at 17:18 IST (11:48 UTC). Commit `3bda147`
+was deployed, all pending migrations completed, and PM2 `grantmentor` restarted
+successfully. Health and authenticated discovery/admin smoke checks passed.
+
+Final counts: 10,120 imported calls, 8,390 published and vectorized, 1,730 held.
+All imports retain notification suppression; zero imported alerts and zero
+imports in DSR scope. Full-row comparisons preserved all 238 existing calls,
+74 assignments, 10 triage records, 11 follow-ups, 412 events, 250 school mappings,
+856 users and 10 tenants. No failed migrations. Other applications' PM2 PIDs
+remained unchanged, and their databases were not modified.
+
+Held reasons: 1,717 possible duplicate calls; 13 readiness failures (5 missing
+agency and deadline/rolling information, 5 missing disciplines, 3 descriptions).
+As of 21 October, published imports include 1,434 open and 506 rolling calls;
+held imports include 272 open and 59 rolling. These are snapshot/date-derived
+statuses, not independent confirmations from funders.
+
+The full pre-deployment backup was restored successfully in rehearsal and an
+independent SHA-256-verified copy is retained on the operator's computer. The
+server also retains the pre-import backup, release logs and preservation evidence
+under `backups/catalog-release-20261021_101626/`. No descriptions were rewritten.
