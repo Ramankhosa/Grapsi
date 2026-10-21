@@ -52,11 +52,39 @@ AI confidence is not a calibrated accuracy guarantee; assess a pilot before
 approving a large set. No notification or publication occurs during AI review.
 
 Deploy the additive `20261021130000_catalog_ai_review` migration, generate the
-Prisma client and deploy the application. This change does not start paid
-reviews, deploy itself, or alter production data. Production remains on the
-previous catalogue deployment until this module is separately deployed.
+Prisma client and deploy the application. Deploying the module does not itself
+start paid reviews or change calls.
 
 Validation: `scripts/verify-catalog-ai-review.ts` uses a schema-only disposable
 local database and mocked provider responses. It verifies the actual migration,
 selection, duplicate-batch refusal, concurrent claiming, usage persistence,
 approvals, unchanged intake, surviving blockers, stale inputs and zero alerts.
+
+## Production pilot — 21 October 2026
+
+Application commit `a5a20d5` was deployed to Grapsi on patentnest, and
+`grantmentor` restarted successfully. A fresh full Grapsi backup and checksum
+are retained under `backups/catalog-ai-review-20261021/`. Health, authenticated
+search, existing-record preservation and unchanged catalogue fingerprints passed.
+Other applications' process IDs remained unchanged; no other database was modified.
+
+Real Gemini 2.5 Flash trials exposed output-shape problems, unsupported suggestions,
+and confusion between missing-fact audits and pair comparisons. The deployed
+fixes constrain the provider's response schema, verify suggested values against
+verbatim evidence, bound long quotes only after confirming the full quotation,
+and explicitly distinguish single-record audits. Earlier batches are cancelled
+and retained for audit; they must not be treated as successful evaluations.
+
+The final pilot batch `cmvi53z350001heulilh0ws59` covers 12 conflicts involving
+20 unique calls. Seven recommendations passed validation (three same-opportunity,
+three separate-opportunity, one needs-information); five outputs were rejected
+by evidence checks. No recommendation qualified for bulk approval. No approval,
+merge, publication, call edit, source edit, conflict resolution or alert occurred.
+All call/conflict/source/alert fingerprints remain identical to the pre-deployment
+snapshot. Results are visible in the Superadmin module's saved batches.
+
+This pilot establishes operation and fail-closed behavior, not reliable unattended
+resolution. In particular, the model called complementary eligibility listings
+separate opportunities despite describing the same programme; the conservative
+bulk-approval gate refused that result. Use assisted review and targeted retries;
+do not automatically approve the backlog based on this pilot.
