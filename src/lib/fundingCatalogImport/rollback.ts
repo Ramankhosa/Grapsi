@@ -1,11 +1,10 @@
 /**
  * Reversing an import run.
  *
- * Deletes only calls the run CREATED, and only if nothing else has attached
- * to them: deleting a call cascades into assignments, grant sessions, matches
- * and DSR rows, so any call with a row in any referencing table (other than
- * the import's own side tables and its own crosswalk mappings) is archived
- * instead, never deleted. Field updates the run made to earlier imported
+ * Archives calls the run CREATED. Never physically delete a call: references
+ * can live in JSON/text, and work can attach after an attachment check. A
+ * cascading DELETE could otherwise erase that work. Provenance and linked
+ * funders remain available for history. Field updates made to earlier imported
  * calls are reverted from the change log. Existing (pre-import) calls are
  * never touched: they have no import_run_id and the run never wrote them.
  */
@@ -50,33 +49,24 @@ export async function rollbackImportRun(input: {
   if (promoted.length > 0) log(`${promoted.length} of the run's calls are promoted to the funding department and are left alone: withdraw them first.`)
   const created = createdRows.filter((c) => c.visibility !== 'GLOBAL_PUBLISHED')
   const createdIds = created.map((c) => c.id)
-  const attached = await callsWithAttachedWork(db, createdIds)
-  const toDelete = createdIds.filter((id) => !attached.has(id))
-  const toArchive = createdIds.filter((id) => attached.has(id))
+  const toDelete: string[] = []
+  const toArchive = createdIds
   const updates = await db.fundingImportChange.findMany({
     where: { run_id: input.runId, operation: 'UPDATE', entity_table: 'funding_calls', entity_id: { notIn: createdIds } },
     orderBy: { created_at: 'desc' },
   })
   const createdFunders = await db.funder.findMany({ where: { import_run_id: input.runId }, select: { id: true } })
-  log(`Run ${input.runId}: ${createdIds.length} calls created (${toDelete.length} deletable, ${toArchive.length} have attached work → archive), ${updates.length} field updates to revert, ${createdFunders.length} funders created.`)
+  log(`Run ${input.runId}: ${createdIds.length} calls created (${toArchive.length} to archive; physical deletion disabled), ${updates.length} field updates to revert, ${createdFunders.length} funders created.`)
   if (input.dryRun) return { deleted: 0, archived: 0, reverted: 0, funders: 0, toDelete: toDelete.length, toArchive: toArchive.length }
 
-  let deleted = 0
-  for (let i = 0; i < toDelete.length; i += 200) {
-    const ids = toDelete.slice(i, i + 200)
-    const result = await db.$executeRawUnsafe(
-      `DELETE FROM funding_calls WHERE id = ANY($1::text[]) AND import_run_id = $2`,
-      ids,
-      input.runId
-    )
-    deleted += Number(result)
-  }
+  const deleted = 0
   let archived = 0
   if (toArchive.length > 0) {
     archived = Number(
       await db.$executeRawUnsafe(
         `UPDATE funding_calls SET catalog_status = 'ARCHIVED', status = 'ARCHIVED', is_active = false, "archivedAt" = now()
-         WHERE id = ANY($1::text[]) AND import_run_id = $2`,
+         WHERE id = ANY($1::text[]) AND import_run_id = $2
+           AND visibility::text <> 'GLOBAL_PUBLISHED'`,
         toArchive,
         input.runId
       )

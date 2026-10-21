@@ -78,8 +78,8 @@ The log, both dumps, the safety snapshots and the importer's reports are in
 
 ## Undo
 
-- **The import** (deletes only what the run created; anything people have
-  attached work to is archived instead):
+- **The import** (archives the run's calls and keeps their records, links and
+  provenance; promoted department calls are left alone):
   `node node_modules/tsx/dist/cli.cjs scripts/import-funding-catalog.ts rollback --run <runId> --confirm-target <db>`
   The run id is printed by the import phase and kept in `run/<ts>/apply.txt`.
   Roll the import back **before** rolling the code back: older builds cannot

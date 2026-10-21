@@ -318,8 +318,8 @@ async function main() {
 
     console.log('\nRollback and safety')
     for (const run of [full.runId!, partial.runId!]) await rollbackImportRun({ db: db as any, runId: run, dryRun: false, confirmTarget: database })
-    check('rollback removes every imported call', (await db.fundingCall.count({ where: { import_run_id: { not: null } } })) === 0)
-    check('rollback removes provenance and funders it created', (await db.externalSourceRecord.count()) === 0 && (await db.funder.count()) === 0)
+    check('rollback archives every imported call without deleting history', (await db.fundingCall.count({ where: { import_run_id: { not: null } } })) > 0 && (await db.fundingCall.count({ where: { import_run_id: { not: null }, OR: [{ catalog_status: { not: 'ARCHIVED' } }, { is_active: true }] } })) === 0)
+    check('rollback retains provenance and linked funders', (await db.externalSourceRecord.count()) > 0 && (await db.funder.count()) > 0)
     const after = await captureSafetySnapshot(db as any)
     const comparison = compareSafetySnapshots(before, after)
     check('existing calls are byte-identical end to end', comparison.ok && comparison.appEdits.length === 0, JSON.stringify({ silent: comparison.silentChanges.length, missing: comparison.missingRows.length, invariant: comparison.invariantViolations }))

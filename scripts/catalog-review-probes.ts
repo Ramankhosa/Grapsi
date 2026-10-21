@@ -41,6 +41,9 @@ await withDisposableDb(async({db})=>{
   await db.fundingCall.delete({where:{id:guardCall.id}})
  }
  const imported=await db.fundingCall.create({data:{...base,title:'review import',visibility:'GLOBAL_CATALOG',catalog_status:'STAGED',import_run_id:run.id,review_status:'CLEAR',notification_policy:'SUPPRESSED'}})
+ const jsonOnly=await db.fundingCall.create({data:{...base,title:'JSON-only reference',visibility:'GLOBAL_CATALOG',catalog_status:'STAGED',import_run_id:run.id,review_status:'CLEAR',notification_policy:'SUPPRESSED'}})
+ await db.ideaIntelligenceRun.create({data:{userId:'review',title:'Saved analysis',ideaText:'Saved analysis',retrievalResultsJson:{calls:[{id:jsonOnly.id}]}}})
+ assert.equal((await callsWithAttachedWork(db as any,[jsonOnly.id])).has(jsonOnly.id),false)
  const {Prisma}=await import('@prisma/client')
  const {importedDimensionCountryCondition,directoryEligibilityDemotion}=await import('../src/lib/services/recommendationSearchService')
  const {evaluateDimension}=await import('../src/lib/funding/eligibility')
@@ -68,6 +71,8 @@ await withDisposableDb(async({db})=>{
  await rollbackImportRun({db:db as any,runId:run.id,dryRun:false,confirmTarget:(await db.$queryRawUnsafe<any[]>('SELECT current_database() name'))[0].name})
  assert.ok(await db.fundingCall.findUnique({where:{id:imported.id}}))
  console.log('PASS rollback retains referenced call')
+ assert.equal((await db.fundingCall.findUnique({where:{id:jsonOnly.id}}))?.catalog_status,'ARCHIVED')
+ console.log('PASS rollback archives rather than deletes a call referenced only in JSON')
  const url=(db as any)._engineConfig.overrideDatasources.db.url
  const diff=execFileSync(process.execPath,['node_modules/prisma/build/index.js','migrate','diff','--from-url',url,'--to-schema-datamodel','prisma/schema.prisma','--script'],{encoding:'utf8',maxBuffer:10*1024*1024})
  fs.writeFileSync('catalog-review-drift.sql',diff);console.log('DRIFT_WRITTEN')
