@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -z "$SNAPSHOT" ]; then
-  SNAPSHOT="$(ls -d storage/import-snapshots/scientify-*/ 2>/dev/null | sort | tail -1)"
+  SNAPSHOT="$(find storage/import-snapshots -mindepth 1 -maxdepth 1 -type d -name 'scientify-*' | sort | tail -1)"
   SNAPSHOT="${SNAPSHOT%/}"
 fi
 [ -f "$SNAPSHOT/manifest.json" ] || { echo "no snapshot manifest at $SNAPSHOT" >&2; exit 1; }
@@ -59,13 +59,20 @@ node -e '
   const [stage, snapshot, commit] = process.argv.slice(1);
   const norm = (f) => crypto.createHash("sha256").update(fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n")).digest("hex");
   const seed = ["Seed/currency-rates.csv", ...fs.readdirSync("Seed/crosswalks").filter((f) => f.endsWith(".csv")).map((f) => "Seed/crosswalks/" + f)];
-  const codeFiles = Object.fromEntries(seed.sort().map((f) => [f, norm(f)]));
   const migrations = fs.readdirSync("prisma/migrations").filter((d) => fs.existsSync(path.join("prisma/migrations", d, "migration.sql"))).sort();
+  const walk = dir => fs.readdirSync(dir, {withFileTypes:true}).flatMap(entry => entry.isDirectory() ? walk(dir + "/" + entry.name) : [dir + "/" + entry.name]);
+  // Pin executable behaviour as well as seeds. A matching crosswalk alone
+  // does not prove the checkout contains the reviewed importer or app.
+  const pinned = [...seed, ...walk("src"), ...walk("scripts"), "prisma/schema.prisma", "package.json", "package-lock.json",
+    ...migrations.map(m => "prisma/migrations/" + m + "/migration.sql")];
+  const codeFiles = Object.fromEntries(pinned.sort().map((f) => [f, norm(f)]));
   const snap = JSON.parse(fs.readFileSync(path.join(stage, "snapshot", snapshot, "manifest.json"), "utf8"));
   const manifest = { builtAt: new Date().toISOString(), gitCommit: commit, snapshot, snapshotFiles: snap.files, codeFiles, migrations };
   fs.writeFileSync(path.join(stage, "bundle-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 ' "$STAGE" "$SNAPSHOT_NAME" "$(git rev-parse --short HEAD)"
 
+# SHA256SUMS is explicitly excluded from the input file list.
+# shellcheck disable=SC2094
 ( cd "$STAGE" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | while read -r f; do sha256sum "$f"; done > SHA256SUMS )
 chmod +x "$STAGE/release.sh"
 tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"

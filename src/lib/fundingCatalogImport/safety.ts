@@ -8,8 +8,8 @@
  * run it again after, and `compareSafetySnapshots` reports any difference.
  *
  * On a live database people keep working, so a changed row is classified:
- * `updatedAt` moved → an application edit (expected activity); unchanged
- * `updatedAt` but different content → raw-SQL write (suspicious, investigate).
+ * `updatedAt` moved → possible application edit; unchanged `updatedAt` but
+ * different content → raw-SQL write. Both stop release for investigation.
  *
  * It also enforces the invariant that makes every new reader predicate a no-op
  * for existing calls: no pre-existing call may carry any catalogue-import
@@ -42,6 +42,16 @@ export const DERIVED_COLUMNS = new Set(['ts_document'])
 /** Tables the import itself owns; rows in them are not "existing data". */
 export const IMPORT_OWNED_TABLES = new Set(['funding_call_deadlines', 'funding_import_candidates', 'external_source_records'])
 
+// These application links intentionally have no database foreign key. They
+// still represent attached work and must prevent deleting their call.
+export const NON_FK_CALL_REFERENCES = [
+  { table: 'reviewer_calls', column: 'fundingCallId' },
+  { table: 'funding_intake_duplicates', column: 'candidate_funding_call_id' },
+  { table: 'monitored_changes', column: 'linked_funding_call_id' },
+  { table: 'idea_intelligence_runs', column: 'anchor_funding_call_id' },
+  { table: 'idea_intelligence_sessions', column: 'anchor_funding_call_id' },
+]
+
 /**
  * Every (table, column) with a foreign key to funding_calls, read from the
  * catalogue so a table added later is covered without editing this file.
@@ -53,9 +63,16 @@ export async function referencingColumns(db: PrismaClient): Promise<Array<{ tabl
     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
     WHERE c.confrelid = 'funding_calls'::regclass AND c.contype = 'f'
     ORDER BY 1, 2`)
-  return rows
+  const references = rows
     .map((r) => ({ table: r.table_name.replace(/^"|"$/g, ''), column: r.column_name }))
     .filter((r) => !IMPORT_OWNED_TABLES.has(r.table))
+  for (const reference of NON_FK_CALL_REFERENCES) {
+    if (await columnExists(db, reference.table, reference.column)
+      && !references.some((r) => r.table === reference.table && r.column === reference.column)) {
+      references.push(reference)
+    }
+  }
+  return references
 }
 
 export interface SafetySnapshot {
@@ -83,7 +100,9 @@ export async function captureSafetySnapshot(db: PrismaClient): Promise<SafetySna
   )
   const columns = columnRows.map((r) => r.column_name).filter((c) => !CATALOG_IMPORT_COLUMNS.has(c) && !DERIVED_COLUMNS.has(c))
   const hasImportRun = await columnExists(db, 'funding_calls', 'import_run_id')
-  const expr = columns.map((c) => `coalesce("${c}"::text, '<null>')`).join(` || '|' || `)
+  // JSON preserves nulls and field boundaries; delimiter concatenation lets
+  // NULL and the literal '<null>' (or embedded '|') share a fingerprint.
+  const expr = `row_to_json(ROW(${columns.map((c) => `"${c}"::text`).join(', ')}))::text`
   const rows = await db.$queryRawUnsafe<Array<{ id: string; fp: string; updated: string }>>(
     `SELECT id, md5(${expr}) AS fp, "updatedAt"::text AS updated FROM funding_calls ${hasImportRun ? 'WHERE import_run_id IS NULL' : ''}`
   )
@@ -165,7 +184,10 @@ export function compareSafetySnapshots(before: SafetySnapshot, after: SafetySnap
     .filter((d) => d.before !== d.after)
   const sameColumns = before.columns.join(',') === after.columns.join(',')
   return {
-    ok: missingRows.length === 0 && silentChanges.length === 0 && after.invariantViolations === 0 && sameColumns,
+    // An updated timestamp does not prove a change came from a person. Stop
+    // for review on any change, including legitimate concurrent DSR edits.
+    ok: before.database === after.database && missingRows.length === 0 && appEdits.length === 0
+      && silentChanges.length === 0 && dependentDiffs.length === 0 && after.invariantViolations === 0 && sameColumns,
     missingRows,
     appEdits,
     silentChanges,

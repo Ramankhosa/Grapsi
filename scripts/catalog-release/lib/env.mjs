@@ -81,7 +81,7 @@ if (scriptDb !== merged.DATABASE_URL) {
   process.exit(2)
 }
 
-const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`
+const quote = (value) => "'" + String(value).replace(/'/g, "'\"'\"'") + "'"
 const lines = Object.entries(merged)
   .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
   .map(([key, value]) => `${key}=${quote(value)}`)

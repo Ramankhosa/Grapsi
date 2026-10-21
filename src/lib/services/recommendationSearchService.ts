@@ -358,10 +358,11 @@ export function importedDimensionCountryCondition(dimensions: Array<'residence' 
     // A source exclusion is explicit ("worldwide except Iran"): the call does
     // not come back for Iran, or its own badge would then read "Not eligible".
     return Prisma.sql`(
-      requested.code <> ALL(${excluded}) AND (
-        ${scope} IS NULL OR ${scope} IN ('ANY', 'UNSPECIFIED') OR
-        (${scope} = 'REGIONS' AND cardinality(${list}) = 0) OR
-        requested.code = ANY(${list})
+      ${scope} IS NULL OR ${scope} = 'UNSPECIFIED' OR
+      (${scope} IN ('COUNTRIES', 'REGIONS') AND cardinality(${list}) = 0) OR (
+        requested.code <> ALL(${excluded}) AND (
+          ${scope} = 'ANY' OR requested.code = ANY(${list})
+        )
       )
     )`;
   };
@@ -369,6 +370,30 @@ export function importedDimensionCountryCondition(dimensions: Array<'residence' 
     SELECT 1 FROM unnest(${codeArray}) AS requested(code)
     WHERE ${Prisma.join(dimensions.map(admits), ' AND ')}
   ))`;
+}
+
+/** Evaluate explicit geographic exclusions before LIMIT/OFFSET, so an
+ * ineligible call cannot occupy page one ahead of eligible calls on page two.
+ * Keep the branch order in sync with evaluateDimension. */
+export function directoryEligibilityDemotion(applicant: ApplicantGeography | null) {
+  if (!applicant || process.env.FINDER_DEMOTE_INELIGIBLE === '0') return Prisma.sql`(0 + 0)`;
+  const upper = (codes: string[] | undefined) => Array.from(new Set((codes || []).map(c => c.trim().toUpperCase()).filter(Boolean)));
+  const residence = upper(applicant.residence);
+  const citizenship = upper(applicant.citizenship);
+  const host = upper(applicant.host?.length ? applicant.host : applicant.residence);
+  const dimensions = {applicant: upper([...residence, ...citizenship]), residence, citizenship, host};
+  const failures = Object.entries(dimensions).map(([dimension, codes]) => {
+    if (!codes.length) return Prisma.sql`FALSE`;
+    const scope = Prisma.raw(`${dimension}_scope`);
+    const allowed = Prisma.raw(`${dimension}_country_codes`);
+    const excluded = Prisma.raw(`${dimension}_excluded_codes`);
+    const requested = Prisma.sql`ARRAY[${Prisma.join(codes)}]::text[]`;
+    return Prisma.sql`(${scope} IS NOT NULL AND ${scope} <> 'UNSPECIFIED'
+      AND (${scope} = 'ANY' OR cardinality(${allowed}) > 0)
+      AND NOT EXISTS (SELECT 1 FROM unnest(${requested}) AS country(code)
+        WHERE country.code <> ALL(${excluded}) AND (${scope} = 'ANY' OR country.code = ANY(${allowed}))))`;
+  });
+  return Prisma.sql`CASE WHEN ${Prisma.join(failures, ' OR ')} THEN 1 ELSE 0 END`;
 }
 
 /**
@@ -3024,6 +3049,8 @@ Rules:
     const totalPages = Math.max(1, Math.ceil(totalResults / pageSize));
     const safePage = Math.min(page, totalPages);
     const safeOffset = (safePage - 1) * pageSize;
+    const applicant = applicantFromProfile(profileContext);
+    const eligibilityOrder = directoryEligibilityDemotion(applicant);
 
     const rows = hasQuery
       ? await prisma.$queryRaw<RecommendationCandidate[]>(
@@ -3034,11 +3061,12 @@ Rules:
               ts_rank_cd(ts_document, websearch_to_tsquery('english', ${textQuery})) AS "textRank"
             FROM funding_calls
             WHERE ${where}
-            ORDER BY ${
+            ORDER BY ${eligibilityOrder}, ${
               normalized.filters.sort === 'deadline_soonest'
                 ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, ${CURATED_FIRST_SQL}, "textRank" DESC, scheme_title ASC`
                 : Prisma.sql`"textRank" DESC, ${CURATED_FIRST_SQL}, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
             }
+            , id ASC
             LIMIT ${pageSize}
             OFFSET ${safeOffset}
           `
@@ -3051,11 +3079,12 @@ Rules:
               0::float AS "textRank"
             FROM funding_calls
             WHERE ${where}
-            ORDER BY ${
+            ORDER BY ${eligibilityOrder}, ${
               normalized.filters.sort === 'deadline_soonest'
                 ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, ${CURATED_FIRST_SQL}, "updatedAt" DESC NULLS LAST, scheme_title ASC`
                 : Prisma.sql`${CURATED_FIRST_SQL}, "updatedAt" DESC NULLS LAST, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
             }
+            , id ASC
             LIMIT ${pageSize}
             OFFSET ${safeOffset}
           `
@@ -3066,7 +3095,6 @@ Rules:
       const score = hasQuery || profileMatch ? scoreCandidate(candidate, normalized, profileMatch, false) : 0;
       return { candidate, score, profileMatch };
     });
-    const applicant = applicantFromProfile(profileContext);
     const orderedRows = normalized.filters.sort === 'best_match'
       ? sortCandidates(scoredRows, normalized, applicant)
       : scoredRows;

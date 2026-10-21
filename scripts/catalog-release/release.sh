@@ -74,10 +74,18 @@ c_blue=$'\033[1;34m'; c_yel=$'\033[1;33m'; c_red=$'\033[1;31m'; c_grn=$'\033[1;3
 log()  { printf '%s[release]%s %s\n' "$c_blue" "$c_off" "$*"; }
 ok()   { printf '%s[release]%s %s\n' "$c_grn" "$c_off" "$*"; }
 warn() { printf '%s[release]%s %s\n' "$c_yel" "$c_off" "$*" >&2; }
-die()  { printf '%s[release] STOPPED:%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
+die()  {
+  printf '%s[release] STOPPED:%s %s\n' "$c_red" "$c_off" "$*" >&2
+  printf 'After investigating, resume with the same options and --from %s\n' "${CURRENT_PHASE:-preflight}" >&2
+  exit 1
+}
 trap 'die "a command failed at line $LINENO (see the log). Fix the cause and resume with --from ${CURRENT_PHASE:-preflight}."' ERR
 
 while [ $# -gt 0 ]; do
+  case "$1" in
+    --app-dir|--operator-email|--env-file|--git-ref|--from|--only|--confirm-db|--backup-dir)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then die "$1 needs a value"; fi ;;
+  esac
   case "$1" in
     --app-dir) APP_DIR="$2"; shift 2 ;;
     --operator-email) OPERATOR_EMAIL="$2"; shift 2 ;;
@@ -160,6 +168,17 @@ dump() {
   ok "backup written ($(du -h "$file" | cut -f1))"
 }
 
+latest_report() {
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const [dir, kind] = process.argv.slice(1);
+    const files = fs.readdirSync(dir).filter(f => f.startsWith("report-" + kind + "-") && f.endsWith(".md"));
+    files.sort((a,b) => fs.statSync(path.join(dir,b)).mtimeMs - fs.statSync(path.join(dir,a)).mtimeMs || a.localeCompare(b));
+    if (!files.length) throw new Error("No " + kind + " report found");
+    process.stdout.write(path.join(dir, files[0]));
+  ' "$SNAPSHOT_DIR" "$1"
+}
+
 # ------------------------------------------------------------------ phases
 
 phase_preflight() {
@@ -183,7 +202,11 @@ phase_preflight() {
 
   local envfile="$RUN_DIR/.env.release"
   node "$BUNDLE_DIR/lib/env.mjs" "$APP_DIR" "$envfile" "${ENV_FILES[@]}" || die "could not settle on one database (see above)"
-  set -a; . "$envfile"; set +a
+  # Generated shell-quoted assignments, checked by env.mjs.
+  set -a
+  # shellcheck disable=SC1090
+  . "$envfile"
+  set +a
   PGURL="$(node "$BUNDLE_DIR/lib/check.mjs" pgurl "$DATABASE_URL")"
   DB_NAME="$(q 'select current_database()')"
   log "database: $DB_NAME on $(q "select coalesce(host(inet_server_addr()),'local socket')||':'||current_setting('port')") · $(q 'show server_version')"
@@ -196,7 +219,7 @@ phase_preflight() {
     0.[5-7].*) warn "pgvector $vec: HNSW works, but filtered vector search is fuller on >= 0.8 (iterative scan)" ;;
     *) log "pgvector $vec" ;;
   esac
-  local pgd; pgd="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+  local pgd; pgd="$(pg_dump --version | sed -nE 's/^[^0-9]*([0-9]+).*/\1/p')"
   local srv; srv="$(q "select current_setting('server_version_num')::int / 10000")"
   [ "$pgd" -ge "$srv" ] || die "pg_dump $pgd is older than the server ($srv); install a matching postgresql-client"
 
@@ -241,21 +264,28 @@ phase_deploy() {
   confirm "About to build and restart the app with scripts/deploy.sh (auto-rollback if unhealthy)."
   # A clean environment, as when deploy.sh is run by hand: the app reads its
   # own env files at start, and none of this run's exports leak into the build.
-  ( cd "$APP_DIR" && env -i HOME="$HOME" PATH="$PATH" USER="${USER:-}" LOGNAME="${LOGNAME:-}" LANG="${LANG:-C.UTF-8}" \
-      ${PM2_HOME:+PM2_HOME="$PM2_HOME"} ${NVM_DIR:+NVM_DIR="$NVM_DIR"} SKIP_PRISMA=0 bash scripts/deploy.sh )
+  local -a deploy_env=(HOME="$HOME" PATH="$PATH" USER="${USER:-}" LOGNAME="${LOGNAME:-}" LANG="${LANG:-C.UTF-8}" SKIP_PRISMA=0)
+  local key
+  for key in PM2_HOME NVM_DIR PM2_APP PORT NODE_OPTIONS HEALTH_PATH HEALTH_TIMEOUT INSTALL BUILD_NICE BUILD_IONICE XDG_CONFIG_HOME XDG_DATA_HOME; do
+    [ -z "${!key:-}" ] || deploy_env+=("$key=${!key}")
+  done
+  ( cd "$APP_DIR" && env -i "${deploy_env[@]}" bash scripts/deploy.sh )
   ok "app rebuilt and healthy"
 }
 
 phase_seed() {
+  confirm "About to update currency rates in $DB_NAME."
   app "${TSX[@]}" scripts/seed-currency-rates.ts
   ok "currency rates: $(q "select count(*)||' rows, latest '||max(as_of) from currency_rates")"
 }
 
 phase_dryrun() {
   app "${TSX[@]}" scripts/import-funding-catalog.ts dry-run --snapshot "$SNAPSHOT_DIR" | tee "$RUN_DIR/dry-run.txt"
-  local report; report="$(ls -t "$SNAPSHOT_DIR"/report-dry-run-*.md | head -1)"
+  local report; report="$(latest_report dry-run)"
   cp "$report" "$RUN_DIR/"
   log "full report: $RUN_DIR/$(basename "$report")"
+  # This is JavaScript, not a shell expression.
+  # shellcheck disable=SC2016
   node -e '
     const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const un = (r.unmappedLabels || []).length;
@@ -272,13 +302,14 @@ phase_import() {
   safety_capture import
   app "${TSX[@]}" scripts/import-funding-catalog.ts apply --snapshot "$SNAPSHOT_DIR" \
     --confirm-target "$DB_NAME" --operator-email "$OPERATOR_EMAIL" --full-snapshot | tee "$RUN_DIR/apply.txt"
-  cp "$(ls -t "$SNAPSHOT_DIR"/report-apply-*.md | head -1)" "$RUN_DIR/"
+  cp "$(latest_report apply)" "$RUN_DIR/"
   safety_compare import
   refresh_stats
   ok "imported: $(q "select count(*) from funding_calls where import_run_id is not null") catalogue calls ($(q "select count(*) from funding_calls where catalog_status::text='STAGED'") staged)"
 }
 
 phase_release() {
+  confirm "About to refresh catalogue review status and prepare the release in $DB_NAME."
   app "${TSX[@]}" scripts/import-funding-catalog.ts release --source scientify | tee "$RUN_DIR/release-plan.txt"
   confirm "About to publish every CLEAR imported call to researcher discovery (silently; held calls stay staged)."
   safety_capture release
@@ -313,7 +344,7 @@ phase_verify() {
   check "no researcher alert was raised for an imported call" \
     "select count(*) from funding_call_alerts a join funding_calls c on c.id = a.funding_call_id where c.import_run_id is not null"
   check "no held call was published" \
-    "select count(*) from funding_calls where import_run_id is not null and catalog_status::text = 'PUBLISHED' and review_status <> 'CLEAR'"
+    "select count(*) from funding_calls where import_run_id is not null and catalog_status::text = 'PUBLISHED' and review_status IS DISTINCT FROM 'CLEAR'"
   log "text search (finder UNION form against the old OR-EXISTS form):"
   app "${TSX[@]}" scripts/benchmark-call-text-search.ts | tail -3 || bad=1
   log "catalogue now:"
@@ -350,7 +381,7 @@ if [ -n "$ONLY" ]; then
   selected=("$ONLY")
 else
   started=0
-  [ -z "$FROM" ] && started=1
+  { [ -z "$FROM" ] || [ "$FROM" = preflight ]; } && started=1
   for p in "${PHASES[@]:1}"; do
     [ "$p" = "$FROM" ] && started=1
     [ "$started" = 1 ] || continue

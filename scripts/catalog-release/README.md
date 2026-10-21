@@ -12,7 +12,7 @@ in one supervised run and stops at the first failed check.
    GitHub — merged into `main` if you deploy `main` — so the VM checkout can
    reach it. `release.sh --git-ref origin/main` fetches and checks it out for
    you; without `--git-ref` it uses the checkout as it stands. Either way it
-   refuses a checkout whose crosswalks, currency rates or migrations differ
+   refuses a checkout whose source code, scripts, crosswalks, currency rates or migrations differ
    from what the bundle was built and tested with.
 2. **Dev dependencies installed** in the app checkout (`npm ci`): the run uses
    `tsx` and the `prisma` CLI from `node_modules`.
@@ -86,7 +86,10 @@ The log, both dumps, the safety snapshots and the importer's reports are in
   read the catalogue's new status values.
 - **The backfill:** `scripts/backfill-existing-calls.ts --undo <runId> --confirm-target <db>`.
 - **The schema:** the migrations are additive and harmless to leave in place.
-- **Everything:** `pg_restore --clean --if-exists -d <db> run/<ts>/backup-1-before-release.dump`.
+- **Full recovery:** restore the backup into a separate database first and
+  verify it. Do not restore over the live database: doing so would discard
+  members' work recorded after the backup. Reconcile that work before any
+  deliberate recovery cutover.
 
 ## After the release
 

@@ -6,10 +6,9 @@
  *   # after it
  *   node ./node_modules/tsx/dist/cli.cjs scripts/catalog-safety-check.ts compare --before before.json
  *
- * `compare` exits 1 if any pre-existing call disappeared, changed without its
- * updatedAt moving (a raw write — never expected from the import), or now
- * carries a catalogue-import value. Content changes WITH a moved updatedAt are
- * listed as application edits made by people during the window. Read-only.
+ * `compare` exits 1 on any pre-existing call change, missing call, attached-row
+ * count change or catalogue marker. Timestamp changes are diagnostic only:
+ * concurrent application edits must be reviewed before continuing. Read-only.
  */
 import fs from 'node:fs'
 
