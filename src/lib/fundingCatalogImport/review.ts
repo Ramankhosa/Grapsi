@@ -134,7 +134,7 @@ export interface ResolveInput {
 const MAX_BULK = 2000
 
 /** Sets an imported call aside. Refuses anything that is not an import. */
-async function setAside(tx: Prisma.TransactionClient, callId: string, survivorId: string | null) {
+export async function setAside(tx: Prisma.TransactionClient, callId: string, survivorId: string | null) {
   const call = await tx.fundingCall.findUnique({ where: { id: callId }, select: { id: true, import_run_id: true } })
   if (!call?.import_run_id) throw new Error(`Refusing to set aside ${callId}: it is not an imported call.`)
   await tx.fundingCall.update({

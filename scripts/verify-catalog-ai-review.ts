@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { withDisposableDb } from './lib/disposableDb'
 import { approveDistinct, createAiBatch, estimateReview, runAiReviewStep, selectAiReviewItems, selectionHash } from '../src/lib/fundingCatalogImport/aiReview'
+import { finalizeAiItem } from '../src/lib/fundingCatalogImport/finalizeAiReview'
 
 async function main() {
   await withDisposableDb(async ({ db }) => {
@@ -58,6 +59,40 @@ async function main() {
       await runAiReviewStep(db as any, outage.id)
       assert.equal((await db.catalogAiReviewBatch.findUniqueOrThrow({ where: { id: outage.id } })).status, 'PAUSED')
       assert.equal(await db.fundingCallAlert.count(), 0)
+      // Final decisions use their own locked transaction and preserve all records.
+      const duplicateData = { ...base, title: 'Exact duplicate', agency_name: 'Identical agency', description: 'Identical factual description for this exact duplicate listing. '.repeat(5), source_url: 'https://example.org/exact', eligibility_text: 'Any researcher', disciplines: ['Science'] }
+      const cloneA = await db.fundingCall.create({ data: duplicateData })
+      const cloneB = await db.fundingCall.create({ data: duplicateData })
+      const clonePair = await db.fundingImportCandidate.create({ data: { run_id: run.id, dedupe_key: 'clone-pair', reason: 'POSSIBLE_DUPLICATE', tier: 'LIKELY_DUPLICATE', blocks_release: true, subject_call_id: cloneA.id, candidate_call_id: cloneB.id } })
+      const cloneRows = await selectAiReviewItems(db as any, {}, [clonePair.id])
+      const cloneBatch = await createAiBatch(db as any, 'admin', {}, [clonePair.id], selectionHash(cloneRows))
+      const cloneItem = await db.catalogAiReviewItem.findFirstOrThrow({ where: { batch_id: cloneBatch.id } })
+      await db.catalogAiReviewBatch.update({ where: { id: cloneBatch.id }, data: { status: 'COMPLETE' } })
+      await db.catalogAiReviewItem.update({ where: { id: cloneItem.id }, data: { status: 'DONE', result: { decision: 'SAME_OPPORTUNITY', confidence: .99, conflicts: ['DUPLICATE_LISTING'], explanation: 'Both records have identical stored facts.', evidence: [{ side: 'subject', field: 'title', quote: 'Exact duplicate' }, { side: 'candidate', field: 'title', quote: 'Exact duplicate' }], suggestedFacts: [] } } })
+      const countBefore = await db.fundingCall.count()
+      const journals: unknown[] = []
+      const final = await finalizeAiItem(db as any, cloneItem.id, 'admin', entry => { journals.push(entry) })
+      assert.equal(final.applied, true)
+      assert.equal(await db.fundingCall.count(), countBefore, 'Finalization must never delete a call')
+      assert.equal(await db.fundingCall.count({ where: { id: { in: [cloneA.id, cloneB.id] }, status: 'ARCHIVED' } }), 1)
+      assert.equal(await db.fundingCall.count({ where: { id: { in: [cloneA.id, cloneB.id] }, catalog_status: 'PUBLISHED' } }), 0)
+      assert.equal(journals.length, 1)
+      assert.deepEqual(await db.fundingCall.findUniqueOrThrow({ where: { id: intake.id } }), intake)
+      const protectedA = await db.fundingCall.create({ data: duplicateData })
+      const protectedB = await db.fundingCall.create({ data: duplicateData })
+      const protectedPair = await db.fundingImportCandidate.create({ data: { run_id: run.id, dedupe_key: 'protected-clone-pair', reason: 'POSSIBLE_DUPLICATE', tier: 'LIKELY_DUPLICATE', blocks_release: true, subject_call_id: protectedA.id, candidate_call_id: protectedB.id } })
+      const protectedRows = await selectAiReviewItems(db as any, {}, [protectedPair.id])
+      const protectedBatch = await createAiBatch(db as any, 'admin', {}, [protectedPair.id], selectionHash(protectedRows))
+      const protectedItem = await db.catalogAiReviewItem.findFirstOrThrow({ where: { batch_id: protectedBatch.id } })
+      const priorResult = (await db.catalogAiReviewItem.findUniqueOrThrow({ where: { id: cloneItem.id } })).result
+      await db.catalogAiReviewBatch.update({ where: { id: protectedBatch.id }, data: { status: 'COMPLETE' } })
+      await db.catalogAiReviewItem.update({ where: { id: protectedItem.id }, data: { status: 'DONE', result: priorResult as any } })
+      await db.$executeRawUnsafe("INSERT INTO funding_intake_duplicates (id,job_id,candidate_funding_call_id,match_type,match_score) VALUES ($1,$2,$3,'exact_fingerprint',1)", 'protected-reference', 'protected-job', protectedA.id)
+      const protectedOutcome = await finalizeAiItem(db as any, protectedItem.id, 'admin', () => { throw new Error('Protected work must never reach the write journal') })
+      assert.equal(protectedOutcome.applied, false)
+      assert.match(protectedOutcome.reason || '', /Attached work/)
+      assert.equal(await db.fundingCall.count({ where: { id: { in: [protectedA.id, protectedB.id] }, status: 'ARCHIVED' } }), 0)
+      console.log('PASS final decisions archive exact duplicates without deletion, publication or intake edits; journal retained')
       console.log('PASS filters, migration, overlap guard, concurrent leases, stored usage, explicit approval, other blockers, intake preservation, stale-input rejection, expired-lease recovery, quota pause and zero alerts')
     } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey }
   })
