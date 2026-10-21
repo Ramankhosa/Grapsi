@@ -65,8 +65,19 @@ user. `npx tsx` = `node ./node_modules/tsx/dist/cli.cjs`.
 6. **Seed rates:** `npx tsx scripts/seed-currency-rates.ts` (ECB reference
    rates of 2026-10-15 for 27 currencies, plus the older 2025-06-01
    approximations for the rest; the latest date per currency wins).
-7. **Import.** Copy the snapshot directory from the dev machine
-   (`storage/import-snapshots/scientify-…`, ~126 MB incl. manifest) to the server.
+7. **Import.** Copy the snapshot from the dev machine to the server: the
+   deployable one is the 21 Oct 2026 crawl,
+   `storage/import-snapshots/scientify-2026-10-21T09-30-47-389Z.tar.gz`
+   (10 MB; sha256 `810308fc38752c2602e8a7e139ac76fb883f76502fa86d2c0bed2b283d28d07f`;
+   unpacks to a 128 MB directory of 10,120 grants, 1,866 funders and the
+   taxonomy dictionary). Check the archive's sha256 on the server, `tar -xzf`
+   it, and pass the extracted directory as `<dir>`; the importer re-verifies
+   the three files against `manifest.json` itself. It supersedes the 15 Oct
+   snapshot (10,031 grants), which was only ever imported on the dev machine.
+   **Before applying it**, `Seed/crosswalks/scientify-disciplines.csv` must
+   cover the 381 discipline labels the 21 Oct crawl introduced (the dry run
+   lists them under unmapped labels): every call still gets a research area,
+   but the unmapped labels' area mappings are lost.
    `npx tsx scripts/catalog-safety-check.ts capture --out ~/safety-1.json`
    `npx tsx scripts/import-funding-catalog.ts dry-run --snapshot <dir>` — the
    snapshot checksums are re-verified; read the report.
