@@ -75,7 +75,7 @@ export async function createAiBatch(db: PrismaClient, actor: string, filter: AiF
     const selected = rows.slice(0, limit)
     const overlap = await tx.catalogAiReviewItem.count({ where: { candidate_id: { in: selected.map(r => r.id) }, status: { in: ['QUEUED', 'RUNNING'] }, batch: { status: { in: ['QUEUED', 'RUNNING', 'PAUSED'] } } } })
     if (overlap) throw new Error('Some selected items already belong to an unfinished batch. Resume or cancel that batch first.')
-    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: 'gemini-2.5-flash', selection: { filter, ids: ids || null, limit, promptVersion: 'catalog-review-v2', promptHash: inputHash(REVIEW_SYSTEM_PROMPT) } as any,
+    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: 'gemini-2.5-flash', selection: { filter, ids: ids || null, limit, promptVersion: 'catalog-review-v3', promptHash: inputHash(REVIEW_SYSTEM_PROMPT) } as any,
       items: { create: selected.map(r => { const snapshot = snapshotItem(r); return { candidate_id: r.id, snapshot: snapshot as any, input_hash: inputHash(snapshot) } }) } } })
   }, { timeout: 30000 })
 }

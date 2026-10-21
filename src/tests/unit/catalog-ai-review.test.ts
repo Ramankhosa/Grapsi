@@ -19,6 +19,13 @@ describe('AI import review evidence and approval', () => {
   it('allows absent readiness information without invented evidence', () => {
     expect(validateRecommendation({ ...result, decision: 'NEEDS_INFORMATION', conflicts: ['MISSING_INFORMATION'], evidence: [], suggestedFacts: [] }, { ...snapshot, reason: 'READINESS_FAILED' }).decision).toBe('NEEDS_INFORMATION')
   })
+  it('bounds long quotes only after confirming the entire original quote exists', () => {
+    const text = 'Exact source sentence. '.repeat(40)
+    const s = { ...snapshot, subject: { description: text } }
+    const r = { ...result, evidence: [{ side: 'subject', field: 'description', quote: text }, result.evidence[1]] }
+    expect(validateRecommendation(r, s).evidence[0].quote).toEqual(text.slice(0, 500))
+    expect(() => validateRecommendation({ ...r, evidence: [{ ...r.evidence[0], quote: text + ' invented' }] }, s)).toThrow()
+  })
   it('does not bulk approve same-opportunity, missing facts, low confidence, or one-sided results', () => {
     for (const change of [{ decision: 'SAME_OPPORTUNITY' }, { decision: 'NEEDS_INFORMATION' }, { confidence: 0.94 }, { evidence: [result.evidence[0]] }]) {
       expect(canApproveDistinct(validateRecommendation({ ...result, ...change }, snapshot), snapshot)).toBeFalsy()
