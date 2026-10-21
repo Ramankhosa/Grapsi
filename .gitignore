@@ -101,3 +101,6 @@ scripts/seed-llm-models.ts
 scripts/test-*.ts
 
 storage/enrichment-reports/
+
+# Catalogue release bundles (scripts/catalog-release/build-bundle.sh)
+storage/release-bundles/

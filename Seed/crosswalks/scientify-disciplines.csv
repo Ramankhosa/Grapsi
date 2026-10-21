@@ -162,3 +162,384 @@ Liver cancer,MED.01,
 Uterine cancer,MED.01,
 radiochemistry,CHE.01,
 Radiotherapy,MED.01,
+Engineering and Technology,ENG,added for the 21 Oct 2026 crawl
+Computer sciences,CIS,added for the 21 Oct 2026 crawl
+Earth sciences,PHY.04,added for the 21 Oct 2026 crawl
+Area and Cultural studies,HUM.02|SOC.01,added for the 21 Oct 2026 crawl
+Materials sciences,ENG.05|CHE.02,added for the 21 Oct 2026 crawl
+Business and Economics,MGT,added for the 21 Oct 2026 crawl
+Information and communications technology (ICT),CIS.03|CIS.05,added for the 21 Oct 2026 crawl
+Genetics and genomics,LIF.01,added for the 21 Oct 2026 crawl
+Cell and molecular biology,LIF.01,added for the 21 Oct 2026 crawl
+Health sciences,MED,added for the 21 Oct 2026 crawl
+Built environment,DES.01|ENG.03,added for the 21 Oct 2026 crawl
+Cyber security,CIS.04,added for the 21 Oct 2026 crawl
+Space sciences,PHY.02,added for the 21 Oct 2026 crawl
+Food sciences,AGR.05,added for the 21 Oct 2026 crawl
+Substance use disorders,MED.05,added for the 21 Oct 2026 crawl
+Radiology and image-guided therapy,MED.01,added for the 21 Oct 2026 crawl
+Health systems sciences,MED.02,added for the 21 Oct 2026 crawl
+Speech science and therapy,MED.03,added for the 21 Oct 2026 crawl
+Environmental health,MED.02|LIF.04,added for the 21 Oct 2026 crawl
+Biomedical engineering,MED.04,added for the 21 Oct 2026 crawl
+Complementary health,MED.01,added for the 21 Oct 2026 crawl
+Minority health,MED.02,added for the 21 Oct 2026 crawl
+Energy research,ENG.06,added for the 21 Oct 2026 crawl
+Medical devices,MED.04,added for the 21 Oct 2026 crawl
+Theology and Religious studies,HUM.02,added for the 21 Oct 2026 crawl
+Social care,SOC.01|MED.03,added for the 21 Oct 2026 crawl
+Implementation science,MED.02,added for the 21 Oct 2026 crawl
+Transport engineering,ENG.08,added for the 21 Oct 2026 crawl
+Circular economy,LIF.04|ENG.04,added for the 21 Oct 2026 crawl
+Gerontology,MED.01|SOC.01,added for the 21 Oct 2026 crawl
+Ecology,LIF.04,added for the 21 Oct 2026 crawl
+Indigenous health,MED.02|SOC.01,added for the 21 Oct 2026 crawl
+Biodiversity,LIF.04,added for the 21 Oct 2026 crawl
+Biological sciences,LIF,added for the 21 Oct 2026 crawl
+Clinical psychology,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Global health,MED.02,added for the 21 Oct 2026 crawl
+Pharmacology,PHA.02,added for the 21 Oct 2026 crawl
+Security and defense studies,SOC.03,added for the 21 Oct 2026 crawl
+Anthropology,SOC.01,added for the 21 Oct 2026 crawl
+Art history,HUM.02|HUM.03,added for the 21 Oct 2026 crawl
+Climate sciences,PHY.04|LIF.04,added for the 21 Oct 2026 crawl
+Diabetes,MED.01,added for the 21 Oct 2026 crawl
+Political sciences,SOC.03,added for the 21 Oct 2026 crawl
+Quantum technology,PHY.01|ENG.02,added for the 21 Oct 2026 crawl
+Reproductive and sexual health,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Clinical trial science,MED.01,added for the 21 Oct 2026 crawl
+Disaster management,ENG.03|SOC.01,added for the 21 Oct 2026 crawl
+Epidemiology,MED.02,added for the 21 Oct 2026 crawl
+Manufacturing engineering,ENG.01,added for the 21 Oct 2026 crawl
+Pediatric psychiatry,MED.05,added for the 21 Oct 2026 crawl
+Cardiac surgery,MED.01,added for the 21 Oct 2026 crawl
+Health policy,MED.02|MGT.04,added for the 21 Oct 2026 crawl
+Advanced therapies,MED.01|LIF.03,added for the 21 Oct 2026 crawl
+Alpha-1 antitrypsin deficiency,MED.01,added for the 21 Oct 2026 crawl
+Animal research alternatives (3Rs),PHA.02|LIF.03,added for the 21 Oct 2026 crawl
+HIV,MED.01|LIF.02,added for the 21 Oct 2026 crawl
+Marine engineering,ENG.08,added for the 21 Oct 2026 crawl
+Sociology,SOC.01,added for the 21 Oct 2026 crawl
+Stroke,MED.01|MED.05,added for the 21 Oct 2026 crawl
+Chinese studies,HUM.02,added for the 21 Oct 2026 crawl
+Entrepreneurship,MGT.01,added for the 21 Oct 2026 crawl
+Friedreich ataxia,MED.05,added for the 21 Oct 2026 crawl
+Geophysics,PHY.04|PHY.01,added for the 21 Oct 2026 crawl
+Medical education,EDU.01|MED.01,added for the 21 Oct 2026 crawl
+Pediatric infectious disease,MED.01|LIF.02,added for the 21 Oct 2026 crawl
+Rare diseases,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Sex and gender-based health,MED.02,added for the 21 Oct 2026 crawl
+Suicide and self-harm,MED.05|MED.02,added for the 21 Oct 2026 crawl
+Urban design,DES.01,added for the 21 Oct 2026 crawl
+Women's health,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Autonomic neuroscience,MED.05,added for the 21 Oct 2026 crawl
+Biological anthropology,SOC.01|LIF.04,added for the 21 Oct 2026 crawl
+Cancer imaging,MED.01|MED.04,added for the 21 Oct 2026 crawl
+Community-based care,MED.02|MED.03,added for the 21 Oct 2026 crawl
+Health economics,MED.02|MGT.04,added for the 21 Oct 2026 crawl
+Literature,HUM.01,added for the 21 Oct 2026 crawl
+Spinal cord injury,MED.01|MED.05,added for the 21 Oct 2026 crawl
+Thoracic surgery,MED.01,added for the 21 Oct 2026 crawl
+Amyotrophic lateral sclerosis (ALS),MED.05,added for the 21 Oct 2026 crawl
+Ataxia,MED.05,added for the 21 Oct 2026 crawl
+Behavioral medicine,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Cancer quality of life,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Development studies,SOC.01,added for the 21 Oct 2026 crawl
+Ethnomusicology,HUM.03|SOC.01,added for the 21 Oct 2026 crawl
+Experimental psychology,SOC.02,added for the 21 Oct 2026 crawl
+Mining engineering,ENG.03|PHY.04,added for the 21 Oct 2026 crawl
+Occupational health,MED.02,added for the 21 Oct 2026 crawl
+Pain medicine,MED.01,added for the 21 Oct 2026 crawl
+Performing arts,HUM.03,added for the 21 Oct 2026 crawl
+Rehabilitation sciences,MED.03,added for the 21 Oct 2026 crawl
+Visual arts,HUM.03,added for the 21 Oct 2026 crawl
+Audiology,MED.03,added for the 21 Oct 2026 crawl
+Behavior analysis,SOC.02,added for the 21 Oct 2026 crawl
+Bioeconomy,LIF.03|MGT.04,added for the 21 Oct 2026 crawl
+Gastrointestinal surgery,MED.01,added for the 21 Oct 2026 crawl
+Green chemistry,CHE.01|ENG.04,added for the 21 Oct 2026 crawl
+Health outcomes,MED.02,added for the 21 Oct 2026 crawl
+Heritage conservation and archival sciences,HUM.02,added for the 21 Oct 2026 crawl
+Neurochemistry,MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Patient safety,MED.02,added for the 21 Oct 2026 crawl
+Pediatric neurology,MED.01|MED.05,added for the 21 Oct 2026 crawl
+Photonics,PHY.01|ENG.02,added for the 21 Oct 2026 crawl
+Plastic and reconstructive surgery,MED.01,added for the 21 Oct 2026 crawl
+Sustainability sciences,LIF.04,added for the 21 Oct 2026 crawl
+Antimicrobial resistance,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Brain injury,MED.05|MED.01,added for the 21 Oct 2026 crawl
+Clinical toxicology,PHA.02|MED.01,added for the 21 Oct 2026 crawl
+Cognitive sciences,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Huntington's disease,MED.05,added for the 21 Oct 2026 crawl
+International relations,SOC.03,added for the 21 Oct 2026 crawl
+Nanotechnology,ENG.05,added for the 21 Oct 2026 crawl
+Spatial planning,DES.01,added for the 21 Oct 2026 crawl
+Acral melanoma,MED.01,added for the 21 Oct 2026 crawl
+Architectural history,DES.01|HUM.02,added for the 21 Oct 2026 crawl
+Burns,MED.01,added for the 21 Oct 2026 crawl
+Cystic fibrosis,MED.01,added for the 21 Oct 2026 crawl
+Digital humanities,HUM.02|CIS.02,added for the 21 Oct 2026 crawl
+Evolutionary biology,LIF.04|LIF.01,added for the 21 Oct 2026 crawl
+Film,HUM.03,added for the 21 Oct 2026 crawl
+Frontotemporal degeneration,MED.05,added for the 21 Oct 2026 crawl
+History of science,HUM.02,added for the 21 Oct 2026 crawl
+Inherited retinal degeneration,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Intellectual disability,MED.05,added for the 21 Oct 2026 crawl
+Neonatology,MED.01,added for the 21 Oct 2026 crawl
+Neuromuscular disorders,MED.01|MED.05,added for the 21 Oct 2026 crawl
+Obesity medicine,MED.01,added for the 21 Oct 2026 crawl
+Psychosomatic medicine,MED.05|MED.01,added for the 21 Oct 2026 crawl
+Rare cancers,MED.01,added for the 21 Oct 2026 crawl
+Uveal melanoma,MED.01,added for the 21 Oct 2026 crawl
+Working life studies,SOC.01,added for the 21 Oct 2026 crawl
+Assistive technology,MED.04,added for the 21 Oct 2026 crawl
+Autism,MED.05,added for the 21 Oct 2026 crawl
+Bone marrow failure,MED.01,added for the 21 Oct 2026 crawl
+Bronchiectasis,MED.01,added for the 21 Oct 2026 crawl
+Cardiac electrophysiology,MED.01,added for the 21 Oct 2026 crawl
+Computational biology,CIS.02|LIF.01,added for the 21 Oct 2026 crawl
+Creative writing,HUM.01,added for the 21 Oct 2026 crawl
+Dermatopathology,MED.01,added for the 21 Oct 2026 crawl
+Down syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Fusion energy,ENG.06|PHY.01,added for the 21 Oct 2026 crawl
+Gambling disorder,MED.05,added for the 21 Oct 2026 crawl
+Geochemistry,PHY.04|CHE.01,added for the 21 Oct 2026 crawl
+Healthcare administration,MGT.01|MED.02,added for the 21 Oct 2026 crawl
+Hearing loss,MED.01|MED.03,added for the 21 Oct 2026 crawl
+Hemostasis,MED.01,added for the 21 Oct 2026 crawl
+Inflammatory bowel disease,MED.01,added for the 21 Oct 2026 crawl
+Journalism,HUM.03,added for the 21 Oct 2026 crawl
+Language education,EDU.01|HUM.01,added for the 21 Oct 2026 crawl
+Marfan syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Mechanical engineering,ENG.01,added for the 21 Oct 2026 crawl
+Menopause,MED.01,added for the 21 Oct 2026 crawl
+Motor neurone disease,MED.05,added for the 21 Oct 2026 crawl
+Movement disorders,MED.05,added for the 21 Oct 2026 crawl
+Occupational health nursing,MED.03|MED.02,added for the 21 Oct 2026 crawl
+Paleoanthropology,SOC.01|HUM.02,added for the 21 Oct 2026 crawl
+Palliative oncology,MED.01,added for the 21 Oct 2026 crawl
+Pediatric dermatology,MED.01,added for the 21 Oct 2026 crawl
+Pediatric endocrinology,MED.01,added for the 21 Oct 2026 crawl
+Pediatric gastroenterology,MED.01,added for the 21 Oct 2026 crawl
+Pediatric psychology,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Polar research,PHY.04,added for the 21 Oct 2026 crawl
+Psoriasis,MED.01,added for the 21 Oct 2026 crawl
+Rheumatoid arthritis,MED.01,added for the 21 Oct 2026 crawl
+Russian language,HUM.01,added for the 21 Oct 2026 crawl
+Russian studies,HUM.02,added for the 21 Oct 2026 crawl
+Sports medicine,MED.01|MED.03,added for the 21 Oct 2026 crawl
+Thrombosis,MED.01,added for the 21 Oct 2026 crawl
+Ambulatory care,MED.01,added for the 21 Oct 2026 crawl
+Armenian studies,HUM.02,added for the 21 Oct 2026 crawl
+Arthritis,MED.01,added for the 21 Oct 2026 crawl
+Asthma,MED.01,added for the 21 Oct 2026 crawl
+Astrobiology,PHY.02|LIF,added for the 21 Oct 2026 crawl
+Bariatric surgery,MED.01,added for the 21 Oct 2026 crawl
+Buddhist studies,HUM.02,added for the 21 Oct 2026 crawl
+Cancer immunology,MED.01|LIF.02,added for the 21 Oct 2026 crawl
+Chemical biology,CHE.01|LIF.01,added for the 21 Oct 2026 crawl
+Chordoma,MED.01,added for the 21 Oct 2026 crawl
+Contact dermatitis,MED.01,added for the 21 Oct 2026 crawl
+Depression,MED.05,added for the 21 Oct 2026 crawl
+Design,DES.01,added for the 21 Oct 2026 crawl
+Developmental psychology,SOC.02,added for the 21 Oct 2026 crawl
+Disability studies,SOC.01,added for the 21 Oct 2026 crawl
+Dry age-related macular degeneration,MED.01,added for the 21 Oct 2026 crawl
+Early modern studies,HUM.02,added for the 21 Oct 2026 crawl
+Ehlers-Danlos syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Endoscopic surgery,MED.01,added for the 21 Oct 2026 crawl
+Environmental engineering,ENG.03|LIF.04,added for the 21 Oct 2026 crawl
+Environmental remediation,LIF.04|ENG.04,added for the 21 Oct 2026 crawl
+European studies,HUM.02|SOC.03,added for the 21 Oct 2026 crawl
+Fetal alcohol spectrum disorders,MED.05|MED.01,added for the 21 Oct 2026 crawl
+Food allergy,MED.01|LIF.02,added for the 21 Oct 2026 crawl
+Food security,AGR.05|AGR.01,added for the 21 Oct 2026 crawl
+Forensic science,LAW.01|CHE.01,added for the 21 Oct 2026 crawl
+Geochronology,PHY.04,added for the 21 Oct 2026 crawl
+Geriatric psychiatry,MED.05,added for the 21 Oct 2026 crawl
+High performance computing,CIS.05,added for the 21 Oct 2026 crawl
+Historical Islamic studies,HUM.02,added for the 21 Oct 2026 crawl
+History of law,LAW.01|HUM.02,added for the 21 Oct 2026 crawl
+Hydrology,PHY.04|AGR.03,added for the 21 Oct 2026 crawl
+Insurance,MGT.02,added for the 21 Oct 2026 crawl
+Interstitial lung disease,MED.01,added for the 21 Oct 2026 crawl
+Japanese studies,HUM.02,added for the 21 Oct 2026 crawl
+Liver cirrhosis,MED.01,added for the 21 Oct 2026 crawl
+Loeys-Dietz syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Lupus,MED.01,added for the 21 Oct 2026 crawl
+Lymphoma,MED.01,added for the 21 Oct 2026 crawl
+Macular degeneration,MED.01,added for the 21 Oct 2026 crawl
+Medicinal chemistry,PHA.03|CHE.01,added for the 21 Oct 2026 crawl
+Meteorology,PHY.04,added for the 21 Oct 2026 crawl
+Microscopy,PHY.01|LIF,added for the 21 Oct 2026 crawl
+Migration studies,SOC.01,added for the 21 Oct 2026 crawl
+Military medicine,MED.01,added for the 21 Oct 2026 crawl
+Neuro-oncology,MED.05|MED.01,added for the 21 Oct 2026 crawl
+Neurodegenerative diseases,MED.05,added for the 21 Oct 2026 crawl
+Neurodevelopmental disorders,MED.05,added for the 21 Oct 2026 crawl
+Pediatric hepatology,MED.01,added for the 21 Oct 2026 crawl
+Pediatric hospital medicine,MED.01,added for the 21 Oct 2026 crawl
+Pediatric nursing,MED.03,added for the 21 Oct 2026 crawl
+Pediatric nutrition,MED.02|AGR.05,added for the 21 Oct 2026 crawl
+Peripheral neuropathy,MED.05,added for the 21 Oct 2026 crawl
+Philosophy,HUM.02,added for the 21 Oct 2026 crawl
+Planetary science,PHY.02|PHY.04,added for the 21 Oct 2026 crawl
+Polycystic kidney disease,MED.01,added for the 21 Oct 2026 crawl
+Prion diseases,MED.05|LIF.02,added for the 21 Oct 2026 crawl
+Radiobiology,LIF.01|MED.01,added for the 21 Oct 2026 crawl
+Reconstructive transplantation,MED.01,added for the 21 Oct 2026 crawl
+Remote sensing,PHY.04|CIS.02,added for the 21 Oct 2026 crawl
+Sarcoma,MED.01,added for the 21 Oct 2026 crawl
+Schizophrenia,MED.05,added for the 21 Oct 2026 crawl
+Science education,EDU.01,added for the 21 Oct 2026 crawl
+Taiwanese studies,HUM.02,added for the 21 Oct 2026 crawl
+Tick-borne diseases,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Trauma psychology,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Addiction,MED.05,added for the 21 Oct 2026 crawl
+ADHD,MED.05,added for the 21 Oct 2026 crawl
+Aesthetic surgery,MED.01,added for the 21 Oct 2026 crawl
+Agricultural chemistry,AGR.01|CHE.01,added for the 21 Oct 2026 crawl
+Alpha-mannosidosis,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Animal welfare,AGR.04,added for the 21 Oct 2026 crawl
+Ankylosing spondylitis,MED.01,added for the 21 Oct 2026 crawl
+Anthroposophic medicine,MED.01,added for the 21 Oct 2026 crawl
+Anthroposophic nursing,MED.03,added for the 21 Oct 2026 crawl
+Anxiety disorders,MED.05,added for the 21 Oct 2026 crawl
+Applied psychology,SOC.02,added for the 21 Oct 2026 crawl
+Atopic dermatitis,MED.01,added for the 21 Oct 2026 crawl
+Atypical parkinsonism,MED.05,added for the 21 Oct 2026 crawl
+Autonomic disorders,MED.05,added for the 21 Oct 2026 crawl
+Barth syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Batten disease (CLN3),MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Battery research,ENG.06,added for the 21 Oct 2026 crawl
+Behavioral neurology,MED.05,added for the 21 Oct 2026 crawl
+Black studies,SOC.01|HUM.02,added for the 21 Oct 2026 crawl
+Blue economy,LIF.04|MGT.04,added for the 21 Oct 2026 crawl
+Bone and soft tissue cancer,MED.01,added for the 21 Oct 2026 crawl
+Book history,HUM.02,added for the 21 Oct 2026 crawl
+Cardiometabolic diseases,MED.01,added for the 21 Oct 2026 crawl
+Cardiomyopathy,MED.01,added for the 21 Oct 2026 crawl
+Cellular ageing,LIF.01,added for the 21 Oct 2026 crawl
+Cerebrovascular disease,MED.01|MED.05,added for the 21 Oct 2026 crawl
+Child health,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Chinese art history,HUM.02|HUM.03,added for the 21 Oct 2026 crawl
+Chinese language,HUM.01,added for the 21 Oct 2026 crawl
+Cognitive neuroscience,MED.05|SOC.02,added for the 21 Oct 2026 crawl
+Colorectal cancer,MED.01,added for the 21 Oct 2026 crawl
+Congenital anomalies,MED.01,added for the 21 Oct 2026 crawl
+Corticobasal degeneration,MED.05,added for the 21 Oct 2026 crawl
+Cosmology,PHY.02,added for the 21 Oct 2026 crawl
+Critical care nursing,MED.03,added for the 21 Oct 2026 crawl
+Crohn's disease,MED.01,added for the 21 Oct 2026 crawl
+Cystinosis,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Dementia with Lewy bodies,MED.05,added for the 21 Oct 2026 crawl
+Dermatologic surgery,MED.01,added for the 21 Oct 2026 crawl
+Disease prevention,MED.02,added for the 21 Oct 2026 crawl
+Duchenne muscular dystrophy,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+East Asian languages,HUM.01,added for the 21 Oct 2026 crawl
+Epilepsy,MED.05,added for the 21 Oct 2026 crawl
+Esophageal cancer,MED.01,added for the 21 Oct 2026 crawl
+Ethology,LIF.04,added for the 21 Oct 2026 crawl
+Fabry disease,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Fanconi anemia,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Frostbite,MED.01,added for the 21 Oct 2026 crawl
+Gastric cancer,MED.01,added for the 21 Oct 2026 crawl
+Genitourinary cancer,MED.01,added for the 21 Oct 2026 crawl
+Geriatric oncology,MED.01,added for the 21 Oct 2026 crawl
+Hand surgery,MED.01,added for the 21 Oct 2026 crawl
+Headache disorders,MED.05,added for the 21 Oct 2026 crawl
+Heart failure,MED.01,added for the 21 Oct 2026 crawl
+Heart transplantation,MED.01,added for the 21 Oct 2026 crawl
+Heat-related illness,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Hematopoietic stem cell transplantation,MED.01,added for the 21 Oct 2026 crawl
+Hereditary spastic paraplegia,MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Heritable aortic and vascular disorders,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+History of English literature,HUM.01|HUM.02,added for the 21 Oct 2026 crawl
+History of technology,HUM.02,added for the 21 Oct 2026 crawl
+Holocaust studies,HUM.02,added for the 21 Oct 2026 crawl
+Human rights,LAW.01|SOC.03,added for the 21 Oct 2026 crawl
+Hypertension,MED.01,added for the 21 Oct 2026 crawl
+Inborn errors of metabolism,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Indian studies,HUM.02,added for the 21 Oct 2026 crawl
+Inflammation,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Injury prevention,MED.02,added for the 21 Oct 2026 crawl
+Inorganic chemistry,CHE.01,added for the 21 Oct 2026 crawl
+Interventional cardiology,MED.01,added for the 21 Oct 2026 crawl
+Juvenile idiopathic arthritis,MED.01,added for the 21 Oct 2026 crawl
+Juvenile myositis,MED.01,added for the 21 Oct 2026 crawl
+Kidney transplantation,MED.01,added for the 21 Oct 2026 crawl
+Korean art history,HUM.02|HUM.03,added for the 21 Oct 2026 crawl
+Korean studies,HUM.02,added for the 21 Oct 2026 crawl
+Low Countries studies,HUM.02,added for the 21 Oct 2026 crawl
+Lyme disease,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Lysosomal biology,LIF.01,added for the 21 Oct 2026 crawl
+Mantle cell lymphoma,MED.01,added for the 21 Oct 2026 crawl
+Marketing,MGT.03,added for the 21 Oct 2026 crawl
+Mast cell disorders,MED.01|LIF.02,added for the 21 Oct 2026 crawl
+Maternal health,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Mathematics education,EDU.01|PHY.03,added for the 21 Oct 2026 crawl
+Media studies,HUM.03,added for the 21 Oct 2026 crawl
+Medical ultrasonography,MED.01|MED.04,added for the 21 Oct 2026 crawl
+Midwifery,MED.03,added for the 21 Oct 2026 crawl
+Military health,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Multiple sclerosis,MED.05,added for the 21 Oct 2026 crawl
+Multiple system atrophy,MED.05,added for the 21 Oct 2026 crawl
+Multisystem proteinopathy,MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Myelodysplastic syndromes,MED.01,added for the 21 Oct 2026 crawl
+Neuronal ceroid lipofuscinoses (NCL),MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Neuropsychiatry,MED.05,added for the 21 Oct 2026 crawl
+Neuropsychology,SOC.02|MED.05,added for the 21 Oct 2026 crawl
+Obstructive sleep apnea,MED.01,added for the 21 Oct 2026 crawl
+Occupational dermatology,MED.01|MED.02,added for the 21 Oct 2026 crawl
+Oncology pharmacy,PHA|MED.01,added for the 21 Oct 2026 crawl
+Oral tissue regeneration,MED.01|LIF.03,added for the 21 Oct 2026 crawl
+Osteoarthritis,MED.01,added for the 21 Oct 2026 crawl
+Palaeoecology,LIF.04|PHY.04,added for the 21 Oct 2026 crawl
+Paleobiology,LIF.04|PHY.04,added for the 21 Oct 2026 crawl
+Palliative nursing,MED.03,added for the 21 Oct 2026 crawl
+Pediatric pharmacy,PHA,added for the 21 Oct 2026 crawl
+Petroleum research,ENG.04|ENG.06,added for the 21 Oct 2026 crawl
+Pneumococcal disease,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Portuguese studies,HUM.01|HUM.02,added for the 21 Oct 2026 crawl
+Prader-Willi syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Primary immunodeficiency,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Primary lateral sclerosis,MED.05,added for the 21 Oct 2026 crawl
+Progressive muscular atrophy,MED.05,added for the 21 Oct 2026 crawl
+Progressive supranuclear palsy,MED.05,added for the 21 Oct 2026 crawl
+Psychiatric nursing,MED.03|MED.05,added for the 21 Oct 2026 crawl
+Psychotic disorders,MED.05,added for the 21 Oct 2026 crawl
+Quantitative geography,PHY.04|CIS.02,added for the 21 Oct 2026 crawl
+Recurrent pregnancy loss,MED.01,added for the 21 Oct 2026 crawl
+Renal physiology,MED.01,added for the 21 Oct 2026 crawl
+Respiratory syncytial virus (RSV),LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Retinal degeneration,MED.01,added for the 21 Oct 2026 crawl
+Robotic surgery,MED.01|ENG.07,added for the 21 Oct 2026 crawl
+Romani language,HUM.01,added for the 21 Oct 2026 crawl
+Romani studies,HUM.02|SOC.01,added for the 21 Oct 2026 crawl
+Sarcoidosis,MED.01,added for the 21 Oct 2026 crawl
+Scandinavian studies,HUM.02,added for the 21 Oct 2026 crawl
+Schaaf-Yang syndrome,MED.01|LIF.01,added for the 21 Oct 2026 crawl
+Science and technology studies,HUM.02|SOC.01,added for the 21 Oct 2026 crawl
+Secondary immunodeficiency,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Social psychology,SOC.02,added for the 21 Oct 2026 crawl
+Solar radiation management,PHY.04|ENG.06,added for the 21 Oct 2026 crawl
+Spinal muscular atrophy,MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Spinocerebellar ataxia,MED.05,added for the 21 Oct 2026 crawl
+Sri Lankan studies,HUM.02,added for the 21 Oct 2026 crawl
+Stem cell biology,LIF.01|LIF.03,added for the 21 Oct 2026 crawl
+Structural heart disease,MED.01,added for the 21 Oct 2026 crawl
+Swedish language,HUM.01,added for the 21 Oct 2026 crawl
+Swedish translations,HUM.01,added for the 21 Oct 2026 crawl
+SYNGAP1-related disorders,MED.05|LIF.01,added for the 21 Oct 2026 crawl
+Systemic mastocytosis,MED.01,added for the 21 Oct 2026 crawl
+Technology ethics,HUM.02,added for the 21 Oct 2026 crawl
+Theoretical physics,PHY.01,added for the 21 Oct 2026 crawl
+Tinnitus,MED.01,added for the 21 Oct 2026 crawl
+Tourism and hospitality management,MGT.01,added for the 21 Oct 2026 crawl
+Transfusion medicine,MED.01,added for the 21 Oct 2026 crawl
+Tropical research,MED.02|LIF.04,added for the 21 Oct 2026 crawl
+Tuberculosis,LIF.02|MED.01,added for the 21 Oct 2026 crawl
+Urology nursing,MED.03,added for the 21 Oct 2026 crawl
+Valvular heart disease,MED.01,added for the 21 Oct 2026 crawl
+Veterinary surgery,AGR.04,added for the 21 Oct 2026 crawl
+Women's health nursing,MED.03,added for the 21 Oct 2026 crawl
