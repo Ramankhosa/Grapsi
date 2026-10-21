@@ -5,6 +5,7 @@ import { liveOpportunityStatus } from './lifecycle'
 import { reviewWhere } from './review'
 import { refreshReviewStatus } from './service'
 import { canApproveDistinct, inputHash, REVIEW_SYSTEM_PROMPT, reviewResponseSchema, validateRecommendation } from './aiReviewPolicy'
+import { DEFAULT_REVIEW_MODEL, openAiReviewRequest, reviewModel } from './aiReviewModels'
 
 export const aiFilterSchema = z.object({
   reason: z.string().max(80).optional(), tier: z.string().max(80).optional(),
@@ -58,15 +59,17 @@ export async function selectAiReviewItems(db: PrismaClient, filter: AiFilter, id
       (!filter.lifecycle || liveOpportunityStatus(c) === filter.lifecycle)
   })
 }
-export function estimateReview(rows: any[]) {
+export function estimateReview(rows: any[], modelId = DEFAULT_REVIEW_MODEL) {
+  const model = reviewModel(modelId)
   const inputTokens = rows.reduce((n, r) => n + Math.ceil((JSON.stringify(snapshotItem(r)).length + REVIEW_SYSTEM_PROMPT.length) / 3), 0)
   return { reviewItems: rows.length, uniqueCalls: new Set(rows.flatMap(r => [r.subject_call_id, r.candidate_call_id]).filter(Boolean)).size,
-    estimatedInputTokens: inputTokens, maximumOutputTokens: rows.length * 2048,
-    estimatedCostUsd: (inputTokens * 0.30 + rows.length * 2048 * 2.50) / 1000000,
+    model: model.id, estimatedInputTokens: inputTokens, maximumOutputTokens: rows.length * model.maxOutput,
+    estimatedCostUsd: (inputTokens * model.inputRate + rows.length * model.maxOutput * model.outputRate) / 1000000,
     note: 'Token estimate only. Actual provider billing includes reasoning tokens and retries; each item is limited to three attempts.' }
 }
-export async function createAiBatch(db: PrismaClient, actor: string, filter: AiFilter, ids: string[] | undefined, expectedHash: string, limit = 100) {
-  if (!process.env.GOOGLE_AI_API_KEY) throw new Error('AI review provider is not configured')
+export async function createAiBatch(db: PrismaClient, actor: string, filter: AiFilter, ids: string[] | undefined, expectedHash: string, limit = 100, modelId = DEFAULT_REVIEW_MODEL) {
+  reviewModel(modelId)
+  if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI review provider is not configured')
   const rows = await selectAiReviewItems(db, filter, ids)
   if (!rows.length) throw new Error('No pending imported conflicts match this selection')
   if (selectionHash(rows) !== expectedHash) throw new Error('Selection changed. Preview again before starting.')
@@ -75,7 +78,7 @@ export async function createAiBatch(db: PrismaClient, actor: string, filter: AiF
     const selected = rows.slice(0, limit)
     const overlap = await tx.catalogAiReviewItem.count({ where: { candidate_id: { in: selected.map(r => r.id) }, status: { in: ['QUEUED', 'RUNNING'] }, batch: { status: { in: ['QUEUED', 'RUNNING', 'PAUSED'] } } } })
     if (overlap) throw new Error('Some selected items already belong to an unfinished batch. Resume or cancel that batch first.')
-    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: 'gemini-2.5-flash', selection: { filter, ids: ids || null, limit, promptVersion: 'catalog-review-v3', promptHash: inputHash(REVIEW_SYSTEM_PROMPT) } as any,
+    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: modelId, selection: { filter, ids: ids || null, limit, provider: 'openai', promptVersion: 'catalog-review-v3', promptHash: inputHash(REVIEW_SYSTEM_PROMPT), reasoningEffort: 'medium' } as any,
       items: { create: selected.map(r => { const snapshot = snapshotItem(r); return { candidate_id: r.id, snapshot: snapshot as any, input_hash: inputHash(snapshot) } }) } } })
   }, { timeout: 30000 })
 }
@@ -102,21 +105,23 @@ export async function runAiReviewStep(db: PrismaClient, batchId: string) {
   try {
     const fresh = await db.fundingImportCandidate.findUnique({ where: { id: claim.item.candidate_id }, include })
     if (!fresh || inputHash(snapshotItem(fresh)) !== claim.item.input_hash) throw new Error('Record changed since selection; create a fresh review')
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${claim.batch.model}:generateContent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GOOGLE_AI_API_KEY || '' },
-      signal: AbortSignal.timeout(60000), body: JSON.stringify({
+    const legacyGemini = claim.batch.model === 'gemini-2.5-flash'
+    const response = await fetch(legacyGemini ? `https://generativelanguage.googleapis.com/v1beta/models/${claim.batch.model}:generateContent` : 'https://api.openai.com/v1/chat/completions', {
+      method: 'POST', headers: legacyGemini ? { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GOOGLE_AI_API_KEY || '' } : { 'Content-Type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY || ''}` },
+      signal: AbortSignal.timeout(60000), body: JSON.stringify(legacyGemini ? {
         systemInstruction: { parts: [{ text: REVIEW_SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts: [{ text: JSON.stringify(claim.item.snapshot) }] }],
         generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: reviewResponseSchema, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
-      }),
+      } : openAiReviewRequest(claim.batch.model, claim.item.snapshot, claim.item.error)),
     })
     if (!response.ok) { pauseBatch = true; throw new Error(`AI provider returned HTTP ${response.status}; batch paused. Check provider access or limits before retrying.`) }
     const body = await response.json()
-    usage = body.usageMetadata || {}
-    const candidate = body.candidates?.[0]
-    if (candidate?.finishReason !== 'STOP') throw new Error('AI output incomplete or blocked')
-    const result = validateRecommendation(JSON.parse(candidate.content.parts.filter((p: any) => !p.thought).map((p: any) => p.text || '').join('')), claim.item.snapshot)
-    await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'DONE', result, usage: body.usageMetadata || {}, lease_until: null } })
+    usage = legacyGemini ? body.usageMetadata || {} : { ...body.usage, provider: 'openai', promptTokenCount: body.usage?.prompt_tokens || 0, candidatesTokenCount: body.usage?.completion_tokens || 0, totalTokenCount: body.usage?.total_tokens || 0 }
+    const candidate = legacyGemini ? body.candidates?.[0] : body.choices?.[0]
+    if (legacyGemini ? candidate?.finishReason !== 'STOP' : candidate?.finish_reason !== 'stop' || candidate?.message?.refusal) throw new Error('AI output incomplete or blocked')
+    const text = legacyGemini ? candidate.content.parts.filter((p: any) => !p.thought).map((p: any) => p.text || '').join('') : candidate.message.content
+    const result = validateRecommendation(JSON.parse(text), claim.item.snapshot)
+    await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'DONE', result, usage, lease_until: null } })
   } catch (error) {
     await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'FAILED', ...(usage ? { usage } : {}), error: error instanceof Error ? error.message.slice(0, 500) : 'AI review failed', lease_until: null } })
     if (pauseBatch || (error instanceof Error && ['TimeoutError', 'AbortError', 'TypeError'].includes(error.name))) {

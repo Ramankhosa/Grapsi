@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma'
 import { requireFundingActor } from '@/lib/funding/access'
 import { aiFilterSchema, approveDistinct, createAiBatch, estimateReview, runAiReviewStep, selectAiReviewItems, selectionHash, snapshotItem } from '@/lib/fundingCatalogImport/aiReview'
 import { canApproveDistinct, recommendationSchema } from '@/lib/fundingCatalogImport/aiReviewPolicy'
+import { availableReviewModels, DEFAULT_REVIEW_MODEL } from '@/lib/fundingCatalogImport/aiReviewModels'
 
 export const runtime = 'nodejs'
 export const maxDuration = 90
@@ -13,6 +14,7 @@ const schema = z.object({
   expectedHash: z.string().max(100).optional(), batchId: z.string().max(100).optional(),
   limit: z.number().int().min(1).max(10000).default(100),
   page: z.number().int().min(1).max(1000).default(1),
+  model: z.enum(['gpt-5.4-mini', 'gpt-5-mini']).default(DEFAULT_REVIEW_MODEL),
 })
 async function auth(request: NextRequest) {
   const result = await requireFundingActor(request, { allowPlatform: true })
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
   try {
     const id = request.nextUrl.searchParams.get('batchId')
     const batches = await prisma.catalogAiReviewBatch.findMany({ orderBy: { created_at: 'desc' }, take: 30, include: { _count: { select: { items: true } } } })
-    if (!id) return NextResponse.json({ batches, configured: Boolean(process.env.GOOGLE_AI_API_KEY), model: 'gemini-2.5-flash' })
+    if (!id) return NextResponse.json({ batches, configured: Boolean(process.env.OPENAI_API_KEY), model: DEFAULT_REVIEW_MODEL, models: await availableReviewModels() })
     const batch = await prisma.catalogAiReviewBatch.findUnique({ where: { id } })
     if (!batch) return NextResponse.json({ message: 'Batch not found' }, { status: 404 })
     const state = request.nextUrl.searchParams.get('status')
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ batches, batch, counts, total, page, items: items.map(item => ({ ...item,
       approvable: item.status === 'DONE' && !item.approved_at && recommendationSchema.safeParse(item.result).success && canApproveDistinct(item.result as any, item.snapshot),
     })) })
-  } catch { return NextResponse.json({ message: 'Could not load AI reviews. Ensure the review migration has been applied.' }, { status: 500 }) }
+  } catch (error) { return NextResponse.json({ message: error instanceof Error && error.message.startsWith('Could not verify model') ? error.message : 'Could not load AI reviews. Ensure the review migration has been applied.' }, { status: 500 }) }
 }
 export async function POST(request: NextRequest) {
   const access = await auth(request)
@@ -52,12 +54,13 @@ export async function POST(request: NextRequest) {
   try {
     if (body.action === 'preview') {
       const rows = await selectAiReviewItems(prisma, body.filter, body.ids)
-      return NextResponse.json({ ...estimateReview(rows), selectionHash: selectionHash(rows),
+      return NextResponse.json({ ...estimateReview(rows, body.model), selectionHash: selectionHash(rows),
         page: body.page, items: rows.slice((body.page - 1) * 100, body.page * 100).map(r => ({ id: r.id, score: r.score, ...snapshotItem(r) })) })
     }
     if (body.action === 'start') {
       if (!body.expectedHash) throw new Error('Preview the selection first')
-      const batch = await createAiBatch(prisma, access.actor.id, body.filter, body.ids, body.expectedHash, body.limit)
+      if (!(await availableReviewModels()).some(m => m.id === body.model && m.available)) throw new Error('The selected model is unavailable for this account')
+      const batch = await createAiBatch(prisma, access.actor.id, body.filter, body.ids, body.expectedHash, body.limit, body.model)
       return NextResponse.json({ batch })
     }
     if (!body.batchId) throw new Error('Select a batch')

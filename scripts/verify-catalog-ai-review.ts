@@ -11,13 +11,13 @@ async function main() {
     const intake = await db.fundingCall.create({ data: { ...base, title: 'Existing intake', import_run_id: null, visibility: 'GLOBAL_PUBLISHED', catalog_status: 'PUBLISHED', status: 'PUBLISHED' } })
     const pair = await db.fundingImportCandidate.create({ data: { run_id: run.id, dedupe_key: 'pair', reason: 'POSSIBLE_DUPLICATE', tier: 'POSSIBLE_DUPLICATE', blocks_release: true, subject_call_id: left.id, candidate_call_id: right.id } })
     await db.fundingImportCandidate.create({ data: { run_id: run.id, dedupe_key: 'other-blocker', reason: 'READINESS_FAILED', tier: 'INFO', blocks_release: true, subject_call_id: left.id } })
-    const oldKey = process.env.GOOGLE_AI_API_KEY, oldFetch = globalThis.fetch
-    process.env.GOOGLE_AI_API_KEY = 'test-only-no-real-provider'
+    const oldKey = process.env.OPENAI_API_KEY, oldFetch = globalThis.fetch
+    process.env.OPENAI_API_KEY = 'test-only-no-real-provider'
     let providerCalls = 0
     globalThis.fetch = async () => {
       providerCalls++
       await new Promise(r => setTimeout(r, 80))
-      return new Response(JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ decision: 'SEPARATE_OPPORTUNITIES', confidence: .98, conflicts: ['DIFFERENT_ROUND'], explanation: 'These are explicitly different annual rounds.', evidence: [{ side: 'subject', field: 'title', quote: '2026' }, { side: 'candidate', field: 'title', quote: '2025' }], suggestedFacts: [] }) }] } }], usageMetadata: { totalTokenCount: 123 } }), { status: 200 })
+      const mocked = { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ decision: 'SEPARATE_OPPORTUNITIES', confidence: .98, conflicts: ['DIFFERENT_ROUND'], explanation: 'These are explicitly different annual rounds.', evidence: [{ side: 'subject', field: 'title', quote: '2026' }, { side: 'candidate', field: 'title', quote: '2025' }], suggestedFacts: [] }) }] } }], usageMetadata: { totalTokenCount: 123 } }; return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:mocked.candidates[0].content.parts[0].text}}],usage:{total_tokens:123}}), { status: 200 })
     }
     try {
       const rows = await selectAiReviewItems(db as any, { reason: 'POSSIBLE_DUPLICATE', lifecycle: 'OPEN', agency: 'test', subject: 'science' })
@@ -59,8 +59,9 @@ async function main() {
       assert.equal((await db.catalogAiReviewBatch.findUniqueOrThrow({ where: { id: outage.id } })).status, 'PAUSED')
       assert.equal(await db.fundingCallAlert.count(), 0)
       console.log('PASS filters, migration, overlap guard, concurrent leases, stored usage, explicit approval, other blockers, intake preservation, stale-input rejection, expired-lease recovery, quota pause and zero alerts')
-    } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.GOOGLE_AI_API_KEY; else process.env.GOOGLE_AI_API_KEY = oldKey }
+    } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey }
   })
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })
+
 

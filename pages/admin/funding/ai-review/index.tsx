@@ -33,12 +33,14 @@ export default function AiImportReview() {
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState('')
   const [configured, setConfigured] = useState(false)
+  const [models, setModels] = useState<any[]>([])
+  const [model, setModel] = useState('gpt-5.4-mini')
   const inFlight = useRef(false)
   const load = useCallback(async () => {
     const data = await api(undefined, batchId ? `?batchId=${encodeURIComponent(batchId)}&page=${page}&decision=${decision}&status=${status}` : '')
     setBatches(data.batches || [])
     if (batchId) setDetail(data)
-    else setConfigured(data.configured)
+    else { setConfigured(data.configured); setModels(data.models || []) }
   }, [batchId, page, decision, status])
   useEffect(() => { if (allowed) load().catch(e => setMessage(e.message)) }, [allowed, load])
   // Only one request per tab. The database lease also guards other tabs/workers.
@@ -72,15 +74,15 @@ export default function AiImportReview() {
     try {
       const ids = allMatching ? undefined : selected
       if (!allMatching && !ids?.length) throw new Error('Select review items first')
-      const p = await api({ action: 'preview', filter, ids })
+      const p = await api({ action: 'preview', filter, ids, model })
       if (p.selectionHash !== preview?.selectionHash && allMatching) { setPreview(p); throw new Error('Selection changed. Check the updated preview and start again.') }
-      const data = await api({ action: 'start', filter, ids, expectedHash: p.selectionHash, limit })
+      const data = await api({ action: 'start', filter, ids, expectedHash: p.selectionHash, limit, model })
       setBatchId(data.batch.id); setPage(1); setRunning(true); setPreview(null)
     } catch (e: any) { setMessage(e.message) } finally { setBusy(false) }
   }
   async function previewPage(nextPage: number, reset = false) {
     setBusy(true); setMessage('')
-    try { setPreview(await api({ action: 'preview', filter, page: nextPage })); if (reset) { setSelected([]); setAllMatching(true) } }
+    try { setPreview(await api({ action: 'preview', filter, page: nextPage, model })); if (reset) { setSelected([]); setAllMatching(true) } }
     catch (e: any) { setMessage(e.message) } finally { setBusy(false) }
   }
   function change(key: string, value: any) { setFilter(f => ({ ...f, [key]: value === '' ? undefined : value })); setPreview(null); setSelected([]) }
@@ -93,6 +95,13 @@ export default function AiImportReview() {
       <p role="status" className="text-sm text-amber-800">{message}</p>
       <section className="space-y-4 rounded-xl border bg-slate-50 p-5">
         <h2 className="text-lg font-semibold">Choose pending conflicts</h2>
+        <fieldset className="rounded-lg border bg-white p-4"><legend className="px-1 font-medium">Review model</legend>
+          <p className="mb-3 text-sm text-slate-600">Available models are checked against your OpenAI account. Choose a model before previewing cost. Existing batches retain their original model.</p>
+          <div className="grid gap-3 sm:grid-cols-2">{models.map(m => <label key={m.id} className={`cursor-pointer rounded-lg border p-3 ${model === m.id ? 'border-blue-600 bg-blue-50' : ''} ${!m.available ? 'opacity-50' : ''}`}>
+            <input type="radio" name="review-model" value={m.id} checked={model === m.id} disabled={!m.available || busy} onChange={() => { setModel(m.id); setPreview(null) }} /> <strong>{m.name}</strong>{m.id === 'gpt-5.4-mini' ? ' · Recommended' : ''}
+            <span className="mt-1 block text-sm">{m.description}</span><span className="block text-xs text-slate-600">{m.provider} · ${m.inputRate.toFixed(2)} input / ${m.outputRate.toFixed(2)} output per million tokens · {m.available ? 'Available' : 'Unavailable'}</span>
+          </label>)}</div>
+        </fieldset>
         <div className="grid gap-3 sm:grid-cols-3">
           {[['q', 'Title or keyword'], ['agency', 'Funder'], ['subject', 'Subject category'], ['runId', 'Import batch ID']].map(([key, label]) => <label key={key} className="text-sm">{label}<input className={input} value={filter[key] || ''} onChange={e => change(key, e.target.value)} /></label>)}
           <label className="text-sm">Review reason<select className={input} value={filter.reason || ''} onChange={e => change('reason', e.target.value)}><option value="">All reasons</option>{['POSSIBLE_DUPLICATE', 'READINESS_FAILED', 'SOURCE_CONFLICT', 'FUNDER_MATCH_UNCERTAIN'].map(r => <option key={r} value={r}>{label(r)}</option>)}</select></label>
@@ -105,14 +114,14 @@ export default function AiImportReview() {
         </div>
         <button className={button} disabled={busy} onClick={() => previewPage(1, true)}>Preview matching conflicts</button>
         {preview && <div className="space-y-3">
-          <p>{preview.reviewItems.toLocaleString()} review items involving {preview.uniqueCalls.toLocaleString()} calls. Model: Gemini 2.5 Flash.</p>
-          <p className="text-sm">Estimated first-pass budget: ${preview.estimatedCostUsd.toFixed(2)} for all matches before the batch limit; retries may cost up to three times this estimate. This is not a spending ceiling. Actual usage is saved with each result. No website visits. <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noreferrer" className="underline">Provider pricing</a> ($0.30 input / $2.50 output per million tokens, estimate dated 21 October 2026).</p>
+          <p>{preview.reviewItems.toLocaleString()} review items involving {preview.uniqueCalls.toLocaleString()} calls. Model: {preview.model}.</p>
+          <p className="text-sm">Estimated first-pass budget: ${preview.estimatedCostUsd.toFixed(2)} for all matches before the batch limit, allowing for reasoning and output tokens; retries may cost up to three times this estimate. This is not a spending ceiling. Actual usage is saved with each result. No website visits. <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noreferrer" className="underline">Provider pricing</a> (estimate dated 21 October 2026).</p>
           <label className="block text-sm"><input type="checkbox" checked={allMatching} onChange={e => setAllMatching(e.target.checked)} /> Select all matching results across pages</label>
           <p className="text-sm text-slate-600">100 matches per page. Clear “all matching” to choose individual items across pages. The batch limit applies in a stable order.</p>
           <button className={button} disabled={busy} onClick={() => { setAllMatching(false); setSelected(s => [...new Set([...s, ...preview.items.map((r: any) => r.id)])]) }}>Select this page</button>
           <div className="max-h-72 overflow-auto rounded border bg-white">{preview.items.map((r: any) => <label key={r.id} className="flex gap-3 border-b p-3 text-sm"><input type="checkbox" disabled={allMatching} checked={allMatching || selected.includes(r.id)} onChange={e => setSelected(s => e.target.checked ? [...s, r.id] : s.filter(id => id !== r.id))} /><span>{r.subject?.title || 'Missing title'}<span className="block text-slate-500">{label(r.reason)} · {r.subject?.agency} {r.candidate ? `↔ ${r.candidate.title}` : ''}</span></span></label>)}</div>
           <div className="flex gap-3"><button className={button} disabled={busy || preview.page <= 1} onClick={() => previewPage(preview.page - 1)}>Previous matches</button><span>Page {preview.page}</span><button className={button} disabled={busy || preview.page * 100 >= preview.reviewItems} onClick={() => previewPage(preview.page + 1)}>Next matches</button></div>
-          <button className={button} disabled={busy || !configured || !preview.reviewItems} onClick={start}>Start AI review ({Math.min(limit, allMatching ? preview.reviewItems : selected.length)} items)</button>
+          <button className={button} disabled={busy || !configured || !models.some(m => m.id === model && m.available) || !preview.reviewItems} onClick={start}>Start AI review ({Math.min(limit, allMatching ? preview.reviewItems : selected.length)} items)</button>
           {!configured && <p className="text-sm text-amber-800">AI provider configuration is required before starting.</p>}
         </div>}
       </section>
@@ -120,7 +129,7 @@ export default function AiImportReview() {
         <h2 className="text-lg font-semibold">Saved review batches</h2>
         <select aria-label="Saved batch" className={input} value={batchId} onChange={e => { setBatchId(e.target.value); setPage(1); setApprovals([]); setRunning(false) }}><option value="">Select a batch</option>{batches.map(b => <option key={b.id} value={b.id}>{new Date(b.created_at).toLocaleString()} · {label(b.status)} · {b._count.items} items</option>)}</select>
         {detail?.batch?.id === batchId && <>
-          <p>{label(detail.batch.status)} · {detail.counts.map((c: any) => `${label(c.status)}: ${c._count._all}`).join(' · ')}</p>
+          <p>{label(detail.batch.status)} · Model: {detail.batch.model} · {detail.counts.map((c: any) => `${label(c.status)}: ${c._count._all}`).join(' · ')}</p>
           <p className="text-sm text-slate-600">Pause and cancel stop new requests; a request already running may finish. Keep this page open to process, or configure the persistent worker. Saved progress survives closing the page.</p>
           <div className="flex flex-wrap gap-2">{['pause', 'resume', 'retry', 'cancel'].map(action => <button key={action} className={button} disabled={busy || detail.batch.status === 'CANCELLED'} onClick={() => act(action)}>{({ pause: 'Pause', resume: 'Resume processing', retry: 'Retry failed items', cancel: 'Cancel remaining' })[action]}</button>)}</div>
           <div className="flex gap-3"><select aria-label="Result decision" className={input} value={decision} onChange={e => { setDecision(e.target.value); setPage(1); setApprovals([]) }}><option value="">All decisions</option>{['SAME_OPPORTUNITY', 'SEPARATE_OPPORTUNITIES', 'NEEDS_INFORMATION', 'UNCERTAIN'].map(d => <option key={d} value={d}>{label(d)}</option>)}</select><select aria-label="Processing status" className={input} value={status} onChange={e => { setStatus(e.target.value); setPage(1); setApprovals([]) }}><option value="">All processing states</option>{['DONE', 'FAILED', 'QUEUED', 'RUNNING'].map(d => <option key={d} value={d}>{label(d)}</option>)}</select></div>
