@@ -19,5 +19,6 @@ describe('authorized final AI decisions', () => {
   it('keeps source conflicts and uncertain or missing facts held', () => {
     for (const decision of ['UNCERTAIN', 'NEEDS_INFORMATION']) expect(finalDecision({ ...result, decision }, snapshot)).toBeNull()
     expect(finalDecision({ ...result, decision: 'SEPARATE_OPPORTUNITIES', conflicts: ['SOURCE_CONFLICT'] }, snapshot)).toBeNull()
+    expect(finalDecision({ ...result, decision: 'SEPARATE_OPPORTUNITIES', conflicts: ['DIFFERENT_ROUND'] }, { ...snapshot, candidate: { ...call, visibility: 'GLOBAL_PUBLISHED' } })).toBeNull()
   })
 })

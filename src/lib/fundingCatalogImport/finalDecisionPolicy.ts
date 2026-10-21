@@ -11,6 +11,7 @@ function years(title: string) { return [...title.matchAll(/\b20\d{2}\b/g)].map(m
 export function finalDecision(result: Recommendation, snapshot: any): 'distinct' | 'exact_duplicate' | null {
   const a = snapshot.subject, b = snapshot.candidate
   if (snapshot.reason !== 'POSSIBLE_DUPLICATE' || !a || !b || !a.imported || a.catalogStatus !== 'STAGED' || a.visibility !== 'GLOBAL_CATALOG') return null
+  if (!b.imported || b.visibility !== 'GLOBAL_CATALOG') return null
   if (a.descriptionTruncated || b.descriptionTruncated || a.eligibilityTruncated || b.eligibilityTruncated) return null
   if (!result.evidence.some(e => e.side === 'subject') || !result.evidence.some(e => e.side === 'candidate')) return null
   if (canApproveDistinct(result, snapshot)) return 'distinct'
