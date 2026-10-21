@@ -131,6 +131,22 @@ confirm() {
   [ "$answer" = "$DB_NAME" ] || die "not confirmed; nothing further was done. Resume with --from ${CURRENT_PHASE}."
 }
 
+# A bulk load leaves the planner's statistics describing the table as it was
+# before: on the rehearsal database the finder's text search ran at p95 ~2,000 ms
+# straight after the release and 25 ms after this. Autovacuum gets there
+# eventually; people use the finder in the meantime. Plain ANALYZE: no lock
+# that blocks reads or writes, seconds at this size.
+refresh_stats() {
+  log "refreshing planner statistics"
+  psql "$PGURL" -v ON_ERROR_STOP=1 -q \
+    -c 'ANALYZE funding_calls' \
+    -c 'ANALYZE funding_call_research_area_taxonomies' \
+    -c 'ANALYZE funding_call_deadlines' \
+    -c 'ANALYZE external_source_records' \
+    -c 'ANALYZE funders' \
+    -c 'ANALYZE funding_import_candidates'
+}
+
 safety_capture() { app "${TSX[@]}" scripts/catalog-safety-check.ts capture --out "$RUN_DIR/safety-$1.json"; }
 safety_compare() {
   app "${TSX[@]}" scripts/catalog-safety-check.ts compare --before "$RUN_DIR/safety-$1.json" \
@@ -170,7 +186,7 @@ phase_preflight() {
   set -a; . "$envfile"; set +a
   PGURL="$(node "$BUNDLE_DIR/lib/check.mjs" pgurl "$DATABASE_URL")"
   DB_NAME="$(q 'select current_database()')"
-  log "database: $DB_NAME on $(q "select coalesce(inet_server_addr()::text,'local socket')||':'||current_setting('port')") · $(q 'show server_version')"
+  log "database: $DB_NAME on $(q "select coalesce(host(inet_server_addr()),'local socket')||':'||current_setting('port')") · $(q 'show server_version')"
   [ -z "$CONFIRM_DB" ] || [ "$CONFIRM_DB" = "$DB_NAME" ] || die "--confirm-db $CONFIRM_DB but the app's database is $DB_NAME"
 
   local vec; vec="$(q "select coalesce((select extversion from pg_extension where extname='vector'),'none')")"
@@ -258,6 +274,7 @@ phase_import() {
     --confirm-target "$DB_NAME" --operator-email "$OPERATOR_EMAIL" --full-snapshot | tee "$RUN_DIR/apply.txt"
   cp "$(ls -t "$SNAPSHOT_DIR"/report-apply-*.md | head -1)" "$RUN_DIR/"
   safety_compare import
+  refresh_stats
   ok "imported: $(q "select count(*) from funding_calls where import_run_id is not null") catalogue calls ($(q "select count(*) from funding_calls where catalog_status::text='STAGED'") staged)"
 }
 
@@ -267,6 +284,7 @@ phase_release() {
   safety_capture release
   app "${TSX[@]}" scripts/import-funding-catalog.ts release --source scientify --apply | tee "$RUN_DIR/release.txt"
   safety_compare release
+  refresh_stats
   ok "released: $(q "select count(*) from funding_calls where import_run_id is not null and catalog_status::text='PUBLISHED'") · held for review: $(q "select count(*) from funding_calls where catalog_status::text='STAGED'") (work them at /admin/funding/import-review)"
 }
 

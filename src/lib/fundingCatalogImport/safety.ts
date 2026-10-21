@@ -89,9 +89,15 @@ export async function captureSafetySnapshot(db: PrismaClient): Promise<SafetySna
   )
   const dependentCounts: Record<string, number | null> = {}
   for (const { table, column } of await referencingColumns(db)) {
+    // Always count the same population: rows that point at a pre-existing
+    // call. Before the catalogue migration there is no import_run_id and every
+    // call is pre-existing; counting the whole table there (as this once did)
+    // included rows with no call link at all, so a capture taken before
+    // `migrate deploy` disagreed with one taken after it (92 → 0 intake jobs,
+    // 18 → 14 follow-ups on the rehearsal database) with nothing lost.
     const filter = hasImportRun
       ? `WHERE t."${column}" IN (SELECT id FROM funding_calls WHERE import_run_id IS NULL)`
-      : ''
+      : `WHERE t."${column}" IN (SELECT id FROM funding_calls)`
     const counted = await db.$queryRawUnsafe<Array<{ n: number }>>(`SELECT count(*)::int AS n FROM "${table}" t ${filter}`)
     dependentCounts[`${table}.${column}`] = counted[0]?.n ?? 0
   }
