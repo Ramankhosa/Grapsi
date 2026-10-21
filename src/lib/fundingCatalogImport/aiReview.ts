@@ -4,7 +4,7 @@ import type { PrismaClient } from '@/lib/prisma-generated'
 import { liveOpportunityStatus } from './lifecycle'
 import { reviewWhere } from './review'
 import { refreshReviewStatus } from './service'
-import { canApproveDistinct, inputHash, REVIEW_SYSTEM_PROMPT, validateRecommendation } from './aiReviewPolicy'
+import { canApproveDistinct, inputHash, REVIEW_SYSTEM_PROMPT, reviewResponseSchema, validateRecommendation } from './aiReviewPolicy'
 
 export const aiFilterSchema = z.object({
   reason: z.string().max(80).optional(), tier: z.string().max(80).optional(),
@@ -75,7 +75,7 @@ export async function createAiBatch(db: PrismaClient, actor: string, filter: AiF
     const selected = rows.slice(0, limit)
     const overlap = await tx.catalogAiReviewItem.count({ where: { candidate_id: { in: selected.map(r => r.id) }, status: { in: ['QUEUED', 'RUNNING'] }, batch: { status: { in: ['QUEUED', 'RUNNING', 'PAUSED'] } } } })
     if (overlap) throw new Error('Some selected items already belong to an unfinished batch. Resume or cancel that batch first.')
-    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: 'gemini-2.5-flash', selection: { filter, ids: ids || null, limit } as any,
+    return tx.catalogAiReviewBatch.create({ data: { actor_id: actor, model: 'gemini-2.5-flash', selection: { filter, ids: ids || null, limit, promptVersion: 'catalog-review-v2', promptHash: inputHash(REVIEW_SYSTEM_PROMPT) } as any,
       items: { create: selected.map(r => { const snapshot = snapshotItem(r); return { candidate_id: r.id, snapshot: snapshot as any, input_hash: inputHash(snapshot) } }) } } })
   }, { timeout: 30000 })
 }
@@ -98,6 +98,7 @@ export async function runAiReviewStep(db: PrismaClient, batchId: string) {
   })
   if (!claim) return
   let pauseBatch = false
+  let usage: any = undefined
   try {
     const fresh = await db.fundingImportCandidate.findUnique({ where: { id: claim.item.candidate_id }, include })
     if (!fresh || inputHash(snapshotItem(fresh)) !== claim.item.input_hash) throw new Error('Record changed since selection; create a fresh review')
@@ -106,17 +107,18 @@ export async function runAiReviewStep(db: PrismaClient, batchId: string) {
       signal: AbortSignal.timeout(60000), body: JSON.stringify({
         systemInstruction: { parts: [{ text: REVIEW_SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts: [{ text: JSON.stringify(claim.item.snapshot) }] }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
+        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: reviewResponseSchema, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
       }),
     })
     if (!response.ok) { pauseBatch = true; throw new Error(`AI provider returned HTTP ${response.status}; batch paused. Check provider access or limits before retrying.`) }
     const body = await response.json()
+    usage = body.usageMetadata || {}
     const candidate = body.candidates?.[0]
     if (candidate?.finishReason !== 'STOP') throw new Error('AI output incomplete or blocked')
     const result = validateRecommendation(JSON.parse(candidate.content.parts.filter((p: any) => !p.thought).map((p: any) => p.text || '').join('')), claim.item.snapshot)
     await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'DONE', result, usage: body.usageMetadata || {}, lease_until: null } })
   } catch (error) {
-    await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'FAILED', error: error instanceof Error ? error.message.slice(0, 500) : 'AI review failed', lease_until: null } })
+    await db.catalogAiReviewItem.updateMany({ where: { id: claim.item.id, lease_token: token, status: 'RUNNING' }, data: { status: 'FAILED', ...(usage ? { usage } : {}), error: error instanceof Error ? error.message.slice(0, 500) : 'AI review failed', lease_until: null } })
     if (pauseBatch || (error instanceof Error && ['TimeoutError', 'AbortError', 'TypeError'].includes(error.name))) {
       await db.catalogAiReviewBatch.updateMany({ where: { id: batchId, status: { in: ['QUEUED', 'RUNNING'] } }, data: { status: 'PAUSED' } })
     }

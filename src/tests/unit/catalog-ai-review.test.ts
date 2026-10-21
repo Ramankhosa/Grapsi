@@ -14,6 +14,10 @@ describe('AI import review evidence and approval', () => {
   it('rejects fabricated evidence and unsupported fact suggestions', () => {
     expect(() => validateRecommendation({ ...result, evidence: [{ side: 'subject', field: 'description', quote: 'Invented deadline' }] }, snapshot)).toThrow(/unsupported evidence/)
     expect(() => validateRecommendation({ ...result, suggestedFacts: [{ field: 'agency', value: 'Made up', evidence: 'Not present' }] }, snapshot)).toThrow(/Unsupported suggested fact/)
+    expect(() => validateRecommendation({ ...result, suggestedFacts: [{ field: 'source', value: 'https://invented.example', evidence: 'New round for 2026' }] }, snapshot)).toThrow(/Unsupported suggested fact/)
+  })
+  it('allows absent readiness information without invented evidence', () => {
+    expect(validateRecommendation({ ...result, decision: 'NEEDS_INFORMATION', conflicts: ['MISSING_INFORMATION'], evidence: [], suggestedFacts: [] }, { ...snapshot, reason: 'READINESS_FAILED' }).decision).toBe('NEEDS_INFORMATION')
   })
   it('does not bulk approve same-opportunity, missing facts, low confidence, or one-sided results', () => {
     for (const change of [{ decision: 'SAME_OPPORTUNITY' }, { decision: 'NEEDS_INFORMATION' }, { confidence: 0.94 }, { evidence: [result.evidence[0]] }]) {

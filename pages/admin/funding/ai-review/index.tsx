@@ -83,7 +83,7 @@ export default function AiImportReview() {
     try { setPreview(await api({ action: 'preview', filter, page: nextPage })); if (reset) { setSelected([]); setAllMatching(true) } }
     catch (e: any) { setMessage(e.message) } finally { setBusy(false) }
   }
-  function change(key: string, value: any) { setFilter(f => ({ ...f, [key]: value || undefined })); setPreview(null); setSelected([]) }
+  function change(key: string, value: any) { setFilter(f => ({ ...f, [key]: value === '' ? undefined : value })); setPreview(null); setSelected([]) }
   if (isLoading) return <p className="p-8">Loading…</p>
   if (!allowed) return <p className="p-8">Superadmin access is required.</p>
   return <><Head><title>AI Import Review | Grapsi</title></Head><Header />
