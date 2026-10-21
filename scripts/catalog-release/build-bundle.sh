@@ -60,11 +60,11 @@ node -e '
   const norm = (f) => crypto.createHash("sha256").update(fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n")).digest("hex");
   const seed = ["Seed/currency-rates.csv", ...fs.readdirSync("Seed/crosswalks").filter((f) => f.endsWith(".csv")).map((f) => "Seed/crosswalks/" + f)];
   const migrations = fs.readdirSync("prisma/migrations").filter((d) => fs.existsSync(path.join("prisma/migrations", d, "migration.sql"))).sort();
-  const walk = dir => fs.readdirSync(dir, {withFileTypes:true}).flatMap(entry => entry.isDirectory() ? walk(dir + "/" + entry.name) : [dir + "/" + entry.name]);
   // Pin executable behaviour as well as seeds. A matching crosswalk alone
-  // does not prove the checkout contains the reviewed importer or app.
-  const pinned = [...seed, ...walk("src"), ...walk("scripts"), "prisma/schema.prisma", "package.json", "package-lock.json",
-    ...migrations.map(m => "prisma/migrations/" + m + "/migration.sql")];
+  // does not prove the checkout contains the reviewed importer or app. Only
+  // tracked files belong in this contract; ignored local outputs do not ship.
+  const tracked = require("child_process").execFileSync("git", ["ls-files", "-z", "--", "src", "scripts", "prisma/schema.prisma", "prisma/migrations", "package.json", "package-lock.json"], {encoding:"utf8"}).split("\0").filter(Boolean);
+  const pinned = [...new Set([...seed, ...tracked])];
   const codeFiles = Object.fromEntries(pinned.sort().map((f) => [f, norm(f)]));
   const snap = JSON.parse(fs.readFileSync(path.join(stage, "snapshot", snapshot, "manifest.json"), "utf8"));
   const manifest = { builtAt: new Date().toISOString(), gitCommit: commit, snapshot, snapshotFiles: snap.files, codeFiles, migrations };
