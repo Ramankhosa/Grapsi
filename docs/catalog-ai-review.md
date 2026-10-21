@@ -122,3 +122,44 @@ No recommendation was approved. Original call, conflict, source and alert
 fingerprints remain unchanged. Health, search and captured intake/DSR/user
 preservation checks passed after the app restart. The final local checks include
 71 relevant tests, typechecking and the disposable-database rehearsal.
+
+## Full review and authorized final decisions — 21 October 2026
+
+At the user's request, all 1,528 blocking pending conflicts were covered with
+GPT-5.4 mini: 54 fresh completed reviews were reused and 1,474 items were run
+in 30 batches. One validation-feedback retry recovered 155 of the initial 206
+failed responses. The final analysis had 1,477 valid recommendations and 51
+rejected outputs. No calls, conflicts, sources or alerts changed during analysis.
+
+Operator entry points `finalDecisionPolicy.ts` and `finalizeAiReview.ts` implement
+the user's explicit authorization to apply safe final decisions. This does not
+relax the UI's existing bulk-approval gate. Both sides must be imported catalogue
+records, and the subject must still be staged. Transactions lock and recheck
+current inputs. Distinct-opportunity decisions require the narrow existing gate
+or >=95% confidence with corroborating funder/source/title or round/date facts;
+source, eligibility and other unresolved conflicts stay held. Archiving requires
+>=98% confidence and exact matching identity, descriptive, eligibility, amount,
+date, discipline and country facts, with no attached work. No physical deletion
+or publication is performed. An integration test specifically verifies protection
+of a non-FK intake reference. The relevant suite has 85 passing tests.
+
+The final dry plan qualified 122 distinct-opportunity resolutions and no exact
+duplicate archives. All 122 were applied, with no skips. This cleared 102 calls:
+102 imports are now STAGED/CLEAR, 1,628 remain STAGED/NEEDS_REVIEW, and the same
+8,390 remain PUBLISHED/CLEAR. There are 1,406 remaining blocking conflicts:
+1,355 require individual assessment and 51 have no accepted AI result. A valid
+AI output is not by itself sufficient to safely resolve conflicting facts.
+
+Before applying, a checksum-verified focused backup of the five affected tables
+was saved (about 100 MB), together with a write-ahead decision journal. Artifacts
+and completion markers are under `backups/catalog-final-review-20261021/`:
+`manifest.json`, `final-decision-plan.json`, `before-final-decisions.dump`,
+`decision-journal.jsonl`, `apply-progress.json`, and `final-summary.json`.
+The earlier full database backups remain retained. Never restore over a live
+database as a shortcut; use the journal and an isolated restore for recovery.
+
+Post-apply digests prove all call factual content, source content and provenance
+were retained, no original conflict record was deleted, and alerts did not
+change. Full-row comparisons preserved all 238 intake calls, 74 assignments,
+10 triage rows, 11 follow-ups, 412 events, 250 school mappings, 856 users and
+10 tenants. Publication is still a separate explicit action.
