@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
   const state = params.get('state')
   const variant = params.get('variant')
   const filter: ReviewFilter = {
+    reviewId: params.get('reviewId') || null,
     reason: params.get('reason') || null,
     tier: params.get('tier') || null,
     state: state === 'resolved' || state === 'all' ? state : 'open',

@@ -1566,6 +1566,41 @@ model FundingImportChange {
 /// A review item raised by an import: a suspected duplicate pair, or an
 /// imported call that needs a human look before release. No resolution ever
 /// writes to an existing call; it only decides what happens to the imported one.
+model CatalogAiReviewBatch {
+  id         String @id @default(cuid())
+  actor_id   String
+  model      String
+  status     String @default("QUEUED")
+  selection  Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  items      CatalogAiReviewItem[]
+  @@map("catalog_ai_review_batches")
+}
+
+model CatalogAiReviewItem {
+  id           String @id @default(cuid())
+  batch_id     String
+  candidate_id String
+  input_hash   String
+  snapshot     Json
+  status       String @default("QUEUED")
+  lease_token  String?
+  lease_until  DateTime?
+  result       Json?
+  usage        Json?
+  error        String?
+  attempts     Int @default(0)
+  approved_by  String?
+  approved_at  DateTime?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  batch CatalogAiReviewBatch @relation(fields: [batch_id], references: [id], onDelete: Restrict)
+  @@unique([batch_id, candidate_id])
+  @@index([batch_id, status, lease_until])
+  @@map("catalog_ai_review_items")
+}
+
 model FundingImportCandidate {
   id                  String    @id @default(cuid())
   run_id              String

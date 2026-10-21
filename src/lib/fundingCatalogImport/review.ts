@@ -13,6 +13,7 @@ import { liveOpportunityStatus } from './lifecycle'
 import { refreshReviewStatus } from './service'
 
 export interface ReviewFilter {
+  reviewId?: string | null
   reason?: string | null
   tier?: string | null
   /** open = pending or deferred; resolved = anything else; all */
@@ -51,6 +52,7 @@ const CALL_SUMMARY = {
 
 export function reviewWhere(filter: ReviewFilter): Prisma.FundingImportCandidateWhereInput {
   const and: Prisma.FundingImportCandidateWhereInput[] = []
+  if (filter.reviewId) and.push({ id: filter.reviewId })
   if (filter.reason) and.push({ reason: filter.reason })
   if (filter.tier) and.push({ tier: filter.tier })
   if (filter.runId) and.push({ run_id: filter.runId })

@@ -32,6 +32,14 @@ type CallIngestionLink = {
 
 const CALL_INGESTION_LINKS: CallIngestionLink[] = [
   {
+    href: '/admin/funding/ai-review',
+    title: 'AI Import Review',
+    description: 'Select imported conflicts, run AI comparisons, and approve supported recommendations.',
+    cta: 'Open AI review',
+    icon: Bot,
+    access: 'super',
+  },
+  {
     href: '/admin/funding/intake#submit-intake-source',
     title: 'Single Call Intake',
     description: 'Submit one URL, pasted text block, PDF, or JSON extraction package.',

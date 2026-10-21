@@ -13,6 +13,7 @@ const bodySchema = z.object({
   filter: z
     .object({
       reason: z.string().nullish(),
+      reviewId: z.string().max(100).nullish(),
       tier: z.string().nullish(),
       state: z.enum(['open', 'resolved', 'all']).optional(),
       variant: z.enum(['only', 'exclude']).nullish(),

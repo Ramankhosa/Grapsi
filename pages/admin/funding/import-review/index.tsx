@@ -237,13 +237,15 @@ export default function ImportReviewPage() {
 
   const filterParams = useMemo(() => {
     const params = new URLSearchParams();
+    if (typeof router.query.reviewId === 'string') { params.set('reviewId', router.query.reviewId); params.set('reason', ''); }
     if (reason) params.set('reason', reason);
     if (tier) params.set('tier', tier);
     params.set('state', state);
     if (variant) params.set('variant', variant);
     if (query.trim()) params.set('q', query.trim());
+    if (typeof router.query.reviewId === 'string') params.delete('reason');
     return params;
-  }, [reason, tier, state, variant, query]);
+  }, [reason, tier, state, variant, query, router.query.reviewId]);
 
   const load = useCallback(async () => {
     setLoading(true);
