@@ -10,7 +10,7 @@ async function main(){
   const {researcherProfileService}=await import('../src/lib/services/researcherProfileService')
   const {researchAreaTaxonomyService}=await import('../src/lib/services/researchAreaTaxonomyService')
   const {buildFundingCallQuery}=await import('../src/lib/services/researcherSearchService')
-  const {callFingerprint}=await import('../src/lib/fundingDept/callMatchCensus')
+  const {callFingerprint,callMatchStates,staleCallIds,CALL_MATCH_CENSUS_VERSION}=await import('../src/lib/fundingDept/callMatchCensus')
   await db.user.create({data:{id:'areas-user',email:'areas-user@example.invalid',roles:['SUPER_ADMIN'],status:'ACTIVE'}})
   const ids={blood:'scientify:discipline:blood',eng:'scientify:discipline:eng',all:'scientify:discipline:all'}
   for(const [key,label]of [['blood','Hematology'],['eng','Mechanical engineering'],['all','All disciplines']])await db.$executeRawUnsafe('INSERT INTO catalogue_areas(id,source_key,kind,label,normalized_label,version) VALUES($1,\'scientify\',\'discipline\',$2,lower($2),\'fixture\')',ids[key as keyof typeof ids],label)
@@ -57,8 +57,13 @@ async function main(){
   assert(matchingQuery.includes('research areas: Hematology'),'People matching and report census must use the accepted area labels')
   assert(!matchingQuery.includes('research areas: cell manufacturing'),'Unreviewed source tags cannot replace the accepted classification')
   const beforeFingerprint=await callFingerprint(tenant.id,call.id)
+  await db.$executeRaw`INSERT INTO dsr_call_match_state(tenant_id,call_id,version,fingerprint,basis,candidates,matched,refreshed_at)
+    VALUES(${tenant.id},${call.id},${CALL_MATCH_CENSUS_VERSION},${beforeFingerprint},'fixture',0,0,now() AT TIME ZONE 'UTC')`
+  assert((await callMatchStates(tenant.id,[call.id])).get(call.id)?.fresh)
   await setManualAreaLinks('CALL',call.id,[ids.eng],'areas-user',db as any)
   assert.notEqual(await callFingerprint(tenant.id,call.id),beforeFingerprint,'An area correction must invalidate cached report matching without rewriting the original call')
+  assert.equal((await callMatchStates(tenant.id,[call.id])).get(call.id)?.fresh,false,'A corrected call cannot keep showing matching as fresh for six hours')
+  assert((await staleCallIds(tenant.id)).includes(call.id),'Area corrections must enter the next bounded report refresh')
   await setManualAreaLinks('CALL',call.id,[ids.blood],'areas-user',db as any)
   const selected=await db.$queryRaw<Array<{area_id:string}>>`SELECT area_id FROM selected_org_unit_research_area_links WHERE org_unit_id=${clinic.id}`
   assert.deepEqual(selected.map(s=>s.area_id),[ids.blood],'Compatibility targets must not appear as extra user selections')

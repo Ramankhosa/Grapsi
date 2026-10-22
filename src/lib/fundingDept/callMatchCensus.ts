@@ -28,6 +28,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
 import { callAreaRowsSql } from '@/lib/researchAreas/queries'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
@@ -219,14 +220,14 @@ async function census(tenantId: string, callId: string) {
 export async function callMatchStates(tenantId: string, callIds: string[]) {
   const state = new Map<string, CallMatchState>()
   if (!callIds.length) return state
-  const rows = await prisma.$queryRaw<Array<{ call_id: string; refreshed_at: Date; basis: string; matched: number; candidates: number }>>(Prisma.sql`
-    SELECT call_id, refreshed_at, basis, matched, candidates FROM dsr_call_match_state
+  const rows = await prisma.$queryRaw<Array<{ call_id: string; refreshed_at: Date; basis: string; matched: number; candidates: number; area_changed: boolean }>>(Prisma.sql`
+    SELECT call_id, refreshed_at, basis, matched, candidates, ${areaRevisionChangedSql(Prisma.sql`s.call_id`,Prisma.sql`s.refreshed_at`)} area_changed FROM dsr_call_match_state s
      WHERE tenant_id = ${tenantId} AND version = ${CALL_MATCH_CENSUS_VERSION} AND call_id = ANY(${textArray(callIds)})`)
   const stored = new Map(rows.map((row) => [row.call_id, row]))
   for (const callId of callIds) {
     const row = stored.get(callId)
     state.set(callId, {
-      fresh: Boolean(row && Date.now() - row.refreshed_at.getTime() < CENSUS_FRESH_MS),
+      fresh: Boolean(row && !row.area_changed && Date.now() - row.refreshed_at.getTime() < CENSUS_FRESH_MS),
       refreshedAt: row?.refreshed_at ?? null,
       basis: row?.basis ?? null,
       matched: row?.matched ?? 0,
@@ -296,13 +297,20 @@ export async function storedCallMatches(
  * Only open calls: a closed call's matches are history, and pendency reads them
  * as they stood. This is what bounds the work to the live catalogue.
  */
+function areaRevisionChangedSql(callId: Prisma.Sql, refreshedAt: Prisma.Sql) {
+  return canonicalAreasEnabled() ? Prisma.sql`EXISTS(SELECT 1 FROM research_area_classifications d
+    WHERE d.entity_kind='CALL' AND d.entity_id=${callId} AND d.status='ACCEPTED' AND d.revoked_at IS NULL
+      AND d.accepted_at > (${refreshedAt} AT TIME ZONE 'UTC'))` : Prisma.sql`FALSE`
+}
+
 export async function staleCallIds(tenantId: string, limit = CENSUS_CALLS_PER_PASS) {
   const timeZone = await getTenantTimeZone(tenantId)
   const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT fc.id FROM funding_calls fc
      LEFT JOIN dsr_call_match_state s ON s.tenant_id = ${tenantId} AND s.call_id = fc.id AND s.version = ${CALL_MATCH_CENSUS_VERSION}
      WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
-       AND (s.refreshed_at IS NULL OR s.refreshed_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => ${CENSUS_FRESH_MS / 1000}))
+       AND (s.refreshed_at IS NULL OR s.refreshed_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => ${CENSUS_FRESH_MS / 1000})
+         OR ${areaRevisionChangedSql(Prisma.sql`fc.id`,Prisma.sql`s.refreshed_at`)})
      ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST, fc.id
      LIMIT ${limit}`)
   return rows.map((row) => row.id)
