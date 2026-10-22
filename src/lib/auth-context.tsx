@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { hasPermission } from '@/lib/permissions'
 import SessionExpiredModal from '@/components/auth/SessionExpiredModal'
+import { catalogueFetch } from '@/lib/catalogue-client'
 
 export interface User {
   user_id: string
@@ -229,7 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    const response = await fetch(url, {
+    const response = await catalogueFetch(url, {
       ...options,
       credentials: 'include',
       headers: {
@@ -250,7 +251,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (response.status === 401 && currentToken) {
       const newToken = await refreshAccessTokenRef.current(true)
       if (newToken) {
-        return fetch(url, {
+        return catalogueFetch(url, {
           ...options,
           credentials: 'include',
           headers: {
