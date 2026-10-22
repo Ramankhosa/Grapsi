@@ -27,8 +27,11 @@ export default function AiImportReview() {
   const [detail, setDetail] = useState<any>(null)
   const [page, setPage] = useState(1)
   const [decision, setDecision] = useState('')
+  const [confidenceAbove, setConfidenceAbove] = useState('90')
+  const confidenceParam = confidenceAbove === '' ? '' : `&confidenceAbove=${Number(confidenceAbove) / 100}`
   const [status, setStatus] = useState('')
   const [approvals, setApprovals] = useState<string[]>([])
+  const [bulk, setBulk] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState('')
@@ -37,11 +40,11 @@ export default function AiImportReview() {
   const [model, setModel] = useState('gpt-5.4-mini')
   const inFlight = useRef(false)
   const load = useCallback(async () => {
-    const data = await api(undefined, batchId ? `?batchId=${encodeURIComponent(batchId)}&page=${page}&decision=${decision}&status=${status}` : '')
+    const data = await api(undefined, batchId ? `?batchId=${encodeURIComponent(batchId)}&page=${page}&decision=${decision}&status=${status}${confidenceParam}` : '')
     setBatches(data.batches || [])
     if (batchId) setDetail(data)
     else { setConfigured(data.configured); setModels(data.models || []) }
-  }, [batchId, page, decision, status])
+  }, [batchId, page, decision, status, confidenceParam])
   useEffect(() => { if (allowed) load().catch(e => setMessage(e.message)) }, [allowed, load])
   // Only one request per tab. The database lease also guards other tabs/workers.
   useEffect(() => {
@@ -52,13 +55,13 @@ export default function AiImportReview() {
       inFlight.current = true
       try {
         await api({ action: 'step', batchId })
-        const data = await api(undefined, `?batchId=${encodeURIComponent(batchId)}&page=${page}&decision=${decision}&status=${status}`)
+        const data = await api(undefined, `?batchId=${encodeURIComponent(batchId)}&page=${page}&decision=${decision}&status=${status}${confidenceParam}`)
         if (!stopped) { setDetail(data); if (!['QUEUED', 'RUNNING'].includes(data.batch.status)) setRunning(false) }
       } catch (e: any) { setMessage(e.message); setRunning(false) }
       finally { inFlight.current = false }
     }, 1500)
     return () => { stopped = true; clearInterval(timer) }
-  }, [running, batchId, page, decision, status])
+  }, [running, batchId, page, decision, status, confidenceParam])
   async function act(action: string, ids?: string[]) {
     setBusy(true); setMessage('')
     try {
@@ -68,6 +71,31 @@ export default function AiImportReview() {
       if (data.outcomes) { setMessage(`${data.outcomes.filter((o: any) => o.applied).length} approved. ${data.outcomes.filter((o: any) => !o.applied).map((o: any) => o.reason).join('; ')}`); setApprovals([]) }
       await load()
     } catch (e: any) { setMessage(e.message) } finally { setBusy(false) }
+  }
+  async function previewBulk(scope?: string) {
+    setBusy(true); setBulk(null)
+    try { setBulk({ ...await api({ action: 'approval-preview', batchId: scope, confidenceAbove: confidenceAbove === '' ? undefined : Number(confidenceAbove) / 100 }), scope, confidenceAbove: confidenceAbove === '' ? undefined : Number(confidenceAbove) / 100 }) }
+    catch (e: any) { setMessage(e.message) } finally { setBusy(false) }
+  }
+  async function approveBulk() {
+    const frozen = bulk; setBulk(null); setBusy(true)
+    let approved = 0, skipped = 0
+    const reasons = new Set<string>()
+    try {
+      for (let n = 0; n < frozen.items.length; n += 10) {
+        const current = n === 0 ? frozen : await api({ action: 'approval-preview', batchId: frozen.scope, confidenceAbove: frozen.confidenceAbove })
+        const chunk = frozen.items.slice(n, n + 10)
+        const ids = chunk.filter((i: any) => current.items.some((c: any) => c.id === i.id)).map((i: any) => i.id)
+        skipped += chunk.length - ids.length
+        if (ids.length) {
+          const data = await api({ action: 'approve-confirmed', batchId: frozen.scope, expectedHash: current.hash, confidenceAbove: frozen.confidenceAbove, ids })
+          for (const o of data.outcomes) { if (o.applied) approved++; else { skipped++; reasons.add(o.reason) } }
+        }
+        setMessage(`${approved} approved; ${skipped} skipped. Processing ${Math.min(n + 10, frozen.items.length)} of ${frozen.items.length}. Keep this page open.`)
+      }
+      setMessage(`${approved} approved; ${skipped} skipped. ${[...reasons].join('; ')} Publication remains separate.`)
+    } catch (e: any) { setMessage(`${approved} approved so far. ${e.message} Preview again to continue.`) }
+    finally { setBusy(false); await load() }
   }
   async function start() {
     setBusy(true); setMessage('')
@@ -127,8 +155,19 @@ export default function AiImportReview() {
       </section>
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">Saved review batches</h2>
+        <label className="block text-sm">AI confidence above (%)<input aria-label="AI confidence above percent" type="number" min="0" max="100" step="1" className={input} value={confidenceAbove} disabled={busy} onChange={e => { setConfidenceAbove(e.target.value); setPage(1); setApprovals([]); setBulk(null) }} /><span>Applies to saved results and collective approvals across all pages. Leave blank for all confidence scores. A score is the AI's estimate, not measured accuracy.</span></label>
+        <button className={button} disabled={busy || running || (confidenceAbove !== '' && (Number(confidenceAbove) < 0 || Number(confidenceAbove) > 100))} onClick={() => previewBulk()}>Approve all completed batches</button>
+        {bulk && <div role="dialog" aria-label="Confirm collective approval" className="space-y-3 rounded border border-amber-400 bg-amber-50 p-4">
+          <h3 className="font-semibold">Confirm {bulk.scope ? 'entire batch' : 'all completed batches'} (all pages)</h3>
+          <p>Confidence: {bulk.confidenceAbove === undefined ? 'all scores' : `strictly above ${bulk.confidenceAbove * 100}%`}.</p>
+          <p>{bulk.separate} separate-call decisions: keep both calls. {bulk.same} same-call decisions: archive the imported subject copy and link its sources to the other call.</p>
+          <p>I have reviewed and accept these predictions. Archived records retain their data. Intake calls and attached work are protected. Changed, failed, uncertain and resolved items are skipped. Other blockers remain. No publication or factual edits. Safety checks may reduce these counts.</p>
+          <button className={button} disabled={busy || !bulk.items.length} onClick={approveBulk}>Confirm and approve {bulk.items.length} recommendations</button>{' '}
+          <button className={button} disabled={busy} onClick={() => setBulk(null)}>Cancel</button>
+        </div>}
         <select aria-label="Saved batch" className={input} value={batchId} onChange={e => { setBatchId(e.target.value); setPage(1); setApprovals([]); setRunning(false) }}><option value="">Select a batch</option>{batches.map(b => <option key={b.id} value={b.id}>{new Date(b.created_at).toLocaleString()} · {label(b.status)} · {b._count.items} items</option>)}</select>
         {detail?.batch?.id === batchId && <>
+          <button className={button} disabled={busy || running || detail.batch.status !== 'COMPLETE'} onClick={() => previewBulk(batchId)}>Approve entire batch (all pages)</button>
           <p>{label(detail.batch.status)} · Model: {detail.batch.model} · {detail.counts.map((c: any) => `${label(c.status)}: ${c._count._all}`).join(' · ')}</p>
           <p className="text-sm text-slate-600">Pause and cancel stop new requests; a request already running may finish. Keep this page open to process, or configure the persistent worker. Saved progress survives closing the page.</p>
           <div className="flex flex-wrap gap-2">{['pause', 'resume', 'retry', 'cancel'].map(action => <button key={action} className={button} disabled={busy || detail.batch.status === 'CANCELLED'} onClick={() => act(action)}>{({ pause: 'Pause', resume: 'Resume processing', retry: 'Retry failed items', cancel: 'Cancel remaining' })[action]}</button>)}</div>

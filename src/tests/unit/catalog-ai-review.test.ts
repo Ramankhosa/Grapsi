@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { canApproveDistinct, inputHash, validateRecommendation } from '@/lib/fundingCatalogImport/aiReviewPolicy'
-import { aiFilterSchema, approveDistinct, runAiReviewStep, selectAiReviewItems } from '@/lib/fundingCatalogImport/aiReview'
+import { aiFilterSchema, collectiveApprovalPreview, approveDistinct, runAiReviewStep, selectAiReviewItems } from '@/lib/fundingCatalogImport/aiReview'
 
 const snapshot = { reason: 'POSSIBLE_DUPLICATE', subject: { title: 'Round 2026', description: 'New round for 2026' }, candidate: { title: 'Round 2025', description: 'Previous round for 2025' } }
 const result = { decision: 'SEPARATE_OPPORTUNITIES', confidence: 0.98, conflicts: ['DIFFERENT_ROUND'], explanation: 'The records explicitly identify different annual rounds.', evidence: [{ side: 'subject', field: 'title', quote: '2026' }, { side: 'candidate', field: 'title', quote: '2025' }], suggestedFacts: [] }
@@ -73,4 +73,36 @@ describe('AI batch safety', () => {
     expect(and).toContainEqual({ blocks_release: true, subject_call: { import_run_id: { not: null }, catalog_status: 'STAGED', visibility: 'GLOBAL_CATALOG' } })
     expect(and[0]).toEqual({ AND: [{ resolution: { in: ['pending', 'deferred'] } }] })
   })
+})
+
+ describe('Human collective approval preview', () => {
+  it('includes accepted same and separate decisions without a confidence threshold, excluding uncertain and invalid output', async () => {
+    const row = (id: string, decision: string) => ({ id, candidate_id: id, batch_id: 'b', input_hash: 'h', snapshot, result: { ...result, decision, confidence: 0.9 } })
+    const findMany = vi.fn().mockResolvedValue([row('same', 'SAME_OPPORTUNITY'), row('separate', 'SEPARATE_OPPORTUNITIES'), row('uncertain', 'UNCERTAIN'), { ...row('invalid', 'SAME_OPPORTUNITY'), result: {} }])
+    const preview = await collectiveApprovalPreview({ catalogAiReviewItem: { findMany } } as any, 'b')
+    expect(preview.same).toBe(1)
+    expect(preview.separate).toBe(1)
+    expect(preview.items.map(i => i.id)).toEqual(['same', 'separate'])
+    expect(findMany.mock.calls[0][0].where).toEqual({ batch_id: 'b', batch: { status: 'COMPLETE' }, status: 'DONE', approved_at: null })
+  })
+  it('changes confirmation hash when a recommendation changes', async () => {
+    const rows = [{ id: 'one', batch_id: 'b', input_hash: 'h', snapshot, result }]
+    const db = { catalogAiReviewItem: { findMany: vi.fn().mockImplementation(async () => rows) } } as any
+    const first = await collectiveApprovalPreview(db)
+    rows[0] = { ...rows[0], result: { ...result, confidence: 0.9 } }
+    expect((await collectiveApprovalPreview(db)).hash).not.toBe(first.hash)
+  })
+})
+
+it('applies a strict confidence cutoff: 90 percent excluded, greater than 90 included', async () => {
+  const rows = [0.89, 0.90, 0.91, 0.99].map((confidence, n) => ({ id: String(n), candidate_id: String(n), batch_id: 'b', input_hash: 'h', snapshot, result: { ...result, confidence } }))
+  const db = { catalogAiReviewItem: { findMany: vi.fn().mockResolvedValue(rows) } } as any
+  expect((await collectiveApprovalPreview(db, undefined, 0.9)).items.map(i => i.id)).toEqual(['2', '3'])
+  expect((await collectiveApprovalPreview(db)).items).toHaveLength(4)
+})
+
+it('does not fall back to an older high score when a newer accepted result is below the cutoff', async () => {
+ const rows = [0.8, 0.99].map((confidence, n) => ({ id: String(n), candidate_id: 'pair', batch_id: 'b', input_hash: 'h', snapshot, result: { ...result, confidence } }))
+ const db = { catalogAiReviewItem: { findMany: vi.fn().mockResolvedValue(rows) } } as any
+ expect((await collectiveApprovalPreview(db, undefined, 0.9)).items).toHaveLength(0)
 })

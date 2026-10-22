@@ -2,15 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import prisma from '@/lib/prisma'
 import { requireFundingActor } from '@/lib/funding/access'
-import { aiFilterSchema, approveDistinct, createAiBatch, estimateReview, runAiReviewStep, selectAiReviewItems, selectionHash, snapshotItem } from '@/lib/fundingCatalogImport/aiReview'
+import { aiFilterSchema, collectiveApprovalPreview, approveDistinct, createAiBatch, estimateReview, runAiReviewStep, selectAiReviewItems, selectionHash, snapshotItem } from '@/lib/fundingCatalogImport/aiReview'
 import { canApproveDistinct, recommendationSchema } from '@/lib/fundingCatalogImport/aiReviewPolicy'
 import { availableReviewModels, DEFAULT_REVIEW_MODEL } from '@/lib/fundingCatalogImport/aiReviewModels'
 
 export const runtime = 'nodejs'
 export const maxDuration = 90
 const schema = z.object({
-  action: z.enum(['preview', 'start', 'step', 'pause', 'resume', 'cancel', 'retry', 'approve']),
+  action: z.enum(['preview', 'start', 'step', 'pause', 'resume', 'cancel', 'retry', 'approve', 'approval-preview', 'approve-confirmed']),
   filter: aiFilterSchema.default({}), ids: z.array(z.string().min(1).max(100)).max(10000).optional(),
+  confidenceAbove: z.number().min(0).max(1).optional(),
   expectedHash: z.string().max(100).optional(), batchId: z.string().max(100).optional(),
   limit: z.number().int().min(1).max(10000).default(100),
   page: z.number().int().min(1).max(1000).default(1),
@@ -34,7 +35,10 @@ export async function GET(request: NextRequest) {
     const state = request.nextUrl.searchParams.get('status')
     const decision = request.nextUrl.searchParams.get('decision')
     const page = Math.max(1, Math.floor(Number(request.nextUrl.searchParams.get('page')) || 1))
-    const where = { batch_id: id, ...(state ? { status: state } : {}), ...(decision ? { result: { path: ['decision'], equals: decision } } : {}) }
+    const confidenceText = request.nextUrl.searchParams.get('confidenceAbove')
+    const confidence = confidenceText === null || confidenceText === '' ? undefined : Number(confidenceText)
+    if (confidence !== undefined && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) return NextResponse.json({ message: 'Confidence must be between 0 and 100 percent' }, { status: 400 })
+    const where = { batch_id: id, ...(confidence !== undefined ? { AND: [{ result: { path: ['confidence'], gt: confidence } }] } : {}), ...(state ? { status: state } : {}), ...(decision ? { result: { path: ['decision'], equals: decision } } : {}) }
     const [counts, total, items] = await Promise.all([
       prisma.catalogAiReviewItem.groupBy({ by: ['status'], where: { batch_id: id }, _count: { _all: true } }),
       prisma.catalogAiReviewItem.count({ where }),
@@ -62,6 +66,17 @@ export async function POST(request: NextRequest) {
       if (!(await availableReviewModels()).some(m => m.id === body.model && m.available)) throw new Error('The selected model is unavailable for this account')
       const batch = await createAiBatch(prisma, access.actor.id, body.filter, body.ids, body.expectedHash, body.limit, body.model)
       return NextResponse.json({ batch })
+    }
+    if (body.action === 'approval-preview') return NextResponse.json(await collectiveApprovalPreview(prisma, body.batchId, body.confidenceAbove))
+    if (body.action === 'approve-confirmed') {
+      if (!body.ids?.length || body.ids.length > 10 || !body.expectedHash) throw new Error('Confirm a preview and submit up to 10 items')
+      const preview = await collectiveApprovalPreview(prisma, body.batchId, body.confidenceAbove)
+      if (preview.hash !== body.expectedHash) throw new Error('Results changed. Preview again before approving.')
+      const selected = preview.items.filter(i => body.ids!.includes(i.id))
+      if (selected.length !== new Set(body.ids).size) throw new Error('Selection is outside the confirmed preview')
+      const outcomes = []
+      for (const item of selected) outcomes.push(...await approveDistinct(prisma, item.batchId, [item.id], access.actor.id, true))
+      return NextResponse.json({ outcomes })
     }
     if (!body.batchId) throw new Error('Select a batch')
     const batch = await prisma.catalogAiReviewBatch.findUnique({ where: { id: body.batchId } })

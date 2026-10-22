@@ -163,3 +163,15 @@ were retained, no original conflict record was deleted, and alerts did not
 change. Full-row comparisons preserved all 238 intake calls, 74 assignments,
 10 triage rows, 11 follow-ups, 412 events, 250 school mappings, 856 users and
 10 tenants. Publication is still a separate explicit action.
+
+
+## Collective human approval
+
+The review screen now offers **Approve entire batch (all pages)** and **Approve all completed batches**. Both show a confirmation with same/separate recommendation counts before any writes. This is explicit human acceptance of reviewed predictions, independent of the conservative automated confidence gate. Uncertain, invalid, failed and already approved results are excluded. Result filters and pagination do not restrict these whole-batch actions.
+
+Separate decisions keep both calls. Same decisions archive only the staged imported subject, preserving the record and linking its sources to the survivor. Intake rows are never archived; attached work blocks archival. Existing conflict repointing keeps chain comparisons open. Every approval rechecks locked current content, open conflict state and import status, and records the actor/time/note. Other blockers and publication remain separate; suggested facts are not applied.
+
+The browser sends bounded chunks of ten frozen result IDs with confirmation hashes, displaying progress and skip reasons. Keep the page open; if interrupted, preview again to continue (already committed approvals remain saved). No schema migration required. Building this UI does not itself approve production records.
+
+
+The **AI confidence above (%)** filter applies to both saved result pagination and collective approval previews, defaulting to strictly greater than 90%. Blank includes all scores. A result at exactly 90% is excluded from a 90% cutoff. The server validates the range and applies the same cutoff during confirmation; confidence remains a self-reported score, not measured accuracy. Collective approval uses the newest accepted result per conflict within its selected batch scope, and does not fall back to older high-confidence results when the newest result falls below the cutoff.

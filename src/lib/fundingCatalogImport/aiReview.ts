@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import type { PrismaClient } from '@/lib/prisma-generated'
 import { liveOpportunityStatus } from './lifecycle'
-import { reviewWhere } from './review'
+import { reviewWhere, setAside } from './review'
+import { callsWithAttachedWork } from './rollback'
 import { refreshReviewStatus } from './service'
 import { canApproveDistinct, inputHash, REVIEW_SYSTEM_PROMPT, reviewResponseSchema, validateRecommendation } from './aiReviewPolicy'
 import { DEFAULT_REVIEW_MODEL, openAiReviewRequest, reviewModel } from './aiReviewModels'
@@ -131,13 +132,13 @@ export async function runAiReviewStep(db: PrismaClient, batchId: string) {
 }
 
 /** Only a conservative, explicitly approved 'distinct' recommendation can clear a pair. */
-export async function approveDistinct(db: PrismaClient, batchId: string, ids: string[], actor: string) {
+export async function approveDistinct(db: PrismaClient, batchId: string, ids: string[], actor: string, humanConfirmed = false) {
   const outcome: Array<{ id: string; applied: boolean; reason?: string }> = []
   for (const id of ids) {
     try {
       await db.$transaction(async tx => {
         await tx.$queryRaw`SELECT id FROM catalog_ai_review_items WHERE id = ${id} FOR UPDATE`
-        const item = await tx.catalogAiReviewItem.findFirst({ where: { id, batch_id: batchId, status: 'DONE', approved_at: null } })
+        const item = await tx.catalogAiReviewItem.findFirst({ where: { id, batch_id: batchId, status: 'DONE', approved_at: null, ...(humanConfirmed ? { batch: { status: 'COMPLETE' } } : {}) } })
         if (!item) throw new Error('Result is unavailable or already approved')
         await tx.$queryRaw`SELECT id FROM funding_import_candidates WHERE id = ${item.candidate_id} FOR UPDATE`
         const fresh = await tx.fundingImportCandidate.findUnique({ where: { id: item.candidate_id }, include })
@@ -148,9 +149,17 @@ export async function approveDistinct(db: PrismaClient, batchId: string, ids: st
         const locked = await tx.fundingImportCandidate.findUnique({ where: { id: item.candidate_id }, include })
         if (!locked || inputHash(snapshotItem(locked)) !== item.input_hash) throw new Error('Call or conflict changed; review again')
         const result = validateRecommendation(item.result, item.snapshot)
-        if (!canApproveDistinct(result, item.snapshot)) throw new Error('This recommendation requires individual review')
+        if (humanConfirmed ? !['SAME_OPPORTUNITY', 'SEPARATE_OPPORTUNITIES'].includes(result.decision) : !canApproveDistinct(result, item.snapshot)) throw new Error('This recommendation requires individual review')
+        if (!['pending', 'deferred'].includes(locked.resolution) || locked.reason !== 'POSSIBLE_DUPLICATE' || !locked.candidate_call) throw new Error('Not an open duplicate pair')
         if (locked.subject_call?.catalog_status !== 'STAGED' || locked.subject_call.visibility !== 'GLOBAL_CATALOG' || !locked.subject_call.import_run_id) throw new Error('Call is no longer a staged import')
-        await tx.fundingImportCandidate.update({ where: { id: locked.id }, data: { resolution: 'create_new_anyway', resolution_note: `AI recommendation approved (${batchId}): ${result.explanation}`.slice(0, 1000), resolved_by_user_id: actor, resolved_at: new Date() } })
+        const same = humanConfirmed && result.decision === 'SAME_OPPORTUNITY'
+        if (same) {
+          if (locked.candidate_call.catalog_status === 'REJECTED') throw new Error('Survivor is already archived; review again')
+          // Only the staged imported subject is archived. Never modify the survivor.
+          if ((await callsWithAttachedWork(tx as unknown as PrismaClient, [locked.subject_call_id!])).size) throw new Error('Attached work protects this call')
+          await setAside(tx, locked.subject_call_id!, locked.candidate_call_id!)
+        }
+        await tx.fundingImportCandidate.update({ where: { id: locked.id }, data: { resolution: same ? 'merged_to_existing' : 'create_new_anyway', resolution_note: `${humanConfirmed ? 'Human-confirmed' : 'AI'} recommendation approved (${batchId}): ${result.explanation}`.slice(0, 1000), resolved_by_user_id: actor, resolved_at: new Date() } })
         await refreshReviewStatus(tx as unknown as PrismaClient, null, callIds)
         await tx.catalogAiReviewItem.update({ where: { id }, data: { approved_by: actor, approved_at: new Date() } })
       })
@@ -158,4 +167,22 @@ export async function approveDistinct(db: PrismaClient, batchId: string, ids: st
     } catch (error) { outcome.push({ id, applied: false, reason: error instanceof Error ? error.message : 'Approval failed' }) }
   }
   return outcome
+}
+
+/** Freeze the exact result IDs and contents shown in the human confirmation. */
+export async function collectiveApprovalPreview(db: PrismaClient, batchId?: string, confidenceAbove?: number) {
+  const rows = await db.catalogAiReviewItem.findMany({
+    where: { ...(batchId ? { batch_id: batchId } : {}), batch: { status: 'COMPLETE' }, status: 'DONE', approved_at: null },
+    orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take: 10001,
+  })
+  if (rows.length > 10000) throw new Error('Select a smaller batch')
+  const latest = new Map<string, typeof rows[number]>()
+  for (const row of rows) if (!latest.has(row.candidate_id)) latest.set(row.candidate_id, row)
+  const items = [...latest.values()].filter(item => {
+    try { const result = validateRecommendation(item.result, item.snapshot); return (confidenceAbove === undefined || result.confidence > confidenceAbove) && ['SAME_OPPORTUNITY', 'SEPARATE_OPPORTUNITIES'].includes(result.decision) } catch { return false }
+  }).sort((a, b) => a.id.localeCompare(b.id))
+  return { items: items.map(i => ({ id: i.id, batchId: i.batch_id })),
+    hash: inputHash([confidenceAbove ?? null, items.map(i => [i.id, i.input_hash, i.result])]),
+    same: items.filter(i => (i.result as any).decision === 'SAME_OPPORTUNITY').length,
+    separate: items.filter(i => (i.result as any).decision === 'SEPARATE_OPPORTUNITIES').length }
 }

@@ -20,6 +20,8 @@ describe('AI review superadmin boundary', () => {
     mocks.auth.mockResolvedValue({ actor: { id: 'user', isSuperAdminWriter: false } })
     expect((await GET(new NextRequest('http://localhost/api/admin/funding/ai-review'))).status).toBe(403)
     expect((await POST(request({ action: 'start' }))).status).toBe(403)
+    expect((await POST(request({ action: 'approve-confirmed', ids: ['one'], expectedHash: 'x' }))).status).toBe(403)
+    expect((await POST(request({ action: 'approval-preview' }))).status).toBe(403)
     expect(mocks.start).not.toHaveBeenCalled()
   })
   it('requires preview confirmation and validates batch limits', async () => {
@@ -36,4 +38,10 @@ describe('AI review superadmin boundary', () => {
     expect((await response.json()).reviewItems).toBe(0)
     expect(mocks.select).toHaveBeenCalledWith({}, {}, [])
   })
+})
+
+it('refuses collective approval without confirmation or with an oversized chunk', async () => {
+  mocks.auth.mockResolvedValue({ actor: { id: 'admin', isSuperAdminWriter: true } })
+  expect((await POST(request({ action: 'approve-confirmed', ids: ['one'] }))).status).toBe(400)
+  expect((await POST(request({ action: 'approve-confirmed', ids: Array.from({ length: 11 }, (_, n) => String(n)), expectedHash: 'x' }))).status).toBe(400)
 })
