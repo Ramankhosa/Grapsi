@@ -31,6 +31,9 @@ import { Prisma } from '@/lib/prisma-generated'
 import { openCallSql, textArray, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { getDeptSettings } from './settings'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { canonicalSchoolCallTaxonomiesSql } from '@/lib/researchAreas/store'
+const callAreaTable = () => canonicalAreasEnabled()?canonicalSchoolCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')
 
 export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK', 'MANUAL_ALLOCATION'] as const
 export type MappingSource = (typeof MAPPING_SOURCES)[number]
@@ -57,6 +60,7 @@ export function mappingDecision(
   callAreas: CallAreaRow[], disciplines: string[] | null | undefined, profile: SchoolAreaProfile, options: { includeBroad: boolean }
 ): { tier: MappingTier; source: MappingSource; reason: string } | null {
   if (profile.isUnmapped || callAreas.length === 0) return null
+  if(callAreas.some(a=>a.taxonomy_level2_name==='All disciplines'))return {tier:'direct',source:'INGESTION_DIRECT',reason:'Open to all research disciplines'}
   const direct = callAreas.find(area => profile.areaIds.has(area.taxonomy_area_id))
   if (direct) {
     const label = direct.taxonomy_level2_name ? `${direct.taxonomy_level1_name} → ${direct.taxonomy_level2_name}` : direct.taxonomy_level1_name || 'Mapped discipline'
@@ -80,7 +84,9 @@ export async function loadSchoolProfiles(tenantId: string, schoolIds?: string[])
   if (!schools.length) return []
   const ids = textArray(schools.map(s => s.id))
   const [areas, keywords] = await Promise.all([
-    prisma.$queryRaw<Array<{ school_id: string; taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
+    canonicalAreasEnabled()?prisma.$queryRaw<Array<{school_id:string;taxonomy_area_id:string;level1_code:string}>>(Prisma.sql`
+      SELECT DISTINCT unit.path[1] school_id,e.area_id taxonomy_area_id,coalesce(n.level1_code,'') level1_code FROM effective_org_unit_research_area_links e
+      JOIN tenant_org_units unit ON unit.id=e.org_unit_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id WHERE unit.tenant_id=${tenantId} AND unit.is_active AND unit.path[1]=ANY(${ids})`):prisma.$queryRaw<Array<{ school_id: string; taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
       SELECT DISTINCT unit.path[1] school_id, ra.taxonomy_area_id, area.level1_code
         FROM tenant_org_unit_research_areas ra
         JOIN tenant_org_units unit ON unit.id = ra.org_unit_id AND unit.is_active
@@ -134,7 +140,7 @@ export async function planTenantMappings(
        WHERE id = ANY(${ids}) AND ${options.ignoreVisibility ? Prisma.sql`fc.import_run_id IS NOT NULL` : visibleCallSql(tenantId, 'fc')}`),
     prisma.$queryRaw<Array<CallAreaRow & { funding_call_id: string }>>(Prisma.sql`
       SELECT funding_call_id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_name
-        FROM funding_call_research_area_taxonomies WHERE funding_call_id = ANY(${ids})`),
+        FROM ${callAreaTable()} effective_areas WHERE funding_call_id = ANY(${ids})`),
     prisma.$queryRaw<Array<{ call_id: string; school_id: string; arrived_at: Date }>>(Prisma.sql`
       SELECT o.call_id, o.school_id, MIN(o.arrived_at) arrived_at FROM dsr_origin_responsibilities o
         JOIN tenant_org_units s ON s.id = o.school_id AND s.tenant_id = ${tenantId} AND s.depth = 0
@@ -265,7 +271,7 @@ export async function remapSchoolOpenCalls(tenantId: string, schoolIds: string[]
   const calls = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT fc.id FROM funding_calls fc
      WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
-       AND EXISTS (SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id)`)
+       AND EXISTS (SELECT 1 FROM ${callAreaTable()} m WHERE m.funding_call_id = fc.id)`)
   const planned = await planTenantMappings(tenantId, calls.map(c => c.id), { schoolIds: roots.map(r => r.id) })
   return writeMappings(planned, actorId)
 }

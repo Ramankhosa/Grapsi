@@ -3,6 +3,8 @@ import { loadActiveAreas } from '@/lib/funding/disciplineClassifier'
 import { isGroupArea, matchAreas, type MatchableArea } from '@/lib/funding/disciplineMatcher'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+const orgAreaTable=()=>canonicalAreasEnabled()?Prisma.sql`(SELECT e.org_unit_id,e.area_id taxonomy_area_id,u.tenant_id FROM selected_org_unit_research_area_links e JOIN tenant_org_units u ON u.id=e.org_unit_id)`:Prisma.raw('tenant_org_unit_research_areas')
 
 import { listSubtreeUnitIds } from './tree'
 
@@ -240,7 +242,7 @@ async function rungAncestor(ctx: Ctx, unitId: string): Promise<RungResult> {
       FROM tenant_org_units self
       CROSS JOIN LATERAL unnest(self.path) AS p(ancestor_id)
       INNER JOIN tenant_org_units ancestor ON ancestor.id = p.ancestor_id
-      INNER JOIN tenant_org_unit_research_areas ra ON ra.org_unit_id = ancestor.id
+      INNER JOIN ${orgAreaTable()} ra ON ra.org_unit_id = ancestor.id
      WHERE self.id = ${unitId}
        AND ancestor.id <> self.id
      LIMIT 20
@@ -248,7 +250,7 @@ async function rungAncestor(ctx: Ctx, unitId: string): Promise<RungResult> {
   if (rows.length === 0) return { matches: [], evidence: '' }
 
   return {
-    matches: rows.map((row) => ({
+    matches: rows.filter(row=>ctx.areaById.has(row.taxonomy_area_id)).map((row) => ({
       areaId: row.taxonomy_area_id,
       score: 2,
       confidence: 0.4,
@@ -300,7 +302,7 @@ export async function suggestAreasForUnits(
 
   const existing = await prisma.$queryRaw<Array<{ org_unit_id: string; count: number }>>(Prisma.sql`
     SELECT org_unit_id, COUNT(*)::int AS count
-      FROM tenant_org_unit_research_areas
+      FROM ${orgAreaTable()} selected_areas
      WHERE tenant_id = ${tenantId}
      GROUP BY org_unit_id
   `)
@@ -315,7 +317,7 @@ export async function suggestAreasForUnits(
     const alreadyMapped = new Set(
       (
         await prisma.$queryRaw<Array<{ taxonomy_area_id: string }>>(Prisma.sql`
-          SELECT taxonomy_area_id FROM tenant_org_unit_research_areas
+          SELECT taxonomy_area_id FROM ${orgAreaTable()} selected_areas
            WHERE org_unit_id = ${unit.id}
         `)
       ).map((row) => row.taxonomy_area_id)
@@ -365,7 +367,7 @@ export async function suggestAreasForUnits(
       }),
       unit.parent_id
         ? prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
-            SELECT COUNT(*)::int AS count FROM tenant_org_unit_research_areas
+            SELECT COUNT(*)::int AS count FROM ${orgAreaTable()} selected_areas
              WHERE org_unit_id = ${unit.parent_id}
           `).then((rows) => (rows[0]?.count ?? 0) > 0)
         : Promise.resolve(false),
@@ -427,7 +429,7 @@ export async function listUnmappedUnitIds(tenantId: string): Promise<string[]> {
      WHERE u.tenant_id = ${tenantId}
        AND u.is_active = true
        AND NOT EXISTS (
-         SELECT 1 FROM tenant_org_unit_research_areas ra WHERE ra.org_unit_id = u.id
+         SELECT 1 FROM ${orgAreaTable()} ra WHERE ra.org_unit_id = u.id
        )
      ORDER BY u.depth DESC, u.name ASC
   `)

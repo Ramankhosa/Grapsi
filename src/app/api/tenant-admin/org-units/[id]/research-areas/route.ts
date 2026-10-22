@@ -12,6 +12,8 @@ import {
 import { remapSchoolOpenCallsQuietly } from '@/lib/fundingDept/callSchoolMapping'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { setManualAreaLinks } from '@/lib/researchAreas/store'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,6 +61,10 @@ function serialize(row: AreaRow) {
 }
 
 async function listAreas(orgUnitId: string) {
+  if(canonicalAreasEnabled()) {
+    const rows=await prisma.$queryRaw<Array<{id:string;label:string}>>`SELECT DISTINCT e.area_id id,coalesce(a.label,nullif(n.level2_name,''),n.level1_name) label FROM selected_org_unit_research_area_links e LEFT JOIN catalogue_areas a ON a.id=e.area_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id WHERE e.org_unit_id=${orgUnitId} ORDER BY label`
+    return rows.map(a=>({id:a.id,taxonomyAreaId:a.id,level1Code:'AREAS',level1Name:'Research areas',level2Code:a.id,level2Name:a.label,label:a.label,source:'canonical',createdAt:null}))
+  }
   const rows = await prisma.$queryRaw<AreaRow[]>(Prisma.sql`
     SELECT ra.id, ra.taxonomy_area_id, ra.source, ra.created_at,
            area.level1_code, area.level1_name, area.level2_code, area.level2_name
@@ -86,7 +92,11 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
   // Areas inherited from ancestors are shown read-only, so an admin can see
   // that a department is already covered by its school before adding anything.
-  const inherited = await prisma.$queryRaw<Array<{ label: string; unit_name: string }>>(Prisma.sql`
+  const inherited = canonicalAreasEnabled()?await prisma.$queryRaw<Array<{label:string;unit_name:string}>>(Prisma.sql`
+    SELECT DISTINCT coalesce(a.label,nullif(n.level2_name,''),n.level1_name) label,ancestor.name unit_name FROM tenant_org_units self
+    JOIN tenant_org_units ancestor ON ancestor.id=ANY(self.path) AND ancestor.id<>self.id
+    JOIN selected_org_unit_research_area_links e ON e.org_unit_id=ancestor.id LEFT JOIN catalogue_areas a ON a.id=e.area_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id
+    WHERE self.id=${unit.id} AND ancestor.tenant_id=${context.tenantId} ORDER BY label`):await prisma.$queryRaw<Array<{ label: string; unit_name: string }>>(Prisma.sql`
     SELECT DISTINCT
       CASE WHEN area.level2_name <> '' THEN area.level1_name || ' → ' || area.level2_name
            ELSE area.level1_name END AS label,
@@ -144,6 +154,20 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   const keywords = Array.from(
     new Set((payload.keywords || []).map((keyword) => keyword.trim()).filter(Boolean))
   )
+
+  if(canonicalAreasEnabled()) {
+    try {await prisma.$transaction(async tx=>{
+      const canonical=areaIds.filter(id=>id.startsWith('scientify:discipline:')),legacy=areaIds.filter(id=>!id.startsWith('scientify:discipline:'))
+      const known=await tx.$queryRaw<Array<{id:string}>>`SELECT taxonomy_area_id id FROM tenant_org_unit_research_areas WHERE org_unit_id=${unit.id} AND taxonomy_area_id=ANY(${legacy}::text[])`
+      if(known.length!==legacy.length)throw new Error('Only existing previous-area selections can be retained')
+      const revision=await setManualAreaLinks('ORG_UNIT',unit.id,canonical,context.user.id,tx)
+      await tx.$executeRaw`UPDATE research_area_classifications SET evidence=${JSON.stringify({retainedLegacyAreaIds:legacy})}::jsonb WHERE id=${revision}`
+      await tx.tenantOrgUnit.update({where:{id:unit.id},data:{keywords}})
+      await tx.auditLog.create({data:{actorUserId:context.user.id,tenantId:context.tenantId,action:'ORG_RESEARCH_AREAS_SET',resource:`tenant_org_unit:${unit.id}`,meta:{areaCount:areaIds.length,source:payload.source,vocabulary:'canonical'}}})
+    })}catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not save research areas'},{status:400})}
+    remapSchoolOpenCallsQuietly(context.tenantId,[unit.id],context.user.id)
+    return NextResponse.json({unit:{id:unit.id,name:unit.name},areas:await listAreas(unit.id),keywords})
+  }
 
   if (areaIds.length > 0) {
     const found = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`

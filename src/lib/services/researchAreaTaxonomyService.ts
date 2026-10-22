@@ -9,6 +9,9 @@ import type {
   ResearchAreaTaxonomyUploadSummary,
 } from '../researcherProfile/types';
 import { normalizeWhitespace } from '../recommendations/utils';
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core';
+import { standardAreaRecord, standardTaxonomyPayload } from '@/lib/researchAreas/taxonomy';
+import { loadStandardAreas } from '@/lib/researchAreas/store';
 
 const REQUIRED_HEADERS = ['level1_code', 'level1_name', 'level2_code', 'level2_name'];
 const DEFAULT_SOURCE_NAME = 'OECD FORD';
@@ -287,6 +290,7 @@ export function parseResearchAreaTaxonomyCsv(csvText: string): ResearchAreaTaxon
 
 export class ResearchAreaTaxonomyService {
   async listActiveTaxonomy(options?: { includeInactive?: boolean }): Promise<ResearchAreaTaxonomyPayload> {
+    if(canonicalAreasEnabled()) return standardTaxonomyPayload();
     const uploadRows = await prisma.$queryRaw<TaxonomyUploadRow[]>(Prisma.sql`
       SELECT id, source_name, original_filename, row_count, active_row_count, status, created_at, activated_at, archived_at
       FROM research_area_taxonomy_uploads
@@ -324,6 +328,10 @@ export class ResearchAreaTaxonomyService {
   }
 
   async getActiveAreaById(areaId: string): Promise<ResearchAreaTaxonomyAreaRecord | null> {
+    if(canonicalAreasEnabled() && areaId.startsWith('scientify:discipline:')) {
+      const area=(await loadStandardAreas()).find(a=>a.id===areaId);
+      return area?standardAreaRecord(area):null;
+    }
     const rows = await prisma.$queryRaw<TaxonomyAreaRow[]>(Prisma.sql`
       SELECT area.id, area.upload_id, area.level1_code, area.level1_name, area.level2_code, area.level2_name,
              area.description, area.aliases, area.sort_order, area.is_active

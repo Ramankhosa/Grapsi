@@ -30,6 +30,8 @@ import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 import { fundingPublicationService } from '../researcherProfile/funding-publications';
 import { countryNameFor, resolveCountryList } from '@/lib/geo/countries';
 import { getTenantLocale } from '@/lib/tenant/locale';
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core';
+import { currentEntityAreas, setManualAreaLinks } from '@/lib/researchAreas/store';
 
 const embeddingService = new EmbeddingService();
 const RESEARCH_AREA_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
@@ -788,7 +790,14 @@ export class ResearcherProfileService {
 
   async listResearchAreas(userId: string): Promise<ResearcherSavedResearchAreaRecord[]> {
     const areas = await querySavedResearchAreas(userId);
-
+    if(canonicalAreasEnabled()) return Promise.all(areas.map(async row=>{
+      const result=serializeResearchArea(row),canonical=await currentEntityAreas('SAVED_AREA',row.id);
+      const active=await prisma.$queryRaw<Array<{id:string}>>`SELECT id FROM research_area_classifications WHERE entity_kind='SAVED_AREA' AND entity_id=${row.id} AND status='ACCEPTED' AND revoked_at IS NULL`;
+      if(canonical.length||active.length)result.canonicalAreas=canonical;
+      if(active.length&&!canonical.length)result.taxonomy=null;
+      if(canonical.length)result.taxonomy={areaId:canonical[0].id,level1Code:'AREAS',level1Name:'Research areas',level2Code:canonical[0].id,level2Name:canonical[0].label};
+      return result;
+    }));
     return areas.map(serializeResearchArea);
   }
 
@@ -797,6 +806,7 @@ export class ResearcherProfileService {
     input: {
       id?: string;
       taxonomyAreaId?: string | null;
+      canonicalAreaIds?: string[];
       label: string;
       researchArea: string;
       keywords?: string[];
@@ -819,8 +829,14 @@ export class ResearcherProfileService {
     }
     const existingSavedArea = existing ? await querySavedResearchAreaById(existing.id) : null;
     let taxonomy: ResearcherSavedResearchAreaTaxonomy | null = null;
+    const canonicalIds=canonicalAreasEnabled() ? (input.canonicalAreaIds ?? (input.taxonomyAreaId?.startsWith('scientify:discipline:')?[input.taxonomyAreaId]:undefined)) : undefined;
+    if(canonicalIds) {
+      const valid=await prisma.$queryRaw<Array<{id:string}>>`SELECT id FROM catalogue_areas WHERE id=ANY(${canonicalIds}::text[]) AND kind='discipline'`;
+      if(valid.length!==new Set(canonicalIds).size||canonicalIds.length>50)throw new Error('Choose valid standard research areas');
+      if(existingSavedArea)taxonomy=serializeResearchAreaTaxonomy(existingSavedArea);
+    }
 
-    if (input.taxonomyAreaId) {
+    if (input.taxonomyAreaId && !canonicalIds) {
       const taxonomyArea = await researchAreaTaxonomyService.getActiveAreaById(input.taxonomyAreaId);
       if (!taxonomyArea) {
         throw new Error('Selected research area classification is no longer active. Please choose another classification.');
@@ -834,7 +850,7 @@ export class ResearcherProfileService {
       };
     } else if (!taxonomyProvided && existingSavedArea) {
       taxonomy = serializeResearchAreaTaxonomy(existingSavedArea);
-    } else if (!input.id && await researchAreaTaxonomyService.hasActiveTaxonomy()) {
+    } else if (!input.id && !canonicalAreasEnabled() && await researchAreaTaxonomyService.hasActiveTaxonomy()) {
       throw new Error('Please choose a Level 1 and Level 2 research area classification before saving.');
     }
 
@@ -878,6 +894,7 @@ export class ResearcherProfileService {
               taxonomy_level2_name = ${taxonomy?.level2Name || null}
           WHERE id = ${existing.id}
         `);
+        if(canonicalIds)await setManualAreaLinks('SAVED_AREA',updated.id,canonicalIds,userId,tx);
         return updated;
       }
 
@@ -903,6 +920,7 @@ export class ResearcherProfileService {
             taxonomy_level2_name = ${taxonomy?.level2Name || null}
         WHERE id = ${created.id}
       `);
+      if(canonicalIds)await setManualAreaLinks('SAVED_AREA',created.id,canonicalIds,userId,tx);
       return created;
     });
 

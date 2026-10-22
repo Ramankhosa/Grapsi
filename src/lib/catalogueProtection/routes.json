@@ -1,4 +1,12 @@
 {
+  "src/app/api/admin/funding/research-area-review/route.ts": {
+    "methods": ["GET", "POST"],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/researcher/research-area-suggestions/route.ts": {
+    "methods": ["POST"],
+    "guard": "withCatalogueProtection"
+  },
   "src/app/api/admin/funding/ai-review/route.ts": {
     "methods": [
       "GET",

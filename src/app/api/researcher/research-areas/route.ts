@@ -8,6 +8,7 @@ export const runtime = 'nodejs'
 
 const requestSchema = z.object({
   taxonomyAreaId: z.string().nullable().optional(),
+  canonicalAreaIds: z.array(z.string().max(100)).max(50).optional(),
   label: z.string().max(120),
   researchArea: z.string().max(300),
   keywords: z.array(z.string().max(120)).max(40).default([]),

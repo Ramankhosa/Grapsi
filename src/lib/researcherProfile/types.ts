@@ -69,6 +69,7 @@ export interface ResearchAreaTaxonomyGroup {
 }
 
 export interface ResearchAreaTaxonomyPayload {
+  vocabulary?: 'canonical' | 'legacy';
   upload: ResearchAreaTaxonomyUploadSummary | null;
   areas: ResearchAreaTaxonomyAreaRecord[];
   groups: ResearchAreaTaxonomyGroup[];
@@ -97,6 +98,7 @@ export interface ResearcherSavedResearchAreaTaxonomy {
 }
 
 export interface ResearcherSavedResearchAreaRecord {
+  canonicalAreas?: Array<{ id: string; label: string; source: string }>;
   id: string;
   taxonomy: ResearcherSavedResearchAreaTaxonomy | null;
   label: string;

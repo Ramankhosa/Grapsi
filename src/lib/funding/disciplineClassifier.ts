@@ -27,6 +27,9 @@ import {
   runFundingGatewayText,
 } from './llmRouting'
 import { fundingCallResearchAreaTaxonomyService } from '@/lib/services/fundingCallResearchAreaTaxonomyService'
+import { canonicalAreasEnabled,activeCallExclusion } from '@/lib/researchAreas/core'
+import { loadCallClassificationInput,loadAreaVectors,saveAreaProposal,acceptCallAreaProposal,currentEntityAreas,loadStandardAreas } from '@/lib/researchAreas/store'
+import { newAreaCostLedger,proposeResearchAreas } from '@/lib/researchAreas/ai'
 
 /** Reuses the intake text stage so no new WorkflowStage needs seeding. */
 export const CLASSIFY_STAGE_CODE = FUNDING_CALL_INGEST_TEXT_STAGE_CODE
@@ -56,6 +59,7 @@ interface CallRow {
 
 /** The active catalog, shaped for the matcher. Small (~50 rows) and cached per call site. */
 export async function loadActiveAreas(): Promise<MatchableArea[]> {
+  if(canonicalAreasEnabled())return (await loadStandardAreas()).map(a=>({id:a.id,level1Code:'AREAS',level1Name:'Research areas',level2Code:a.id,level2Name:a.label,aliases:[]}))
   const rows = await prisma.$queryRaw<
     Array<{
       id: string
@@ -204,6 +208,22 @@ export async function classifyFundingCall(
   options: { force?: boolean; areas?: MatchableArea[]; allowLlm?: boolean } = {}
 ): Promise<ClassifyResult> {
   const { force = false, allowLlm = true } = options
+
+  if(canonicalAreasEnabled()) {
+    const input=await loadCallClassificationInput(fundingCallId)
+    if(!input)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'call_not_found'}
+    const excluded=activeCallExclusion(input)
+    if(excluded)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:excluded}
+    if(input.hasManualMapping)return {fundingCallId,method:'manual',areaIds:[],labels:[],reason:'manual_mapping_exists'}
+    const current=await currentEntityAreas('CALL',fundingCallId)
+    if(current.length&&(!force||current.some(a=>a.source==='manual')))return {fundingCallId,method:'none',areaIds:current.map(a=>a.id),labels:current.map(a=>a.label),reason:'already_classified'}
+    if(!allowLlm)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'requires_contextual_review'}
+    const vectors=await loadAreaVectors(),proposal=await proposeResearchAreas(input,vectors,newAreaCostLedger(.10))
+    const id=await saveAreaProposal(input,proposal.decision,proposal.candidates,proposal.usage,'system:call-classifier')
+    if(proposal.decision.needsReview)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'classification_pending_review'}
+    await acceptCallAreaProposal(id,'system:call-classifier')
+    return {fundingCallId,method:'llm',areaIds:proposal.decision.areaIds,labels:proposal.decision.areaIds.map(id=>vectors.find(a=>a.id===id)!.label)}
+  }
 
   const call = await prisma.fundingCall.findUnique({
     where: { id: fundingCallId },

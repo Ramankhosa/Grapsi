@@ -1,4 +1,6 @@
-import { importedAreaCondition, LIVE_STATUS_SQL } from '@/lib/catalogueProtection/areas'
+import { importedAreaCondition, LIVE_STATUS_SQL, catalogueAreaAssociationsSql } from '@/lib/catalogueProtection/areas'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { canonicalCallTaxonomiesSql } from '@/lib/researchAreas/store'
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
@@ -237,7 +239,12 @@ function buildFunderCondition(funderIds: string[]) {
   )`;
 }
 
-function buildTaxonomyAreaCondition(areaIds: string[], callId: Prisma.Sql = Prisma.raw('funding_calls.id')) {
+function buildTaxonomyAreaCondition(areaIds: string[], callId: Prisma.Sql = Prisma.raw('funding_calls.id')):Prisma.Sql {
+  if(canonicalAreasEnabled() && areaIds.some(id=>id.startsWith('scientify:discipline:'))) {
+    const standard=areaIds.filter(id=>id.startsWith('scientify:discipline:')),legacy=areaIds.filter(id=>!id.startsWith('scientify:discipline:'));
+    const current=importedAreaCondition(standard,callId);
+    return legacy.length?Prisma.sql`(${current} OR ${buildTaxonomyAreaCondition(legacy,callId)})`:current;
+  }
   const ids = sqlTextArray(areaIds);
   return Prisma.sql`
     EXISTS (
@@ -281,7 +288,7 @@ function buildFundingCallTextSearchCondition(fullTextQuery: string) {
     WHERE text_call.ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
     UNION
     SELECT taxonomy_text.funding_call_id
-    FROM funding_call_research_area_taxonomies taxonomy_text
+    FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_text
     WHERE ${taxonomyTextVectorSql('taxonomy_text')} @@ websearch_to_tsquery('english', ${fullTextQuery})
   )`;
 }
@@ -291,7 +298,7 @@ export function legacyFundingCallTextSearchCondition(fullTextQuery: string) {
     ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
     OR EXISTS (
       SELECT 1
-      FROM funding_call_research_area_taxonomies taxonomy_text
+      FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_text
       WHERE taxonomy_text.funding_call_id = funding_calls.id
         AND to_tsvector(
           'english',
@@ -698,7 +705,7 @@ function selectCandidateColumns() {
   return Prisma.sql`
     id::text AS id,
     agency_name AS "agencyName",
-    scheme_title AS "schemeTitle",
+    coalesce(nullif(scheme_title,''),title) AS "schemeTitle",
     description AS "shortDescription",
     NULL::text AS "fullDescription",
     description,
@@ -744,7 +751,7 @@ function selectCandidateColumns() {
     COALESCE(
       ARRAY(
         SELECT taxonomy_tag.taxonomy_area_id
-        FROM funding_call_research_area_taxonomies taxonomy_tag
+        FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_tag
         WHERE taxonomy_tag.funding_call_id = funding_calls.id
       ),
       ARRAY[]::text[]
@@ -3031,13 +3038,11 @@ Rules:
       const labelWhere = Prisma.sql`a.kind=${kind} AND position(lower(${term}) in lower(a.label))>0`;
       const [areas, totals, selected] = await Promise.all([
         prisma.$queryRaw(Prisma.sql`WITH matched AS MATERIALIZED (SELECT id FROM funding_calls WHERE ${where}),
-          area_counts AS (SELECT area_id,count(DISTINCT call_id)::int AS count FROM (
-            SELECT ca.area_id,ca.call_id FROM catalogue_call_areas ca JOIN matched ON matched.id=ca.call_id
-            UNION ALL SELECT cw.imported_area_id,n.funding_call_id FROM funding_call_research_area_taxonomies n
-            JOIN matched ON matched.id=n.funding_call_id JOIN catalogue_area_crosswalk cw ON cw.native_area_id=n.taxonomy_area_id
-            WHERE cw.approved_at IS NOT NULL AND cw.relation IN ('exact','broader','narrower')
-          ) associations GROUP BY area_id)
-          SELECT a.id,a.label,a.kind,coalesce(c.count,0)::int AS count FROM catalogue_areas a LEFT JOIN area_counts c ON c.area_id=a.id
+          associations AS MATERIALIZED (SELECT e.call_id,e.area_id FROM (${catalogueAreaAssociationsSql()}) e JOIN matched ON matched.id=e.call_id),
+          all_calls AS (SELECT DISTINCT e.call_id FROM associations e JOIN catalogue_areas a ON a.id=e.area_id WHERE ${canonicalAreasEnabled()} AND a.kind='discipline' AND a.normalized_label='all disciplines'),
+          area_counts AS (SELECT e.area_id,count(DISTINCT e.call_id)::int AS count FROM associations e JOIN catalogue_areas a ON a.id=e.area_id
+            WHERE a.kind<>'discipline' OR NOT EXISTS(SELECT 1 FROM all_calls allc WHERE allc.call_id=e.call_id) GROUP BY e.area_id)
+          SELECT a.id,a.label,a.kind,(coalesce(c.count,0)+CASE WHEN a.kind='discipline' THEN (SELECT count(*) FROM all_calls) ELSE 0 END)::int AS count FROM catalogue_areas a LEFT JOIN area_counts c ON c.area_id=a.id
           WHERE ${labelWhere} ORDER BY a.label,a.id LIMIT 50 OFFSET ${(page-1)*50}`),
         prisma.$queryRaw<Array<{count:number}>>(Prisma.sql`SELECT count(*)::int AS count FROM catalogue_areas a WHERE ${labelWhere}`),
         prisma.$queryRaw(Prisma.sql`SELECT id,label,kind FROM catalogue_areas WHERE id=ANY(${lookup.ids || []}::text[])`),
@@ -3049,7 +3054,7 @@ Rules:
       prisma.$queryRaw(Prisma.sql`SELECT (${LIVE_STATUS_SQL}) AS status,count(*)::int AS count FROM funding_calls WHERE ${where} GROUP BY 1 ORDER BY 1`),
       prisma.$queryRaw(Prisma.sql`SELECT import_run_id IS NOT NULL AS imported,count(*)::int AS count FROM funding_calls WHERE ${where} GROUP BY 1`),
       prisma.$queryRaw(Prisma.sql`SELECT kind,count(DISTINCT id)::int AS count FROM funding_calls CROSS JOIN LATERAL unnest(funding_kinds) kind WHERE ${where} GROUP BY 1 ORDER BY count DESC,kind`),
-      prisma.$queryRaw(Prisma.sql`SELECT count(*)::int AS count FROM funding_calls WHERE ${where} AND NOT EXISTS(SELECT 1 FROM catalogue_call_areas ca WHERE ca.call_id=funding_calls.id) AND NOT EXISTS(SELECT 1 FROM funding_call_research_area_taxonomies n JOIN catalogue_area_crosswalk cw ON cw.native_area_id=n.taxonomy_area_id WHERE n.funding_call_id=funding_calls.id AND cw.approved_at IS NOT NULL)`),
+      prisma.$queryRaw(Prisma.sql`SELECT count(*)::int AS count FROM funding_calls WHERE ${where} AND NOT EXISTS(SELECT 1 FROM (${catalogueAreaAssociationsSql()}) e JOIN catalogue_areas a ON a.id=e.area_id WHERE e.call_id=funding_calls.id AND a.kind='discipline')`),
       prisma.$queryRaw(Prisma.sql`SELECT count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+7)::int AS next7,count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+30)::int AS next30,count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+90)::int AS next90 FROM funding_calls WHERE ${where}`),
     ]);
     return { asOf: new Date().toISOString().slice(0,10), lifecycle, origins, fundingKinds: kinds, unmapped, deadlineWindows: windows, overlappingCategories: true };

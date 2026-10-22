@@ -4,6 +4,8 @@ import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import type { FundingCallResearchAreaTaxonomyRecord } from '../researcherProfile/types';
 import { normalizeWhitespace } from '../recommendations/utils';
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core';
+import { setManualAreaLinks } from '@/lib/researchAreas/store';
 
 const MAX_MAPPINGS_PER_CALL = 50;
 
@@ -59,6 +61,10 @@ function normalizeAreaIds(taxonomyAreaIds: string[]) {
 
 export class FundingCallResearchAreaTaxonomyService {
   async listMappings(fundingCallId: string): Promise<FundingCallResearchAreaTaxonomyRecord[]> {
+    if(canonicalAreasEnabled()) {
+      const rows=await prisma.$queryRaw<Array<{id:string;label:string;source:string}>>`SELECT DISTINCT a.id,a.label,e.source FROM effective_call_research_areas e JOIN catalogue_areas a ON a.id=e.area_id WHERE e.call_id=${fundingCallId} AND a.kind='discipline' ORDER BY a.label`;
+      return rows.map(r=>({id:`${fundingCallId}:${r.id}`,fundingCallId,taxonomyAreaId:r.id,level1Code:'',level1Name:'',level2Code:r.id,level2Name:r.label,source:r.source,confidence:null,createdAt:new Date(0).toISOString()}));
+    }
     const rows = await prisma.$queryRaw<MappingRow[]>(Prisma.sql`
       SELECT id, funding_call_id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name,
              taxonomy_level2_code, taxonomy_level2_name, source, confidence, created_at
@@ -76,6 +82,10 @@ export class FundingCallResearchAreaTaxonomyService {
   }): Promise<FundingCallResearchAreaTaxonomyRecord[]> {
     const fundingCallId = normalizeWhitespace(input.fundingCallId);
     const areaIds = normalizeAreaIds(input.taxonomyAreaIds);
+    if(canonicalAreasEnabled() && areaIds.every(id=>id.startsWith('scientify:discipline:'))) {
+      await setManualAreaLinks('CALL',fundingCallId,areaIds,'operator:call-area-editor');
+      return this.listMappings(fundingCallId);
+    }
 
     if (!fundingCallId) {
       throw new Error('Funding call id is required');

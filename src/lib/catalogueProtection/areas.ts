@@ -1,8 +1,16 @@
 import { Prisma } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import type { PrismaClient } from '@/lib/prisma-generated'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
 
 export function importedAreaCondition(ids:string[],callId:Prisma.Sql=Prisma.raw('funding_calls.id')) {
+  if(canonicalAreasEnabled()) return Prisma.sql`EXISTS (
+    SELECT 1 FROM effective_call_research_areas e JOIN catalogue_areas a ON a.id=e.area_id
+    WHERE e.call_id=${callId} AND (e.area_id=ANY(${ids}::text[]) OR (
+      a.kind='discipline' AND a.normalized_label='all disciplines'
+      AND EXISTS(SELECT 1 FROM catalogue_areas selected WHERE selected.id=ANY(${ids}::text[]) AND selected.kind='discipline')
+    ))
+  )`
   return Prisma.sql`EXISTS (
     SELECT 1 FROM catalogue_call_areas ca WHERE ca.call_id=${callId} AND ca.area_id=ANY(${ids}::text[])
     UNION ALL
@@ -10,6 +18,14 @@ export function importedAreaCondition(ids:string[],callId:Prisma.Sql=Prisma.raw(
     JOIN catalogue_area_crosswalk cw ON cw.native_area_id=native.taxonomy_area_id
     WHERE native.funding_call_id=${callId} AND cw.imported_area_id=ANY(${ids}::text[]) AND cw.approved_at IS NOT NULL AND cw.relation IN ('exact','broader','narrower')
   )`
+}
+/** One source for both result filtering and area-count associations. */
+export function catalogueAreaAssociationsSql() {
+ if(canonicalAreasEnabled())return Prisma.sql`SELECT DISTINCT call_id,area_id FROM effective_call_research_areas`
+ return Prisma.sql`SELECT ca.call_id,ca.area_id FROM catalogue_call_areas ca
+  UNION SELECT n.funding_call_id,cw.imported_area_id FROM funding_call_research_area_taxonomies n
+  JOIN catalogue_area_crosswalk cw ON cw.native_area_id=n.taxonomy_area_id
+  WHERE cw.approved_at IS NOT NULL AND cw.relation IN ('exact','broader','narrower')`
 }
 export const LIVE_STATUS_SQL=Prisma.sql`CASE WHEN source_closed_at IS NOT NULL THEN 'CLOSED' WHEN is_rolling IS TRUE THEN 'ROLLING'
   WHEN open_date::date>(now() AT TIME ZONE 'UTC')::date THEN 'FORTHCOMING'

@@ -18,6 +18,9 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { activeMappingSql } from '@/lib/fundingDept/callSchoolMapping'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { canonicalSchoolCallTaxonomiesSql } from '@/lib/researchAreas/store'
+const callAreaTable = () => canonicalAreasEnabled()?canonicalSchoolCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')
 
 /**
  * Strongest first. `unclassified` is not a weak match — it is the absence of
@@ -83,7 +86,9 @@ export async function loadUnitAreaProfile(
   const rootArray = textArray(roots)
 
   const [areaRows, keywordRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
+    canonicalAreasEnabled()?prisma.$queryRaw<Array<{taxonomy_area_id:string;level1_code:string}>>(Prisma.sql`
+      SELECT DISTINCT e.area_id taxonomy_area_id,coalesce(n.level1_code,'') level1_code FROM effective_org_unit_research_area_links e
+      JOIN tenant_org_units unit ON unit.id=e.org_unit_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id WHERE unit.tenant_id=${tenantId} AND unit.is_active AND unit.path && ${rootArray}`):prisma.$queryRaw<Array<{ taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
       SELECT DISTINCT ra.taxonomy_area_id, area.level1_code
       FROM tenant_org_unit_research_areas ra
       INNER JOIN tenant_org_units unit ON unit.id = ra.org_unit_id
@@ -169,9 +174,10 @@ export function relevantCallWhereSql(
   if (pinnedSql) clauses.push(pinnedSql)
 
   if (profile.areaIds.length > 0) {
+    if(canonicalAreasEnabled())clauses.push(Prisma.sql`EXISTS(SELECT 1 FROM ${callAreaTable()} universal WHERE universal.funding_call_id=${callId} AND universal.taxonomy_level2_name='All disciplines')`)
     clauses.push(Prisma.sql`
       EXISTS (
-        SELECT 1 FROM funding_call_research_area_taxonomies m
+        SELECT 1 FROM ${callAreaTable()} m
          WHERE m.funding_call_id = ${callId}
            AND m.taxonomy_area_id = ANY(${textArray(profile.areaIds)})
       )`)
@@ -180,7 +186,7 @@ export function relevantCallWhereSql(
   if (includeBroad && profile.level1Codes.length > 0) {
     clauses.push(Prisma.sql`
       EXISTS (
-        SELECT 1 FROM funding_call_research_area_taxonomies m
+        SELECT 1 FROM ${callAreaTable()} m
          WHERE m.funding_call_id = ${callId}
            AND m.taxonomy_level1_code = ANY(${textArray(profile.level1Codes)})
       )`)
@@ -203,7 +209,7 @@ export function relevantCallWhereSql(
   if (includeUnclassified) {
     clauses.push(Prisma.sql`
       NOT EXISTS (
-        SELECT 1 FROM funding_call_research_area_taxonomies m
+        SELECT 1 FROM ${callAreaTable()} m
          WHERE m.funding_call_id = ${callId}
       )`)
   }
@@ -306,6 +312,7 @@ export function tierForCall(
   }
 
   for (const mapping of mappings) {
+    if(mapping.taxonomy_level2_name==='All disciplines'&&sets.areaIds.size)consider('direct','Open to all research disciplines')
     const label = mapping.taxonomy_level2_name
       ? `${mapping.taxonomy_level1_name} → ${mapping.taxonomy_level2_name}`
       : mapping.taxonomy_level1_name || ''
@@ -364,7 +371,7 @@ export async function relevanceForCalls(
     >(Prisma.sql`
       SELECT funding_call_id, taxonomy_area_id, taxonomy_level1_code,
              taxonomy_level1_name, taxonomy_level2_name
-        FROM funding_call_research_area_taxonomies
+        FROM ${callAreaTable()} effective_areas
        WHERE funding_call_id = ANY(${idArray})
     `),
     keywordSet.size > 0

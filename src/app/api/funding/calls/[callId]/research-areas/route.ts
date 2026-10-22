@@ -6,6 +6,8 @@ import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
 import { mapCallToSchoolsQuietly } from '@/lib/fundingDept/callSchoolMapping'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { setManualAreaLinks } from '@/lib/researchAreas/store'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,6 +100,12 @@ async function catalogueGET(request: NextRequest, { params }: { params: { callId
 
   const permission = authorize(context, call)
 
+  if(canonicalAreasEnabled()) {
+    const effective=await prisma.$queryRaw<Array<{id:string;label:string;source:string}>>`SELECT DISTINCT a.id,a.label,e.source FROM effective_call_research_areas e JOIN catalogue_areas a ON a.id=e.area_id WHERE e.call_id=${call.id} AND a.kind='discipline' ORDER BY a.label`
+    return NextResponse.json({call:{id:call.id,title:call.scheme_title||call.title,isShared:call.tenantId!==context.tenantId},canEdit:permission.ok,readOnlyReason:permission.ok?null:permission.error,
+      areas:effective.map(a=>({id:a.id,taxonomyAreaId:a.id,label:a.label,isGroup:false,source:a.source,confidence:null,author:null})),legacyAreaCount:rows.length})
+  }
+
   return NextResponse.json({
     call: {
       id: call.id,
@@ -148,6 +156,13 @@ async function cataloguePUT(request: NextRequest, { params }: { params: { callId
   }
 
   const wanted = Array.from(new Set(payload.taxonomyAreaIds))
+
+  if(canonicalAreasEnabled()) {
+    try {await setManualAreaLinks('CALL',call.id,wanted,context.user.id)}
+    catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not save research areas'},{status:400})}
+    mapCallToSchoolsQuietly(call.id)
+    return NextResponse.json({ok:true,manualAreas:wanted.length})
+  }
 
   // Only areas from the ACTIVE catalog. An archived area is invisible to every
   // relevance query, so accepting one would silently do nothing at all.

@@ -22,6 +22,7 @@ import {
 
 import ResearcherWorkspaceShell from '@/components/ResearcherWorkspaceShell';
 import { useAuth } from '@/lib/auth-context';
+import StandardAreaSuggestions from '@/components/finder/StandardAreaSuggestions';
 import type {
   ResearchAreaTaxonomyAreaRecord,
   ResearchAreaTaxonomyPayload,
@@ -345,7 +346,7 @@ export default function ResearchFitPage() {
   }
 
   async function saveArea() {
-    const validation = validateResearchAreaForm(areaForm, hasActiveTaxonomy);
+    const validation = validateResearchAreaForm(areaForm, hasActiveTaxonomy && taxonomy?.vocabulary!=='canonical');
     if (validation) {
       setMessage({ type: 'error', text: validation });
       return;
@@ -756,6 +757,8 @@ export default function ResearchFitPage() {
       >
         <div className="space-y-5">
           <Field label="Classification">
+            {taxonomy?.vocabulary==='canonical'&&<p className="mb-2 text-sm text-muted">Choose related standard areas, or save your own research focus without a classification.</p>}
+            {!!areaForm.canonicalAreaIds?.length&&<div className="mb-3 flex flex-wrap gap-2">{areaForm.canonicalAreaIds.map(id=><button type="button" key={id} className="cb-btn-secondary cb-btn-sm" aria-label={`Remove ${taxonomyAreas.find(a=>a.id===id)?.level2Name||'area'}`} onClick={()=>setAreaForm(current=>{const next=(current.canonicalAreaIds||[]).filter(x=>x!==id);return {...current,canonicalAreaIds:next,taxonomyAreaId:next[0]||''}})}>{taxonomyAreas.find(a=>a.id===id)?.level2Name||'Selected area'} ×</button>)}</div>}
             {hasActiveTaxonomy ? (
               <div className="space-y-2.5">
                 <div className="relative">
@@ -780,6 +783,11 @@ export default function ResearchFitPage() {
                       key={area.id}
                       type="button"
                       onClick={() => {
+                        if(taxonomy?.vocabulary==='canonical') {
+                          const current=areaForm.canonicalAreaIds||[],next=current.includes(area.id)?current.filter(id=>id!==area.id):[...current,area.id];
+                          setAreaForm(value=>({...value,canonicalAreaIds:next,taxonomyAreaId:next[0]||'',taxonomyLevel1Code:'AREAS'}));
+                          return;
+                        }
                         setAreaForm((current) => ({
                           ...current,
                           taxonomyLevel1Code: area.level1Code,
@@ -788,7 +796,7 @@ export default function ResearchFitPage() {
                         setAreaSearch(formatTaxonomyOption(area));
                       }}
                       className={`block w-full border-b border-hairline px-3 py-2.5 text-left text-[13px] transition last:border-b-0 hover:bg-inset ${
-                        areaForm.taxonomyAreaId === area.id ? 'bg-cobalt-50 text-cobalt-800' : 'text-ink-soft'
+                        (areaForm.canonicalAreaIds?.includes(area.id)||areaForm.taxonomyAreaId === area.id) ? 'bg-cobalt-50 text-cobalt-800' : 'text-ink-soft'
                       }`}
                     >
                       <span className="block font-medium">{area.level2Name || area.level2Code || 'General'}</span>
@@ -826,6 +834,8 @@ export default function ResearchFitPage() {
               className="cb-textarea"
             />
           </Field>
+
+          {taxonomy?.vocabulary==='canonical'&&<StandardAreaSuggestions text={`${areaForm.label}\n${areaForm.researchArea}`} onSelect={id=>setAreaForm(current=>({...current,canonicalAreaIds:Array.from(new Set([...(current.canonicalAreaIds||[]),id])),taxonomyAreaId:current.taxonomyAreaId||id,taxonomyLevel1Code:'AREAS'}))}/>}
 
           <button
             type="button"

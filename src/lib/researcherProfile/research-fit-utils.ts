@@ -8,6 +8,7 @@ export type ResearchAreaFitForm = {
   id?: string;
   taxonomyLevel1Code: string;
   taxonomyAreaId: string;
+  canonicalAreaIds?: string[];
   label: string;
   researchArea: string;
   keywords: string;
@@ -56,6 +57,7 @@ export function researchAreaToForm(area?: ResearcherSavedResearchAreaRecord | nu
 
   return {
     id: area.id,
+    ...(area.canonicalAreas ? {canonicalAreaIds:area.canonicalAreas.map(a=>a.id)} : {}),
     taxonomyLevel1Code: area.taxonomy?.level1Code || '',
     taxonomyAreaId: area.taxonomy?.areaId || '',
     label: area.label || '',
@@ -72,6 +74,7 @@ export function buildResearchAreaPayload(
   selectedTaxonomyArea: ResearchAreaTaxonomyAreaRecord | null | undefined
 ): {
   taxonomyAreaId?: string | null;
+  canonicalAreaIds?: string[];
   label: string;
   researchArea: string;
   keywords: string[];
@@ -80,6 +83,7 @@ export function buildResearchAreaPayload(
   useForAlerts: boolean;
 } {
   return {
+    ...(form.canonicalAreaIds ? {canonicalAreaIds:form.canonicalAreaIds} : {}),
     ...((selectedTaxonomyArea || !form.id) ? { taxonomyAreaId: form.taxonomyAreaId || null } : {}),
     label: form.label.trim(),
     researchArea: form.researchArea.trim(),
