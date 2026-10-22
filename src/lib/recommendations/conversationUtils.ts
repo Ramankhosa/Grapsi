@@ -39,6 +39,7 @@ export function createDefaultFilters(): Required<RecommendationSearchFilters> {
     query: { researchArea: 'general research funding' },
     filters: {
       includeExpired: false,
+      lifecycleStatuses: ['OPEN','ROLLING'],
       limit: 10,
       sort: RECOMMENDATION_SORT_OPTIONS[0],
     },

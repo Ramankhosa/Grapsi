@@ -1,3 +1,5 @@
+// Business-handler contracts; the shared security boundary has dedicated guard and real-DB tests.
+vi.mock('@/lib/catalogueProtection/guard', () => ({ withCatalogueProtection: (handler: any) => handler }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest, NextResponse } from 'next/server'
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), select: vi.fn(), start: vi.fn(), step: vi.fn() }))

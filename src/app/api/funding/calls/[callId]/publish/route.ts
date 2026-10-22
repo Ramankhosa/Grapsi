@@ -1,3 +1,4 @@
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
@@ -21,7 +22,7 @@ export const runtime = 'nodejs'
  * department head. Members prepare drafts; publishing is an announcement to up
  * to 50 matched faculty, so it stays with the people who answer for it.
  */
-export async function POST(request: NextRequest, { params }: { params: { callId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { callId: string } }) {
   const context = await requireTenantScope(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
@@ -76,3 +77,5 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -21,14 +23,14 @@ function actorContext(actor: FundingActor) {
   }
 }
 
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
   const runs = await ideaIntelligenceService.listRuns(auth.actor.id)
   return NextResponse.json({ runs })
 }
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
@@ -43,3 +45,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to create analysis' }, { status: 500 })
   }
 }
+
+export const GET=withCatalogueProtection(catalogueGET,'detail','FUNDING_INTELLIGENCE')
+
+export const POST=withCatalogueProtection(cataloguePOST,'ai','FUNDING_INTELLIGENCE')

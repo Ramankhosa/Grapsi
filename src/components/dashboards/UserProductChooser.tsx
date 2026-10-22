@@ -70,10 +70,10 @@ const productGroups: ProductGroup[] = [
         minTier: 'Starter'
       },
       {
-        title: 'Fund Finder',
+        title: 'Funding Directory',
         description:
           'Search the funding directory with AI ranking and eligibility-aware matching.',
-        href: '/finder',
+        href: '/finder?tab=directory',
         icon: Search,
         tag: 'Discovery',
         moduleKey: 'FUNDING_DIRECTORY',

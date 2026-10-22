@@ -187,7 +187,9 @@ export async function issueSocialSession(
   user: UserWithTenant,
   provider: OAuthProvider
 ): Promise<NextResponse> {
-  const accessToken = generateJWT({
+  const refreshTokenData = generateRefreshToken(user.id)
+    const accessToken = generateJWT({
+      catalog_session: refreshTokenData.familyId,
     sub: user.id,
     email: user.email,
     tenant_id: user.tenantId,
@@ -201,7 +203,6 @@ export async function issueSocialSession(
     || request.headers.get('x-real-ip')
     || 'unknown'
 
-  const refreshTokenData = generateRefreshToken(user.id)
   await storeRefreshToken(user.id, refreshTokenData, {
     userAgent: request.headers.get('user-agent') || undefined,
     ipAddress: ip

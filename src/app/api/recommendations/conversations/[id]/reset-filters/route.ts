@@ -1,8 +1,9 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { conversationContextFlagsSchema } from '@/lib/recommendations/messageSchema'
 import {
-  enforceChatRateLimit,
   requireRecommendationTenantUser,
   toRecommendationAccessScope,
 } from '@/lib/recommendations/request-auth'
@@ -17,14 +18,12 @@ const requestSchema = conversationContextFlagsSchema
  * "Clear all filters". Re-runs the search with default filters; no user message,
  * no LLM narrative. Shares the per-user chat rate bucket, not metered.
  */
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
-  const limited = enforceChatRateLimit(auth.userId)
-  if (limited) return limited
 
   try {
     const parsed = requestSchema.parse(await request.json().catch(() => ({})))
@@ -42,3 +41,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return recommendationErrorResponse(error, 'Failed to reset conversation filters')
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_CHAT')

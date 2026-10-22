@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
@@ -6,7 +8,7 @@ import { recommendationConversationService } from '@/lib/services/recommendation
 
 export const runtime = 'nodejs'
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
@@ -19,3 +21,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return recommendationErrorResponse(error, 'Failed to clear recommendation conversation')
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'summary', 'FUNDING_CHAT')

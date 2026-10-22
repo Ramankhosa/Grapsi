@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -92,7 +94,7 @@ function updateLedger(
   return { ...state, claims, gaps }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function cataloguePATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!isFeatureEnabled('ENABLE_DRAFT_ZERO')) {
     return NextResponse.json({ message: 'Draft Zero is not enabled.' }, { status: 404 })
   }
@@ -307,3 +309,5 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     )
   }
 }
+
+export const PATCH = withCatalogueSourceProtection(cataloguePATCH)

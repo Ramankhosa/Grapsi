@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -142,7 +144,7 @@ async function ensureDefaultGrantFormatFundingCall(
   return fundingCall.id
 }
 
-export async function GET(
+async function catalogueGET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
@@ -210,7 +212,7 @@ export async function GET(
   })
 }
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
@@ -270,3 +272,7 @@ export async function POST(
     )
   }
 }
+
+export const GET = withCatalogueSourceProtection(catalogueGET)
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

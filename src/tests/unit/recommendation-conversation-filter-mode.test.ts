@@ -157,11 +157,27 @@ describe('RecommendationConversationService filter modes', () => {
     vi.restoreAllMocks();
   });
 
+  it('auto mode changes the real search audience from India to China mid-conversation', async () => {
+    const service=new RecommendationConversationService();
+    const state=makeState('auto',{filters:{...createDefaultFilters(),eligibleCountries:['India'],importedAreaIds:['scientify:discipline:known']}});
+    const search=vi.spyOn(service as any,'runGroundedSearch').mockImplementation(async(next:any)=>({...makeSearchResponse(),appliedFilters:next.filters}));
+    const parser=vi.spyOn(service as any,'parseTurnWithLLM');
+    const run=makeRun([makeResult('1')]);
+    const outcome=await (service as any).createTurnOutcome({input:{message:'now show calls for Chinese researchers'},state,latestRun:run,turnIndex:2,conversationDetail:makeConversationDetail('auto',run),profileSnapshot:null,preferences:{useEligibilityProfile:false,usePublicationContext:false}});
+    const searched=(search.mock.calls[0][0] as any);
+    expect(searched.filters.eligibleCountries).toEqual(["People's Republic of China"]);
+    expect(searched.filters.importedAreaIds).toEqual(['scientify:discipline:known']);
+    expect(searched.query).toEqual(state.query);expect(outcome.nextState.filters.eligibleCountries).toEqual(["People's Republic of China"]);
+    expect(outcome.messageType).toBe('assistant_response');expect(parser).not.toHaveBeenCalled();
+  });
+
   it('manual mode: locks the search to current filters and emits suggestion chips instead of applying', async () => {
     const service = new RecommendationConversationService();
     const proposed = createDefaultFilters();
     proposed.careerStages = ['Postdoctoral'];
     proposed.eligibleCountries = ['India'];
+    proposed.importedAreaIds = ['scientify:discipline:known'];
+    proposed.lifecycleStatuses = ['CLOSED'];
     mockLlmParse(service, proposed);
     const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(makeSearchResponse());
 
@@ -186,6 +202,8 @@ describe('RecommendationConversationService filter modes', () => {
     const searchedFilters = (searchSpy.mock.calls[0][0] as any).filters;
     expect(searchedFilters.careerStages).toEqual([]);
     expect(searchedFilters.eligibleCountries).toEqual([]);
+    expect(searchedFilters.importedAreaIds).toEqual([]);
+    expect(searchedFilters.lifecycleStatuses).toEqual(['OPEN', 'ROLLING']);
   });
 
   it('auto mode: the same parse produces a pending confirmation patch (legacy behavior)', async () => {

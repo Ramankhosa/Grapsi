@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { researcherSearchService } from '@/lib/services/researcherSearchService'
@@ -34,7 +36,7 @@ async function verifySuperAdmin(request: NextRequest) {
 /**
  * GET — list funding calls for the search dropdown
  */
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await verifySuperAdmin(request)
   if ('error' in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
@@ -80,7 +82,7 @@ export async function GET(request: NextRequest) {
 
   // Default: list published funding calls for the dropdown
   const q = searchParams.get('q') || ''
-  const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
+  const limit = Math.min(Number(searchParams.get('limit')) || 12, 50)
 
   const where: any = { status: 'PUBLISHED', ...CURATED_ONLY }
   if (q) {
@@ -124,7 +126,7 @@ export async function GET(request: NextRequest) {
 /**
  * POST — search researchers matching a funding call or free-text query
  */
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await verifySuperAdmin(request)
   if ('error' in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
@@ -149,3 +151,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json(results)
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary')
+
+export const POST = withCatalogueProtection(cataloguePOST, 'summary')

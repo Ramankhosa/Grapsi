@@ -218,3 +218,5 @@ describe('grant prep message route', () => {
     expect(firstPrompt).toContain('I choose B.')
   }, 15000)
 })
+// Catalogue boundaries are tested separately; this suite exercises stage answers.
+vi.mock('@/lib/catalogueProtection/linked', () => ({ withCatalogueSourceProtection: (handler: unknown) => handler }))

@@ -1,8 +1,9 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { conversationMessageRequestSchema } from '@/lib/recommendations/messageSchema'
 import {
-  enforceChatRateLimit,
   requireRecommendationTenantUser,
   toRecommendationAccessScope,
 } from '@/lib/recommendations/request-auth'
@@ -11,15 +12,13 @@ import { recommendationConversationService } from '@/lib/services/recommendation
 
 export const runtime = 'nodejs'
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   // Same per-user bucket as the SSE route and the filter routes.
-  const limited = enforceChatRateLimit(auth.userId)
-  if (limited) return limited
 
   try {
     const parsed = conversationMessageRequestSchema.parse(await request.json())
@@ -35,3 +34,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return recommendationErrorResponse(error, 'Failed to process recommendation message')
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_CHAT')

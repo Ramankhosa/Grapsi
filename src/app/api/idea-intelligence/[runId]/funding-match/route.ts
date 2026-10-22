@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingActor, type FundingActor } from '@/lib/funding/access'
@@ -22,7 +24,7 @@ function errorStatus(error: unknown) {
 
 // The open calls in the catalogue that match this idea. A POST rather than a GET
 // because it runs the catalogue search and records what was shown on the run.
-export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { runId: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
@@ -36,3 +38,5 @@ export async function POST(request: NextRequest, { params }: { params: { runId: 
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_INTELLIGENCE')

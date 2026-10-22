@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -15,7 +17,7 @@ const requestSchema = z.object({
   stageKey: z.string().min(1),
 })
 
-export async function PUT(
+async function cataloguePUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -88,3 +90,5 @@ export async function PUT(
     )
   }
 }
+
+export const PUT = withCatalogueSourceProtection(cataloguePUT)

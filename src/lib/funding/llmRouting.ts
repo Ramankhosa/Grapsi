@@ -1,3 +1,4 @@
+import { assertCatalogueStreamActive } from '@/lib/catalogueProtection/guard'
 import fs from 'fs/promises'
 import path from 'path'
 import crypto from 'crypto'
@@ -173,6 +174,7 @@ export async function runFundingGatewayExtraction(options: {
   structuredSchema?: FundingGatewayStructuredSchema
   metadata?: Record<string, unknown>
 }): Promise<FundingGatewayExtractionResult | null> {
+  await assertCatalogueStreamActive()
   const tenantContext = await resolveFundingLlmTenantContext(options.context)
   if (!tenantContext) {
     return null
@@ -261,6 +263,7 @@ export async function runFundingGatewayText(options: {
   skipFeaturePolicy?: boolean
   stream?: FundingGatewayStreamOptions
 }): Promise<FundingGatewayExtractionResult | null> {
+  await assertCatalogueStreamActive()
   const tenantContext = await resolveFundingLlmTenantContext(options.context)
   if (!tenantContext) {
     return null

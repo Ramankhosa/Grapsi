@@ -9,8 +9,9 @@ import {
 import { extractReviewerContextFromUrls } from '@/lib/reviewer/callExtraction';
 import { createReviewerCallFromContext } from '@/lib/reviewer/template-bridge';
 import { MAX_REVIEWER_SOURCE_URLS } from '@/lib/reviewer/sourceText';
+import { withCataloguePagesProtection } from '@/lib/catalogueProtection/pages';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Check authentication
   const session = await getServerSession(req, res);
   if (!session || !session.user) {
@@ -226,4 +227,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', ['GET', 'POST']);
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
+}
+
+// Existing user-owned reviews remain accessible. Copying a new catalogue call
+// into a workspace must pass current visibility, session and detail budgets.
+export default async function catalogueReviewerHandler(req: NextApiRequest,res: NextApiResponse) {
+  if(req.method==='POST'&&req.body?.fundingCallId)return withCataloguePagesProtection(handler,'detail','GRANT_REVIEW')(req,res);
+  return handler(req,res);
 }

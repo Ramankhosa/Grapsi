@@ -1,3 +1,5 @@
+// Source access is covered in catalogue guard tests; this suite tests review creation.
+vi.mock('@/lib/catalogueProtection/pages', () => ({ withCataloguePagesProtection: (handler: unknown) => handler }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {

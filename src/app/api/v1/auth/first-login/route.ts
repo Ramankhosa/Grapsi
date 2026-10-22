@@ -153,7 +153,9 @@ export async function POST(request: NextRequest) {
     clearRate(rateKey)
 
     // Issue the same session a normal login would — the user is now signed in.
+    const refreshTokenData = generateRefreshToken(user.id)
     const accessToken = generateJWT({
+      catalog_session: refreshTokenData.familyId,
       sub: user.id,
       email: user.email,
       tenant_id: user.tenantId,
@@ -165,7 +167,6 @@ export async function POST(request: NextRequest) {
     })
 
     const userAgent = request.headers.get('user-agent') || undefined
-    const refreshTokenData = generateRefreshToken(user.id)
     await storeRefreshToken(user.id, refreshTokenData, { userAgent, ipAddress: ip })
 
     await createAuditLog({

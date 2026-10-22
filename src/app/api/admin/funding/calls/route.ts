@@ -1,4 +1,7 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/lib/prisma'
 
 import { requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingPublicationService } from '@/lib/researcherProfile/funding-publications'
@@ -7,7 +10,7 @@ import { researcherProfileService } from '@/lib/services/researcherProfileServic
 
 export const runtime = 'nodejs'
 
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireFundingReadOperatorRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -15,6 +18,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const status = request.nextUrl.searchParams.get('status') as any
+    const page = Math.max(1,Math.floor(Number(request.nextUrl.searchParams.get('page'))||1))
+    const total = await prisma.fundingCall.count({where:{NOT:{visibility:'GLOBAL_CATALOG'},...(status && status!=='ALL'?{catalog_status:status}:{})}})
     const [
       calls,
       coverage,
@@ -23,7 +28,7 @@ export async function GET(request: NextRequest) {
       researcherProfileCoverage,
       fundingPublicationCoverage,
     ] = await Promise.all([
-      fundingCatalogService.listFundingCalls(status && status !== 'ALL' ? status : null),
+      fundingCatalogService.listFundingCalls(status && status !== 'ALL' ? status : null,{page,pageSize:50}),
       fundingCatalogService.getEmbeddingCoverageSummary(),
       Promise.resolve(fundingCatalogService.getEmbeddingServiceHealth()),
       researcherProfileService.getResearchAreaEmbeddingCoverage(),
@@ -32,6 +37,7 @@ export async function GET(request: NextRequest) {
     ])
     return NextResponse.json({
       calls,
+      page,total,pageSize:50,
       coverage,
       embeddingHealth,
       researchAreaCoverage,
@@ -47,3 +53,5 @@ export async function GET(request: NextRequest) {
     )
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary', 'FUNDING_DISCOVERY')

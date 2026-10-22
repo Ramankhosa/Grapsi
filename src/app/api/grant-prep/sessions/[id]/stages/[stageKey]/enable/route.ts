@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
@@ -13,7 +15,7 @@ import { getCanonicalGrantPrepStageKey } from '@/lib/grantPrep/stageModel'
 import { resolveUpstreamStageDependencies, sortStageKeys } from '@/lib/grantPrep/selection'
 import type { GrantPrepStageKey } from '@/lib/grantPrep/types'
 
-export async function PUT(
+async function cataloguePUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; stageKey: string }> }
 ) {
@@ -86,3 +88,5 @@ export async function PUT(
     )
   }
 }
+
+export const PUT = withCatalogueSourceProtection(cataloguePUT)

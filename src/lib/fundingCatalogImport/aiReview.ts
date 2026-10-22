@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { protectCatalogueAiContext } from '@/lib/catalogueProtection/guard'
 import { z } from 'zod'
 import type { PrismaClient } from '@/lib/prisma-generated'
 import { liveOpportunityStatus } from './lifecycle'
@@ -106,6 +107,7 @@ export async function runAiReviewStep(db: PrismaClient, batchId: string) {
   try {
     const fresh = await db.fundingImportCandidate.findUnique({ where: { id: claim.item.candidate_id }, include })
     if (!fresh || inputHash(snapshotItem(fresh)) !== claim.item.input_hash) throw new Error('Record changed since selection; create a fresh review')
+    await protectCatalogueAiContext([fresh.subject_call_id,fresh.candidate_call_id].filter(Boolean) as string[])
     const legacyGemini = claim.batch.model === 'gemini-2.5-flash'
     const response = await fetch(legacyGemini ? `https://generativelanguage.googleapis.com/v1beta/models/${claim.batch.model}:generateContent` : 'https://api.openai.com/v1/chat/completions', {
       method: 'POST', headers: legacyGemini ? { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GOOGLE_AI_API_KEY || '' } : { 'Content-Type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY || ''}` },

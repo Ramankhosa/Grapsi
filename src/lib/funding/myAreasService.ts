@@ -118,6 +118,7 @@ export interface MyAreasReadiness {
 }
 
 export interface MyAreasResult {
+  hasNextPage?: boolean
   calls: MyAreasCall[]
   counts: { active: number; expired: number; total: number }
   readiness: MyAreasReadiness
@@ -300,7 +301,7 @@ function termsQuery(terms: string[]): string {
 export async function findCallsInMyAreas(
   userId: string,
   tenantId: string | null,
-  options: { status?: MyAreasStatus; limit?: number; now?: Date; complete?: boolean } = {}
+  options: { status?: MyAreasStatus; limit?: number; offset?: number; now?: Date; complete?: boolean } = {}
 ): Promise<MyAreasResult> {
   const status = options.status ?? 'active'
   const limit = Math.min(Math.max(options.limit ?? MY_AREAS_DEFAULT_LIMIT, 1), MY_AREAS_MAX_LIMIT)
@@ -492,7 +493,8 @@ export async function findCallsInMyAreas(
     0
   )
 
-  const calls: MyAreasCall[] = (options.complete ? ordered : ordered.slice(0, limit)).map((row) => {
+  const offset=Math.max(0,options.offset||0)
+  const calls: MyAreasCall[] = (options.complete ? ordered : ordered.slice(offset, offset+limit)).map((row) => {
     const closesAt = row.closes_at ? new Date(row.closes_at) : null
     const daysToClose = closesAt ? Math.ceil((closesAt.getTime() - now.getTime()) / 86400000) : null
     const basis: MyAreasBasis = row.source === 'terms' ? 'terms' : 'vector'
@@ -542,7 +544,7 @@ export async function findCallsInMyAreas(
     for (const call of calls) call.alerted = alerted.has(call.id)
   }
 
-  return { calls, counts, readiness }
+  return { calls, counts, readiness, hasNextPage:!options.complete&&ordered.length>offset+limit }
 }
 
 /**

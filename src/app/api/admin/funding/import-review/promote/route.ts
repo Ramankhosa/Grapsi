@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -15,7 +17,7 @@ function failure(error: unknown, fallback: string) {
 }
 
 /** What promoting the call would do, and anything that stops it. */
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireFundingReadOperatorRequest(request)
   if ('response' in auth) return auth.response
   const callId = callIdSchema.safeParse(request.nextUrl.searchParams.get('callId'))
@@ -34,7 +36,7 @@ const bodySchema = z.object({
 })
 
 /** Promote a catalogue call into the funding department. */
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireFundingPublisherRequest(request)
   if ('response' in auth) return auth.response
   const parsed = bodySchema.safeParse(await request.json().catch(() => null))
@@ -49,3 +51,6 @@ export async function POST(request: NextRequest) {
     return failure(error, 'Promotion failed')
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

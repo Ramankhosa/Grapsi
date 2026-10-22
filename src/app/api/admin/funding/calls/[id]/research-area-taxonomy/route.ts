@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -11,7 +13,7 @@ const updateSchema = z.object({
   taxonomyAreaIds: z.array(z.string()).max(50).default([]),
 });
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true });
   if ('response' in auth) {
     return auth.response;
@@ -35,7 +37,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePUT(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFundingActor(request, {
     allowPlatform: true,
     requireWriteSuperAdmin: true,
@@ -73,3 +75,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
     );
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')
+
+export const PUT = withCatalogueProtection(cataloguePUT, 'detail', 'FUNDING_DISCOVERY')

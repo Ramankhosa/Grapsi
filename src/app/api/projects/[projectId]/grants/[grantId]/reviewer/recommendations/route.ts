@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 
@@ -141,7 +143,7 @@ function isReviewerActionableGrantSection(section: any): boolean {
   return !isGrantBibliographySection(section?.sectionKey) && isGrantSectionAiGenerated(section)
 }
 
-export async function GET(
+async function catalogueGET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
@@ -227,7 +229,7 @@ export async function GET(
   })
 }
 
-export async function PATCH(
+async function cataloguePATCH(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
@@ -339,3 +341,7 @@ export async function PATCH(
     updated: Array.from(updatesBySection.values()).flat().length,
   })
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary', 'FUNDING_DISCOVERY')
+
+export const PATCH = withCatalogueProtection(cataloguePATCH, 'summary', 'FUNDING_DISCOVERY')

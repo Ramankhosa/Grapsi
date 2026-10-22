@@ -58,7 +58,8 @@ export default function LoginPage() {
     ])
 
     if (result.success) {
-      router.push('/dashboard')
+      const callback = new URLSearchParams(window.location.search).get('callbackUrl') || '/dashboard'
+      router.push(callback.startsWith('/') && !callback.startsWith('//') && !callback.includes('\\') ? callback : '/dashboard')
     } else {
       // Seeded (imported) account that hasn't set a password yet — send them to
       // first-login activation with the email prefilled.

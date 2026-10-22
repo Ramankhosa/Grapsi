@@ -25,6 +25,7 @@ interface MyAreasCall {
 }
 
 interface MyAreasData {
+  hasNextPage?: boolean
   status: Status
   calls: MyAreasCall[]
   counts: { active: number; expired: number; total: number }
@@ -89,14 +90,15 @@ export default function FundingInMyAreasPage() {
 
   const [data, setData] = useState<MyAreasData | null>(null)
   const [status, setStatus] = useState<Status>('active')
+  const [offset,setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(
-    async (next: Status) => {
+    async (next: Status,nextOffset=0) => {
       setLoading(true)
       try {
-        const response = await authFetch(`/api/funding/my-areas?status=${next}`)
+        const response = await authFetch(`/api/funding/my-areas?status=${next}&offset=${nextOffset}&limit=12`)
         const payload = await response.json()
         if (!response.ok) {
           setError(
@@ -119,8 +121,8 @@ export default function FundingInMyAreasPage() {
 
   useEffect(() => {
     if (authLoading) return
-    void load(status)
-  }, [authLoading, status, load])
+    void load(status,offset)
+  }, [authLoading, status, offset, load])
 
   const counts = data?.counts
   const TABS: Array<{ key: Status; label: string; count?: number }> = [
@@ -159,7 +161,7 @@ export default function FundingInMyAreasPage() {
             <button
               key={tab.key}
               type="button"
-              onClick={() => setStatus(tab.key)}
+              onClick={() => {setStatus(tab.key);setOffset(0)}}
               className={status === tab.key ? 'nk-btn-primary nk-btn-sm' : 'nk-btn-secondary nk-btn-sm'}
             >
               {tab.label}
@@ -211,7 +213,7 @@ export default function FundingInMyAreasPage() {
                 <button
                   type="button"
                   className="nk-btn-secondary nk-btn-sm"
-                  onClick={() => setStatus('expired')}
+                  onClick={() => {setStatus('expired');setOffset(0)}}
                 >
                   Show closed calls
                 </button>
@@ -276,6 +278,7 @@ export default function FundingInMyAreasPage() {
                 )
               })}
             </ul>
+            <nav aria-label="Matching calls pages" className="mt-4 flex items-center gap-4 text-sm"><button type="button" disabled={!offset} onClick={()=>setOffset(value=>Math.max(0,value-12))}>Previous</button><span>Page {Math.floor(offset/12)+1}</span><button type="button" disabled={!data?.hasNextPage} onClick={()=>setOffset(value=>value+12)}>Next</button></nav>
 
             <p className="nk-sub mt-4 text-[11.5px]">
               Ranked by how closely each call matches your work. A call matching more than one thing

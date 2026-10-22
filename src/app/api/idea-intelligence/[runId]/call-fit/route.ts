@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -14,7 +16,7 @@ const callFitSchema = z.object({
 
 // Step 3 of the funding match: read the idea against the one call the user
 // picked. The only step here that costs an LLM call, so it is metered.
-export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { runId: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
@@ -58,3 +60,5 @@ export async function POST(request: NextRequest, { params }: { params: { runId: 
     return NextResponse.json({ error: message }, { status })
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_INTELLIGENCE')

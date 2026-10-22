@@ -241,6 +241,8 @@ describe('requirePasswordChange', () => {
 describe('startForcedPasswordChange', () => {
   it('invalidates outstanding links and mints a short-lived one', async () => {
     const before = Date.now()
+    const clock = vi.spyOn(Date,'now').mockReturnValue(before)
+    try {
     const { expiresAt } = await startForcedPasswordChange('user-1')
 
     expect(mocks.resetUpdateMany).toHaveBeenCalled()
@@ -248,6 +250,7 @@ describe('startForcedPasswordChange', () => {
     // 15 minutes, not the 24-hour admin link.
     expect(expiresAt.getTime() - before).toBeLessThanOrEqual(15 * 60 * 1000)
     expect(expiresAt.getTime() - before).toBeGreaterThan(14 * 60 * 1000)
+    } finally { clock.mockRestore() }
   })
 })
 

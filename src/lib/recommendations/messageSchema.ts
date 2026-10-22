@@ -32,6 +32,8 @@ export const conversationMessageFilterSchema: z.ZodType<RecommendationSearchFilt
   applicationLanguages: filterList.optional(),
   sponsorTypes: filterList.optional(),
   taxonomyAreaIds: filterList.optional(),
+  importedAreaIds: z.array(z.string().max(100)).max(50).optional(),
+  lifecycleStatuses: z.array(z.enum(['OPEN','ROLLING','FORTHCOMING','CLOSED','UNKNOWN'])).max(5).optional(),
   funderIds: filterList.optional(),
   sdgGoals: filterList.optional(),
   programmeFrameworks: filterList.optional(),

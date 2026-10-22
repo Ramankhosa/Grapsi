@@ -127,7 +127,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate JWT with scope information (short-lived access token)
+    const refreshTokenData = generateRefreshToken(user.id)
     const accessToken = generateJWT({
+      catalog_session: refreshTokenData.familyId,
       sub: user.id,
       email: user.email,
       tenant_id: user.tenantId, // Always set - no more null for super admin
@@ -145,7 +147,6 @@ export async function POST(request: NextRequest) {
     const userAgent = request.headers.get('user-agent') || undefined
 
     // Generate and store refresh token (long-lived, in httpOnly cookie)
-    const refreshTokenData = generateRefreshToken(user.id)
     await storeRefreshToken(user.id, refreshTokenData, { userAgent, ipAddress: ip })
 
     // Audit log

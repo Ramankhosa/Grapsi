@@ -1,12 +1,9 @@
+export const dynamic = 'force-dynamic'
+import { directoryFilterSchema as filterSchema } from '@/lib/recommendations/directorySchema'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import {
-  RATE_LIMIT_MAX_REQUESTS,
-  RATE_LIMIT_WINDOW_MS,
-  RECOMMENDATION_SORT_OPTIONS,
-} from '@/lib/recommendations/constants'
-import { buildFinderRateLimitKey, checkRateLimit } from '@/lib/recommendations/rateLimit'
 import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationDirectoryRequest, RecommendationPreferenceFlags, RecommendationProfileSnapshot } from '@/lib/recommendations/types'
 import { summarizeFilters, validateNormalizedControlledFilters } from '@/lib/recommendations/utils'
@@ -15,41 +12,6 @@ import { buildRecommendationPreferenceSnapshot } from '@/lib/services/researcher
 
 export const runtime = 'nodejs'
 
-const filterSchema = z.object({
-  geographyScope: z.array(z.string()).max(20).optional(),
-  eligibleCountries: z.array(z.string()).max(20).optional(),
-  eligibleRegions: z.array(z.string()).max(20).optional(),
-  hostCountries: z.array(z.string()).max(20).optional(),
-  funderCountries: z.array(z.string()).max(20).optional(),
-  fundingKinds: z.array(z.string()).max(20).optional(),
-  institutionTypes: z.array(z.string()).max(20).optional(),
-  careerStages: z.array(z.string()).max(20).optional(),
-  citizenshipRequirements: z.array(z.string()).max(20).optional(),
-  residencyRequirements: z.array(z.string()).max(20).optional(),
-  applicationLanguages: z.array(z.string()).max(20).optional(),
-  sponsorTypes: z.array(z.string()).max(20).optional(),
-  funderIds: z.array(z.string().max(64)).max(20).optional(),
-  sdgGoals: z.array(z.string().max(8)).max(17).optional(),
-  programmeFrameworks: z.array(z.string().max(160)).max(10).optional(),
-  qualifications: z.array(z.string().max(60)).max(10).optional(),
-  projectDurations: z.array(z.string().max(30)).max(3).optional(),
-  targetGroups: z.array(z.string().max(80)).max(10).optional(),
-  indirectCostPolicies: z.array(z.string().max(30)).max(3).optional(),
-  mobility: z.array(z.string().max(30)).max(2).optional(),
-  applicationRoutes: z.array(z.string().max(30)).max(4).optional(),
-  noMembershipNeeded: z.boolean().optional(),
-  amountCurrency: z.string().max(3).optional(),
-  includeUnknownAmount: z.boolean().optional(),
-  taxonomyAreaIds: z.array(z.string()).max(50).optional(),
-  deadlineFrom: z.string().optional(),
-  deadlineTo: z.string().optional(),
-  rollingOnly: z.boolean().optional(),
-  amountMin: z.number().nullable().optional(),
-  amountMax: z.number().nullable().optional(),
-  includeExpired: z.boolean().optional(),
-  limit: z.number().int().min(1).max(50).optional(),
-  sort: z.enum(RECOMMENDATION_SORT_OPTIONS).optional(),
-}).optional()
 
 const requestSchema = z.object({
   query: z.string().max(300).optional(),
@@ -60,7 +22,7 @@ const requestSchema = z.object({
   usePublicationContext: z.boolean().optional(),
 })
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireRecommendationUser(request)
   if ('response' in auth) {
     return auth.response
@@ -73,24 +35,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
-    // Per-user only: a client-supplied X-Forwarded-For must not mint fresh buckets
-    // (each novel query costs a query-enrichment model call plus an embedding).
-    const userKey = buildFinderRateLimitKey('manual', auth.userId)
-    const rateLimit = checkRateLimit(userKey, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS)
-    if (!rateLimit.allowed) {
-      return NextResponse.json(
-        {
-          error: 'Too many manual funding searches. Please wait and try again.',
-          resetAt: new Date(rateLimit.resetAt).toISOString(),
-        },
-        { status: 429 }
-      )
-    }
-
     console.info('[Manual Funding Search]', {
       mode: 'manual_directory',
       filters: summarizeFilters(parsed.filters || {}),
-      limit: parsed.filters?.limit || 24,
+      limit: parsed.filters?.limit || 12,
       hasQuery: Boolean(parsed.query?.trim()),
     })
 
@@ -118,7 +66,7 @@ export async function POST(request: NextRequest) {
       usePublicationContext: preferences.usePublicationContext,
       filters: {
         ...parsed.filters,
-        limit: parsed.filters?.limit || 8,
+        limit: parsed.filters?.limit || 12,
       },
     })
 
@@ -141,3 +89,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'summary', 'FUNDING_DISCOVERY')

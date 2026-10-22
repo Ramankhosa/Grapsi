@@ -1,3 +1,6 @@
+export const dynamic = 'force-dynamic'
+import { directoryFilterSchema as filterSchema } from '@/lib/recommendations/directorySchema'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -8,48 +11,13 @@ import { recommendationSearchService } from '@/lib/services/recommendationSearch
 
 export const runtime = 'nodejs'
 
-const filterSchema = z.object({
-  geographyScope: z.array(z.string()).max(20).optional(),
-  eligibleCountries: z.array(z.string()).max(20).optional(),
-  eligibleRegions: z.array(z.string()).max(20).optional(),
-  hostCountries: z.array(z.string()).max(20).optional(),
-  funderCountries: z.array(z.string()).max(20).optional(),
-  fundingKinds: z.array(z.string()).max(20).optional(),
-  institutionTypes: z.array(z.string()).max(20).optional(),
-  careerStages: z.array(z.string()).max(20).optional(),
-  citizenshipRequirements: z.array(z.string()).max(20).optional(),
-  residencyRequirements: z.array(z.string()).max(20).optional(),
-  applicationLanguages: z.array(z.string()).max(20).optional(),
-  sponsorTypes: z.array(z.string()).max(20).optional(),
-  funderIds: z.array(z.string().max(64)).max(20).optional(),
-  sdgGoals: z.array(z.string().max(8)).max(17).optional(),
-  programmeFrameworks: z.array(z.string().max(160)).max(10).optional(),
-  qualifications: z.array(z.string().max(60)).max(10).optional(),
-  projectDurations: z.array(z.string().max(30)).max(3).optional(),
-  targetGroups: z.array(z.string().max(80)).max(10).optional(),
-  indirectCostPolicies: z.array(z.string().max(30)).max(3).optional(),
-  mobility: z.array(z.string().max(30)).max(2).optional(),
-  applicationRoutes: z.array(z.string().max(30)).max(4).optional(),
-  noMembershipNeeded: z.boolean().optional(),
-  amountCurrency: z.string().max(3).optional(),
-  includeUnknownAmount: z.boolean().optional(),
-  taxonomyAreaIds: z.array(z.string()).max(50).optional(),
-  deadlineFrom: z.string().optional(),
-  deadlineTo: z.string().optional(),
-  rollingOnly: z.boolean().optional(),
-  amountMin: z.number().nullable().optional(),
-  amountMax: z.number().nullable().optional(),
-  includeExpired: z.boolean().optional(),
-  limit: z.number().int().min(1).max(50).optional(),
-  sort: z.enum(RECOMMENDATION_SORT_OPTIONS).optional(),
-}).optional()
 
 const requestSchema = z.object({
   query: z.string().max(300).optional(),
   filters: filterSchema,
 })
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireRecommendationUser(request)
   if ('response' in auth) {
     return auth.response
@@ -85,3 +53,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'metadata', 'FUNDING_DISCOVERY')

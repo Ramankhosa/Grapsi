@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -11,7 +13,7 @@ const acceptSchema = z.object({
   runId: z.string().min(1),
 })
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: { callId: string } }
 ) {
@@ -40,3 +42,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

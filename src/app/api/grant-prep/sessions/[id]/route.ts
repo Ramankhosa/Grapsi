@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
@@ -16,7 +18,7 @@ import {
 import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
 import { getGrantPrepPostLaunchImpact } from '@/lib/grants/prepImpact'
 
-export async function GET(
+async function catalogueGET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -140,3 +142,5 @@ export async function GET(
     )
   }
 }
+
+export const GET = withCatalogueSourceProtection(catalogueGET)

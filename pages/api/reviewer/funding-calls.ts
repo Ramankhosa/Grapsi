@@ -1,3 +1,4 @@
+import { withCataloguePagesProtection } from '@/lib/catalogueProtection/pages'
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { getReviewerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api'
@@ -25,7 +26,7 @@ const READINESS_RANK: Record<ReadinessTier, number> = {
  * own fields, so a call without an approved template is still a usable
  * starting point. `readiness` tells the UI how rich the rules will be.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET'])
     return res.status(405).json({ error: `Method ${req.method} not allowed` })
@@ -39,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireGrantReviewFeature(session, res))) return
 
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : ''
-  const take = Math.min(Math.max(Number.parseInt(String(req.query.limit || '100'), 10) || 100, 1), 200)
+  const take = Math.min(Math.max(Number.parseInt(String(req.query.limit || '12'), 10) || 12, 1), 50)
 
   const visibilityFilter = {
     OR: [
@@ -126,3 +127,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ calls: options })
 }
+
+export default withCataloguePagesProtection(handler,'summary','GRANT_REVIEW')

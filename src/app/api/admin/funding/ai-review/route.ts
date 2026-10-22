@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import prisma from '@/lib/prisma'
@@ -23,7 +25,7 @@ async function auth(request: NextRequest) {
   if (!result.actor.isSuperAdminWriter) return { response: NextResponse.json({ message: 'Superadmin write access required' }, { status: 403 }) }
   return result
 }
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const access = await auth(request)
   if ('response' in access) return access.response
   try {
@@ -49,7 +51,7 @@ export async function GET(request: NextRequest) {
     })) })
   } catch (error) { return NextResponse.json({ message: error instanceof Error && error.message.startsWith('Could not verify model') ? error.message : 'Could not load AI reviews. Ensure the review migration has been applied.' }, { status: 500 }) }
 }
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const access = await auth(request)
   if ('response' in access) return access.response
   const parsed = schema.safeParse(await request.json().catch(() => null))
@@ -59,7 +61,7 @@ export async function POST(request: NextRequest) {
     if (body.action === 'preview') {
       const rows = await selectAiReviewItems(prisma, body.filter, body.ids)
       return NextResponse.json({ ...estimateReview(rows, body.model), selectionHash: selectionHash(rows),
-        page: body.page, items: rows.slice((body.page - 1) * 100, body.page * 100).map(r => ({ id: r.id, score: r.score, ...snapshotItem(r) })) })
+        page: body.page, items: rows.slice((body.page - 1) * 25, body.page * 25).map(r => ({ id: r.id, score: r.score, ...snapshotItem(r) })) })
     }
     if (body.action === 'start') {
       if (!body.expectedHash) throw new Error('Preview the selection first')
@@ -97,3 +99,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true })
   } catch (error) { return NextResponse.json({ message: error instanceof Error ? error.message : 'Review failed' }, { status: 400 }) }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')
+
+export const POST=withCatalogueProtection(cataloguePOST,'detail','FUNDING_DISCOVERY',{generation:true})

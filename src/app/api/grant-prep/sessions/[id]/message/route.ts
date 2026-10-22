@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { randomUUID } from 'crypto'
@@ -313,7 +315,7 @@ function mergeSelectedSuggestedAnswerMarker(
   }
 }
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -769,3 +771,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

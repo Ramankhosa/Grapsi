@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
@@ -5,7 +7,7 @@ import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
 
 export const runtime = 'nodejs'
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFundingReadOperatorRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -22,7 +24,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePATCH(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -39,3 +41,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     )
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')
+
+export const PATCH = withCatalogueProtection(cataloguePATCH, 'detail', 'FUNDING_DISCOVERY')

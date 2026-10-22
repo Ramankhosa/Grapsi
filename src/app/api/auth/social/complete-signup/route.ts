@@ -214,7 +214,9 @@ export async function POST(request: NextRequest) {
     const user = result
 
     // Generate JWT token
+    const refreshTokenData = generateRefreshToken(user.id)
     const accessToken = generateJWT({
+      catalog_session: refreshTokenData.familyId,
       sub: user.id,
       email: user.email,
       tenant_id: user.tenantId,
@@ -230,7 +232,6 @@ export async function POST(request: NextRequest) {
                'unknown'
 
     // Generate and store refresh token
-    const refreshTokenData = generateRefreshToken(user.id)
     await storeRefreshToken(user.id, refreshTokenData, {
       userAgent: request.headers.get('user-agent') || undefined,
       ipAddress: ip

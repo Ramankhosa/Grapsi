@@ -31,6 +31,8 @@ export const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, st
   applicationLanguages: 'Language (or not stated)',
   sponsorTypes: 'Sponsor types',
   taxonomyAreaIds: 'Research taxonomy',
+  importedAreaIds: 'Imported research areas',
+  lifecycleStatuses: 'Call status',
   funderIds: 'Funders',
   sdgGoals: 'SDGs',
   programmeFrameworks: 'Programmes',
@@ -57,6 +59,8 @@ export function filterValueLabel(
   funderNames: Record<string, string> = {}
 ): string {
   if (key === 'funderIds') return funderNames[value] || 'Selected funder';
+  if (key === 'importedAreaIds') return 'Selected imported area';
+  if (key === 'lifecycleStatuses') return value === 'FORTHCOMING' ? 'Upcoming' : value.charAt(0)+value.slice(1).toLowerCase();
   if (key === 'sdgGoals') return SDG_GOAL_LABELS[value] ? `SDG ${value} · ${SDG_GOAL_LABELS[value]}` : `SDG ${value}`;
   return CODED_VALUE_LABELS[key]?.[value] || value;
 }
@@ -75,6 +79,8 @@ const ARRAY_FILTER_KEYS = [
   'applicationLanguages',
   'sponsorTypes',
   'taxonomyAreaIds',
+  'importedAreaIds',
+  'lifecycleStatuses',
   'funderIds',
   'sdgGoals',
   'programmeFrameworks',
@@ -295,7 +301,10 @@ export function applyFilterSuggestionChip(
   for (const [rawKey, rawValue] of Object.entries(chip.patch)) {
     const key = rawKey as keyof RecommendationSearchFilters;
     if (rawValue === undefined) continue;
-    if ((ARRAY_FILTER_KEYS as readonly string[]).includes(key)) {
+    if (key === 'lifecycleStatuses') {
+      next.lifecycleStatuses = Array.isArray(rawValue) ? [...rawValue] as string[] : [];
+      next.rollingOnly=next.lifecycleStatuses.length===1&&next.lifecycleStatuses[0]==='ROLLING';
+    } else if ((ARRAY_FILTER_KEYS as readonly string[]).includes(key)) {
       const existing = next[key as ArrayFilterKey];
       const existingLower = new Set(existing.map((value) => value.toLowerCase()));
       const additions = (Array.isArray(rawValue) ? rawValue : [rawValue])

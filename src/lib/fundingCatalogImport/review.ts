@@ -148,6 +148,8 @@ export async function setAside(tx: Prisma.TransactionClient, callId: string, sur
       where: { funding_call_id: callId, entity_type: 'CALL' },
       data: { funding_call_id: survivorId, link_role: 'LINKED' },
     })
+    await tx.$executeRaw`UPDATE catalogue_call_areas ca SET call_id=${survivorId} FROM external_source_records r WHERE ca.call_id=${callId} AND ca.source_record_id=r.id AND r.funding_call_id=${survivorId}`
+
   }
   // Other open pairs that mention the set-aside call are re-pointed to the
   // survivor and stay open: in a chain A~B~C, keeping A and discarding B must

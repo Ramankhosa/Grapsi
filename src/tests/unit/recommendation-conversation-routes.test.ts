@@ -1,9 +1,11 @@
+// Business-handler contracts; the shared security boundary has dedicated guard and real-DB tests.
+vi.mock('@/lib/catalogueProtection/guard', () => ({ withCatalogueProtection: mocks.protect }))
 import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * Route-level contract tests for the funding chat conversation routes: response
- * envelopes, error mapping (no leaked internals), rate limiting.
+ * envelopes, error mapping (no leaked internals), shared-guard registration.
  */
 
 class ServiceQuotaExceededErrorMock extends Error {
@@ -15,6 +17,7 @@ class ServiceQuotaExceededErrorMock extends Error {
 
 const mocks = vi.hoisted(() => ({
   requireFundingActor: vi.fn(),
+  protect: vi.fn((handler: any) => handler),
   service: {
     listConversations: vi.fn(),
     createConversation: vi.fn(),
@@ -149,33 +152,15 @@ describe('recommendation conversation routes', () => {
     expect(mocks.service.applyFilters).not.toHaveBeenCalled()
   })
 
-  it('rate-limits filter routes on a per-user bucket that ignores IP and conversation id', async () => {
-    const constants = await import('@/lib/recommendations/constants')
-    const { POST } = await import('@/app/api/recommendations/conversations/[id]/filters/route')
-    let last: Response | null = null
-    for (let i = 0; i < constants.CHAT_RATE_LIMIT_MAX_REQUESTS + 1; i += 1) {
-      // Rotate both the conversation id and the forwarded IP: neither must open a new bucket.
-      const request = new NextRequest(`http://localhost/api/recommendations/conversations/conv-${i}/filters`, {
-        method: 'POST',
-        body: JSON.stringify({ filters: {} }),
-        headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${i}` },
-      })
-      last = await POST(request, { params: { id: `conv-${i}` } })
-    }
-    expect(last?.status).toBe(429)
-    expect((await last!.json()).code).toBe('RATE_LIMITED')
-    expect(mocks.service.applyFilters).toHaveBeenCalledTimes(constants.CHAT_RATE_LIMIT_MAX_REQUESTS)
+  it('uses the shared AI boundary for filter changes across conversations', async () => {
+    await import('@/app/api/recommendations/conversations/[id]/filters/route')
+    expect(mocks.protect).toHaveBeenCalledWith(expect.any(Function), 'ai', 'FUNDING_CHAT')
   })
 
-  it('rate-limits conversation creation on its own bucket', async () => {
-    const constants = await import('@/lib/recommendations/constants')
-    const { POST } = await import('@/app/api/recommendations/conversations/route')
-    let last: Response | null = null
-    for (let i = 0; i < constants.CHAT_CREATE_RATE_LIMIT_MAX_REQUESTS + 1; i += 1) {
-      last = await POST(jsonRequest('/api/recommendations/conversations', {}))
-    }
-    expect(last?.status).toBe(429)
-    expect(mocks.service.createConversation).toHaveBeenCalledTimes(constants.CHAT_CREATE_RATE_LIMIT_MAX_REQUESTS)
+  it('uses the same account boundary for creation and conversation listing', async () => {
+    await import('@/app/api/recommendations/conversations/route')
+    expect(mocks.protect).toHaveBeenCalledTimes(2)
+    for (const call of mocks.protect.mock.calls) expect(call.slice(1)).toEqual(['summary', 'FUNDING_CHAT'])
   })
 
   it('emits a QUOTA_EXCEEDED error event on the SSE route without persisting', async () => {

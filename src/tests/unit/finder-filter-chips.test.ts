@@ -123,6 +123,14 @@ describe('filterChips', () => {
     expect(getActiveSearchSpaceFilterKeys(filters)).toHaveLength(0);
   });
 
+  it('supports imported areas and replaces lifecycle selections when a suggestion is accepted', () => {
+    const filters=createDefaultFilters();filters.importedAreaIds=['scientify:discipline:known'];filters.lifecycleStatuses=['CLOSED'];
+    expect(getActiveSearchSpaceFilterKeys(filters)).toContain('importedAreaIds');
+    expect(getActiveSearchSpaceFilterKeys(filters)).toContain('lifecycleStatuses');
+    const next=applyFilterSuggestionChip(filters,{label:'Upcoming calls',patch:{lifecycleStatuses:['FORTHCOMING']},source:'llm'});
+    expect(next.lifecycleStatuses).toEqual(['FORTHCOMING']);expect(filters.lifecycleStatuses).toEqual(['CLOSED']);
+  });
+
   it('round-trips chips through JSON coercion and drops malformed entries', () => {
     const chips = [
       { label: 'Eligible countries: Germany', patch: { eligibleCountries: ['Germany'] }, source: 'llm' },

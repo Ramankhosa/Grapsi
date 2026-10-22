@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -18,7 +20,7 @@ const createSessionSchema = z.object({
   restart: z.boolean().optional().default(false),
 })
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireGrantPrepActor(request)
   if ('response' in auth) {
     return auth.response
@@ -64,3 +66,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// This suite tests grant creation. The shared boundary is exercised in catalogue-guard.test.ts.
+vi.mock('@/lib/catalogueProtection/guard', () => ({ withCatalogueProtection: (handler: unknown) => handler }))
+
 const mocks = vi.hoisted(() => ({
   requireFundingActor: vi.fn(),
   buildFundingCallAccessWhere: vi.fn(),

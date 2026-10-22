@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 
@@ -27,7 +29,7 @@ type FunderRow = {
  * Counts only calls the caller could find in the finder: global published,
  * the imported catalogue, and their own tenant's published calls.
  */
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireRecommendationUser(request)
   if ('response' in auth) {
     return auth.response
@@ -86,3 +88,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Could not look up funders.' }, { status: 500 })
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'metadata', 'FUNDING_DISCOVERY')

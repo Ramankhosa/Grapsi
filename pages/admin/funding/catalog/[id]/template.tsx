@@ -665,7 +665,7 @@ function BlockEditor({
 }
 
 export default function FundingTemplatePage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const { id } = router.query;
   const [bundle, setBundle] = useState<Bundle | null>(null);
@@ -816,7 +816,7 @@ export default function FundingTemplatePage() {
       setLoading(true);
     }
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/template`);
+      const response = await authFetch(`/api/admin/funding/calls/${id}/template`);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to load template workspace');
@@ -846,7 +846,7 @@ export default function FundingTemplatePage() {
   }
 
   async function postJson(url: string, body?: Record<string, unknown>, method = 'POST') {
-    const response = await fetch(url, {
+    const response = await authFetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
@@ -920,7 +920,7 @@ export default function FundingTemplatePage() {
         if ((file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && selectedPages.length > 0) {
           formData.append('selectedPages', JSON.stringify(selectedPages));
         }
-        const response = await fetch(`/api/admin/funding/calls/${id}/template/assets`, { method: 'POST', body: formData });
+        const response = await authFetch(`/api/admin/funding/calls/${id}/template/assets`, { method: 'POST', body: formData });
         const data = await response.json();
         if (!response.ok) {
           throw new Error(data.message || `Failed to upload ${file.name}`);
@@ -961,7 +961,7 @@ export default function FundingTemplatePage() {
   async function deleteAsset(assetId: string) {
     if (!id) return;
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/template/assets/${assetId}`, { method: 'DELETE' });
+      const response = await authFetch(`/api/admin/funding/calls/${id}/template/assets/${assetId}`, { method: 'DELETE' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to delete template asset');
       await loadBundle(false);

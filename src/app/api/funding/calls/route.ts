@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
@@ -115,7 +117,7 @@ function scoreCall(call: any, tokens: string[], titleQuery: string, fullQuery: s
   return score
 }
 
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireFundingImporterRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -212,3 +214,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to list funding calls' }, { status: 500 })
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')

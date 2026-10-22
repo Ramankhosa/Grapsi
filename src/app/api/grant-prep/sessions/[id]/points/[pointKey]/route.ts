@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -48,7 +50,7 @@ const requestSchema = z.discriminatedUnion('action', [
   }),
 ])
 
-export async function PATCH(
+async function cataloguePATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; pointKey: string }> }
 ) {
@@ -235,3 +237,5 @@ export async function PATCH(
     )
   }
 }
+
+export const PATCH = withCatalogueSourceProtection(cataloguePATCH)

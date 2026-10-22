@@ -94,7 +94,7 @@ export function countActiveFilters(filters: RecommendationSearchFilters): number
     'geographyScope', 'eligibleCountries', 'eligibleRegions', 'hostCountries',
     'funderCountries', 'fundingKinds', 'institutionTypes', 'careerStages',
     'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sponsorTypes',
-    'taxonomyAreaIds', 'funderIds', 'sdgGoals', 'programmeFrameworks',
+    'taxonomyAreaIds', 'importedAreaIds', 'funderIds', 'sdgGoals', 'programmeFrameworks',
     'qualifications', 'projectDurations', 'targetGroups', 'indirectCostPolicies', 'mobility', 'applicationRoutes',
   ];
   for (const key of arrayKeys) {
@@ -109,6 +109,7 @@ export function countActiveFilters(filters: RecommendationSearchFilters): number
   if (filters.amountMax !== null && filters.amountMax !== undefined) count += 1;
   if (filters.includeUnknownAmount) count += 1;
   if (filters.noMembershipNeeded) count += 1;
+  if (filters.lifecycleStatuses?.length && JSON.stringify(filters.lifecycleStatuses)!==JSON.stringify(['OPEN','ROLLING'])) count += filters.lifecycleStatuses.length;
   return count;
 }
 
@@ -246,6 +247,20 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     } finally {
       setLoadingConversation(false);
     }
+  }
+
+  async function loadEarlierMessages() {
+    if (!conversation?.historyBeforeTurn) return;
+    const id = conversation.id;
+    try {
+      const payload = await apiRequest<{ conversation: RecommendationConversationDetail }>(authFetch, `/api/recommendations/conversations/${id}?beforeTurn=${conversation.historyBeforeTurn}`);
+      if (!isActiveConversation(id)) return;
+      setConversation(current => current?.id !== id ? current : ({ ...current,
+        historyBeforeTurn: payload.conversation.historyBeforeTurn,
+        messages: [...payload.conversation.messages, ...current.messages].filter((message, index, all) => all.findIndex(other => other.id === message.id) === index),
+        runs: [...payload.conversation.runs, ...current.runs].filter((run, index, all) => all.findIndex(other => other.id === run.id) === index),
+      }));
+    } catch (err) { onError(err instanceof Error ? err.message : 'Could not load earlier messages'); }
   }
 
   async function handleCreateConversation() {
@@ -861,6 +876,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     // actions
     refreshConversations,
     loadConversation,
+    loadEarlierMessages,
     handleCreateConversation,
     handleDeleteConversation,
     handleClearChat,

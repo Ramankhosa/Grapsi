@@ -1,3 +1,4 @@
+import { registerCatalogueSession } from '@/lib/catalogueProtection/sessions'
 import bcrypt from 'bcryptjs'
 import sgMail from '@sendgrid/mail'
 import jwt from 'jsonwebtoken'
@@ -87,6 +88,7 @@ export interface JWTPayload {
   ati_id: string | null
   tenant_ati_id: string | null // For scope validation
   scope: 'platform' | 'tenant' // Unified scope model
+  catalog_session?: string
   access_expires_at?: string | null // EVENT-kind users: ISO timestamp their access ends
   iat: number
   exp: number
@@ -204,8 +206,9 @@ export function hashRefreshToken(token: string): string {
 export async function storeRefreshToken(
   userId: string,
   tokenData: RefreshTokenResult,
-  metadata?: { userAgent?: string; ipAddress?: string }
+  metadata?: { userAgent?: string; ipAddress?: string; isRefresh?: boolean }
 ): Promise<void> {
+  await registerCatalogueSession(userId, tokenData.familyId, tokenData.expiresAt, metadata?.userAgent, metadata?.isRefresh)
   await prisma.refreshToken.create({
     data: {
       id: tokenData.tokenId,

@@ -128,6 +128,7 @@ export interface RecommendationConversationSummary {
 }
 
 export interface RecommendationConversationDetail {
+  historyBeforeTurn?: number | null;
   id: string;
   title: string;
   updatedAt: string;

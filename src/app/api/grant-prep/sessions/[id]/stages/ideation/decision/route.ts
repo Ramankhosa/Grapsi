@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { randomUUID } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -64,7 +66,7 @@ function findPersistedOption(message: { suggested_answers?: unknown }, label: st
 
 const buildDecisionMarker = buildGrantPrepIdeationDecisionMarker
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireGrantPrepActor(request)
   if ('response' in auth) return auth.response
   const { id } = await params
@@ -293,3 +295,5 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

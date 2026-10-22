@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -46,7 +48,7 @@ const requestSchema = z.object({
   expectedSessionUpdatedAt: z.string().datetime(),
 })
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!isFeatureEnabled('ENABLE_DRAFT_ZERO')) {
     return NextResponse.json({ message: 'Draft Zero is not enabled.' }, { status: 404 })
   }
@@ -273,3 +275,5 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

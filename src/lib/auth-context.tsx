@@ -238,6 +238,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     })
 
+    if (response.status === 401) {
+      const failure = await response.clone().json().catch(() => ({}))
+      if (failure.code === 'REAUTH_REQUIRED') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.assign(`/login?callbackUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`)
+        }
+        return response
+      }
+    }
     if (response.status === 401 && currentToken) {
       const newToken = await refreshAccessTokenRef.current(true)
       if (newToken) {

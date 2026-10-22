@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -10,7 +12,7 @@ const applyRunSchema = z.object({
   mode: z.enum(['replace', 'merge']).optional().default('replace'),
 })
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: { id: string; runId: string } }
 ) {
@@ -29,3 +31,5 @@ export async function POST(
     return NextResponse.json({ message: error instanceof Error ? error.message : 'Failed to apply template run' }, { status: 500 })
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

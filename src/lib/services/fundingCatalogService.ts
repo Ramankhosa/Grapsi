@@ -529,7 +529,7 @@ export class FundingCatalogService {
 
   async listFundingCalls(
     status?: FundingCallStatus | null,
-    options: { includeImported?: boolean } = {}
+    options: { includeImported?: boolean; page?: number; pageSize?: number } = {}
   ): Promise<FundingCatalogSummary[]> {
     // The imported external catalogue (GLOBAL_CATALOG, ~10k calls) has its own
     // review screen; without this the newest 200 rows here would all be imports.
@@ -537,7 +537,8 @@ export class FundingCatalogService {
     const calls = await prisma.fundingCall.findMany({
       where: status ? { AND: [scope, { catalog_status: status }] } : scope,
       orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
-      take: 200,
+      take: Math.min(50, Math.max(1, options.pageSize || 50)),
+      skip: (Math.max(1, options.page || 1) - 1) * Math.min(50, Math.max(1, options.pageSize || 50)),
       select: {
         id: true,
         agency_name: true,

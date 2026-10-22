@@ -1,8 +1,9 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { conversationContextFlagsSchema, conversationMessageFilterSchema } from '@/lib/recommendations/messageSchema'
 import {
-  enforceChatRateLimit,
   requireRecommendationTenantUser,
   toRecommendationAccessScope,
 } from '@/lib/recommendations/request-auth'
@@ -21,14 +22,12 @@ const requestSchema = conversationContextFlagsSchema.extend({
  * or trigger any narrative LLM call. It still runs an embedding + search, so it
  * shares the per-user chat rate bucket (but is not metered against quota).
  */
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
-  const limited = enforceChatRateLimit(auth.userId)
-  if (limited) return limited
 
   try {
     const parsed = requestSchema.parse(await request.json())
@@ -44,3 +43,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return recommendationErrorResponse(error, 'Failed to update conversation filters')
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_CHAT')

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -22,7 +24,7 @@ function buildGrantProjectName(call: { scheme_title?: string | null; title?: str
   return projectName.length <= 200 ? projectName : `${projectName.slice(0, 197).trimEnd()}...`
 }
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: Promise<{ callId: string }> }
 ) {
@@ -130,3 +132,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

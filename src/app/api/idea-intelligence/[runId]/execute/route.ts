@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingActor } from '@/lib/funding/access'
@@ -7,7 +9,7 @@ import { ideaIntelligenceService } from '@/lib/ideaIntelligence/service'
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
-export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { runId: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
   const reservation = await reserveIdeaIntelligenceUsage(auth.actor, params.runId, 'idea_intelligence_execute')
@@ -29,3 +31,5 @@ export async function POST(request: NextRequest, { params }: { params: { runId: 
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Idea analysis failed' }, { status: 500 })
   }
 }
+
+export const POST=withCatalogueProtection(cataloguePOST,'ai','FUNDING_INTELLIGENCE')

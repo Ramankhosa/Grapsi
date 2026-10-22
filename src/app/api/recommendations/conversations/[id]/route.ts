@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -12,21 +14,23 @@ const updateSchema = z.object({
   filterMode: z.enum(['manual', 'auto']).optional(),
 })
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
-    const conversation = await recommendationConversationService.getConversation(auth.userId, auth.tenantId, params.id)
+    const cursor = request.nextUrl.searchParams.get('beforeTurn')
+    if (cursor !== null && (!/^\d+$/.test(cursor) || Number(cursor) < 1)) return NextResponse.json({ error: 'Invalid history page.' }, { status: 400 })
+    const conversation = await recommendationConversationService.getConversation(auth.userId, auth.tenantId, params.id, cursor === null ? undefined : Number(cursor))
     return NextResponse.json({ conversation })
   } catch (error) {
     return recommendationErrorResponse(error, 'Failed to load recommendation conversation')
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePATCH(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
@@ -46,7 +50,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+async function catalogueDELETE(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
@@ -59,3 +63,9 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     return recommendationErrorResponse(error, 'Failed to delete recommendation conversation')
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary', 'FUNDING_CHAT')
+
+export const PATCH = withCatalogueProtection(cataloguePATCH, 'summary', 'FUNDING_CHAT')
+
+export const DELETE = withCatalogueProtection(catalogueDELETE, 'summary', 'FUNDING_CHAT')

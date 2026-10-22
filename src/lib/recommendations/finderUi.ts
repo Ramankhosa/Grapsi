@@ -81,6 +81,7 @@ export function buildClearedScalarFilters(
   const nextFilters = cloneRequiredFilters(filters);
   if (key === 'rollingOnly' || key === 'includeExpired' || key === 'includeUnknownAmount' || key === 'noMembershipNeeded') {
     nextFilters[key] = false as never;
+    if(key==='rollingOnly')nextFilters.lifecycleStatuses=['OPEN','ROLLING'];
   } else if (key === 'amountMin' || key === 'amountMax') {
     nextFilters[key] = null as never;
     // The currency only qualifies an amount bound; drop it with the last one.

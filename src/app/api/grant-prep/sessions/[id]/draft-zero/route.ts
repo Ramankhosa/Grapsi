@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { isFeatureEnabled } from '@/lib/feature-flags'
@@ -13,7 +15,7 @@ import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
 import { syncDraftZeroStateWithStageStates } from '@/lib/draftZero/extraction'
 import { normalizeDraftZeroState } from '@/lib/draftZero/types'
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function catalogueGET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!isFeatureEnabled('ENABLE_DRAFT_ZERO')) {
     return NextResponse.json({ message: 'Draft Zero is not enabled.' }, { status: 404 })
   }
@@ -61,3 +63,5 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     )
   }
 }
+
+export const GET = withCatalogueSourceProtection(catalogueGET)

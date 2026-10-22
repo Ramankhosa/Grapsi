@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
@@ -24,7 +26,7 @@ function hasProtectedCapturedContent(stage: { points: Array<{ priority?: PointPr
   )
 }
 
-export async function PUT(
+async function cataloguePUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; stageKey: string }> }
 ) {
@@ -116,3 +118,5 @@ export async function PUT(
     )
   }
 }
+
+export const PUT = withCatalogueSourceProtection(cataloguePUT)

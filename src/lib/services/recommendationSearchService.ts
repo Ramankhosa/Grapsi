@@ -1,3 +1,4 @@
+import { importedAreaCondition, LIVE_STATUS_SQL } from '@/lib/catalogueProtection/areas'
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
@@ -86,7 +87,7 @@ const QUERY_ENRICHMENT_CACHE_VERSION = 'v1';
 const QUERY_EMBEDDING_CACHE_VERSION_PREFIX = 'funding-query-v1';
 const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
-  ['taxonomyAreaIds'],
+  ['taxonomyAreaIds','importedAreaIds'],
   ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sdgGoals', 'programmeFrameworks',
     'qualifications', 'projectDurations', 'targetGroups', 'indirectCostPolicies', 'mobility', 'applicationRoutes', 'noMembershipNeeded'],
   ['hostCountries', 'eligibleRegions', 'geographyScope', 'funderCountries'],
@@ -94,6 +95,9 @@ const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilte
   ['fundingKinds', 'funderIds'],
   ['deadlineFrom', 'deadlineTo', 'rollingOnly', 'amountMin', 'amountMax', 'amountCurrency', 'includeUnknownAmount'],
 ];
+function directoryFilters(filters?:RecommendationSearchFilters):RecommendationSearchFilters {
+  return {...filters,lifecycleStatuses:filters?.lifecycleStatuses ?? (filters?.includeExpired?[]:['OPEN','ROLLING'])};
+}
 
 type SearchExecutionResult = {
   candidates: RecommendationCandidate[];
@@ -578,7 +582,9 @@ function buildBaseConditions(
     buildAccessCondition(access),
   ];
 
-  if (!filters.includeExpired) {
+  if (filters.lifecycleStatuses?.length) {
+    conditions.push(Prisma.sql`(${LIVE_STATUS_SQL}) = ANY(${filters.lifecycleStatuses}::text[])`);
+  } else if (!filters.includeExpired) {
     conditions.push(
       Prisma.sql`(
         COALESCE(is_rolling, false) = true OR
@@ -589,6 +595,7 @@ function buildBaseConditions(
     conditions.push(importedLifecycleGuard());
   }
 
+  if (filters.importedAreaIds?.length) conditions.push(importedAreaCondition(filters.importedAreaIds));
   if (ignoreUserFilters) {
     return conditions;
   }
@@ -1375,6 +1382,8 @@ function cloneFilters(filters: Required<RecommendationSearchFilters>): Required<
     applicationLanguages: [...filters.applicationLanguages],
     sponsorTypes: [...filters.sponsorTypes],
     taxonomyAreaIds: [...filters.taxonomyAreaIds],
+    importedAreaIds: [...filters.importedAreaIds],
+    lifecycleStatuses: [...filters.lifecycleStatuses],
     funderIds: [...filters.funderIds],
     sdgGoals: [...filters.sdgGoals],
     programmeFrameworks: [...filters.programmeFrameworks],
@@ -1405,6 +1414,7 @@ function clearFilterKey(
     case 'applicationLanguages':
     case 'sponsorTypes':
     case 'taxonomyAreaIds':
+    case 'importedAreaIds':
     case 'funderIds':
     case 'sdgGoals':
     case 'programmeFrameworks':
@@ -2816,7 +2826,7 @@ Rules:
     const normalized = normalizeRecommendationSearchRequest({
       inputMode: 'research_area',
       query: { researchArea: rawQuery || 'funding opportunities' },
-      filters: request.filters,
+      filters: directoryFilters(request.filters),
     });
     const filters = normalized.filters;
 
@@ -3013,6 +3023,38 @@ Rules:
     };
   }
 
+  async catalogueOverview(request: DirectoryFacetRequest, lookup?: { q?: string; page?: number; kind?: string; ids?: string[] }) {
+    const normalized = normalizeRecommendationSearchRequest({ inputMode: 'research_area', query: { researchArea: request.query || 'funding opportunities' }, filters: { ...directoryFilters(request.filters), ...(lookup ? { importedAreaIds: [] } : {}) } });
+    const where = combineConditions([...buildBaseConditions(normalized, false, request.access), request.query ? directoryTextCondition(request.query) : Prisma.sql`TRUE`]);
+    if (lookup) {
+      const term = (lookup.q || '').slice(0,120), page = Math.max(1,lookup.page || 1), kind = lookup.kind || 'discipline';
+      const labelWhere = Prisma.sql`a.kind=${kind} AND position(lower(${term}) in lower(a.label))>0`;
+      const [areas, totals, selected] = await Promise.all([
+        prisma.$queryRaw(Prisma.sql`WITH matched AS MATERIALIZED (SELECT id FROM funding_calls WHERE ${where}),
+          area_counts AS (SELECT area_id,count(DISTINCT call_id)::int AS count FROM (
+            SELECT ca.area_id,ca.call_id FROM catalogue_call_areas ca JOIN matched ON matched.id=ca.call_id
+            UNION ALL SELECT cw.imported_area_id,n.funding_call_id FROM funding_call_research_area_taxonomies n
+            JOIN matched ON matched.id=n.funding_call_id JOIN catalogue_area_crosswalk cw ON cw.native_area_id=n.taxonomy_area_id
+            WHERE cw.approved_at IS NOT NULL AND cw.relation IN ('exact','broader','narrower')
+          ) associations GROUP BY area_id)
+          SELECT a.id,a.label,a.kind,coalesce(c.count,0)::int AS count FROM catalogue_areas a LEFT JOIN area_counts c ON c.area_id=a.id
+          WHERE ${labelWhere} ORDER BY a.label,a.id LIMIT 50 OFFSET ${(page-1)*50}`),
+        prisma.$queryRaw<Array<{count:number}>>(Prisma.sql`SELECT count(*)::int AS count FROM catalogue_areas a WHERE ${labelWhere}`),
+        prisma.$queryRaw(Prisma.sql`SELECT id,label,kind FROM catalogue_areas WHERE id=ANY(${lookup.ids || []}::text[])`),
+      ]);
+      return { areas, page, total: totals[0].count, selected };
+
+    }
+    const [lifecycle, origins, kinds, unmapped, windows] = await Promise.all([
+      prisma.$queryRaw(Prisma.sql`SELECT (${LIVE_STATUS_SQL}) AS status,count(*)::int AS count FROM funding_calls WHERE ${where} GROUP BY 1 ORDER BY 1`),
+      prisma.$queryRaw(Prisma.sql`SELECT import_run_id IS NOT NULL AS imported,count(*)::int AS count FROM funding_calls WHERE ${where} GROUP BY 1`),
+      prisma.$queryRaw(Prisma.sql`SELECT kind,count(DISTINCT id)::int AS count FROM funding_calls CROSS JOIN LATERAL unnest(funding_kinds) kind WHERE ${where} GROUP BY 1 ORDER BY count DESC,kind`),
+      prisma.$queryRaw(Prisma.sql`SELECT count(*)::int AS count FROM funding_calls WHERE ${where} AND NOT EXISTS(SELECT 1 FROM catalogue_call_areas ca WHERE ca.call_id=funding_calls.id) AND NOT EXISTS(SELECT 1 FROM funding_call_research_area_taxonomies n JOIN catalogue_area_crosswalk cw ON cw.native_area_id=n.taxonomy_area_id WHERE n.funding_call_id=funding_calls.id AND cw.approved_at IS NOT NULL)`),
+      prisma.$queryRaw(Prisma.sql`SELECT count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+7)::int AS next7,count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+30)::int AS next30,count(*) FILTER(WHERE coalesce(entry_closes_at,final_deadline_at,close_date::date) BETWEEN (now() AT TIME ZONE 'UTC')::date AND (now() AT TIME ZONE 'UTC')::date+90)::int AS next90 FROM funding_calls WHERE ${where}`),
+    ]);
+    return { asOf: new Date().toISOString().slice(0,10), lifecycle, origins, fundingKinds: kinds, unmapped, deadlineWindows: windows, overlappingCategories: true };
+  }
+
   async browseDirectory(request: RecommendationDirectoryRequest): Promise<RecommendationDirectoryResponse> {
     const rawQuery = normalizeWhitespace(request.query || '');
     const usePersonalContext =
@@ -3023,7 +3065,7 @@ Rules:
     const normalized = this.applyProfileContextToQuery(normalizeRecommendationSearchRequest({
       inputMode: 'research_area',
       query: { researchArea: rawQuery || 'funding opportunities' },
-      filters: request.filters,
+      filters: directoryFilters(request.filters),
     }), profileContext);
     const baseConditions = buildBaseConditions(normalized, false, request.access);
     // The search box matches the words as typed; the expanded query (and any

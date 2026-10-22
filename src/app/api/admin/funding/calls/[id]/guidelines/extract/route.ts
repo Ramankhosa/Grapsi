@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import crypto from 'crypto'
 import fs from 'fs/promises'
 import os from 'os'
@@ -19,7 +21,7 @@ async function stageUpload(file: File) {
   return { tempFilePath: targetPath, checksum }
 }
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) return auth.response
 
@@ -50,3 +52,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return NextResponse.json({ message: error instanceof Error ? error.message : 'Failed to extract guidelines' }, { status: 500 })
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY',{generation:true})

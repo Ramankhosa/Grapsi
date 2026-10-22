@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { Prisma } from '@prisma/client';
+import { protectCatalogueAiContext } from '@/lib/catalogueProtection/guard';
 
 import prisma from '@/lib/prisma';
 import { EmbeddingService } from '@/lib/services/embeddingService';
@@ -207,6 +208,7 @@ export class FundingDocumentRetrievalService {
       LIMIT ${topK}
     `);
 
+    await protectCatalogueAiContext([...new Set(rows.map(row => row.fundingCallId))]);
     return rows.map(mapRow);
   }
 
@@ -258,6 +260,7 @@ export class FundingDocumentRetrievalService {
       LIMIT ${Math.max(1, Math.min(limit, 100))}
     `);
 
+    await protectCatalogueAiContext([...new Set(rows.map(row => row.fundingCallId))]);
     return rows.map(mapRow);
   }
 }

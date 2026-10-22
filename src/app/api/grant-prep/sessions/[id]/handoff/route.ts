@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -17,7 +19,7 @@ const handoffSchema = z.object({
     .optional(),
 })
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -70,3 +72,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

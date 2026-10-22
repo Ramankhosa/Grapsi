@@ -9292,3 +9292,106 @@ model JobRun {
   @@index([job_key, started_at], map: "idx_job_runs_key_started")
   @@map("job_runs")
 }
+
+
+// Catalogue security and imported-area indexes are additive and independent
+// of original call/profile/DSR rows. Call IDs deliberately do not cascade.
+model CatalogueSession {
+  id String @id
+  user_id String
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  authenticated_at DateTime @default(now()) @db.Timestamptz(6)
+  expires_at DateTime @db.Timestamptz(6)
+  revoked_at DateTime? @db.Timestamptz(6)
+  user_agent String?
+  @@index([user_id, expires_at], map: "catalogue_sessions_user_idx")
+  @@map("catalogue_sessions")
+}
+
+model CatalogueAccount {
+  user_id String @id
+  restricted_until DateTime? @db.Timestamptz(6)
+  reason String?
+  reauth_after DateTime? @db.Timestamptz(6)
+  allowance_multiplier Int @default(1)
+  allowance_until DateTime? @db.Timestamptz(6)
+  @@map("catalogue_accounts")
+}
+
+model CatalogueCounter {
+  user_id String
+  bucket String
+  window_start DateTime @db.Timestamptz(6)
+  count BigInt @default(0)
+  @@id([user_id,bucket,window_start])
+  @@map("catalogue_counters")
+}
+
+model CatalogueLease {
+  id String @id
+  user_id String
+  session_id String
+  kind String
+  expires_at DateTime @db.Timestamptz(6)
+  summary_ids String[] @default([])
+  detail_ids String[] @default([])
+  @@index([user_id,expires_at], map: "catalogue_leases_user_idx")
+  @@map("catalogue_leases")
+}
+
+model CatalogueExposure {
+  user_id String
+  call_id String
+  kind String
+  day DateTime @db.Date
+  seen_at DateTime @default(now()) @db.Timestamptz(6)
+  @@id([user_id,call_id,kind,day])
+  @@index([user_id,kind,seen_at,call_id], map: "catalogue_exposures_window_idx")
+  @@map("catalogue_exposures")
+}
+
+model CatalogueSecurityEvent {
+  id String @id
+  user_id String
+  kind String
+  actor_id String?
+  detail Json @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  @@index([user_id,created_at], map: "catalogue_events_user_idx")
+  @@index([created_at], map: "catalogue_events_retention_idx")
+  @@map("catalogue_security_events")
+}
+
+model CatalogueArea {
+  id String @id
+  source_key String
+  kind String
+  label String
+  normalized_label String
+  version String
+  calls CatalogueCallArea[]
+  crosswalk CatalogueAreaCrosswalk[]
+  @@unique([source_key,kind,normalized_label])
+  @@map("catalogue_areas")
+}
+
+model CatalogueCallArea {
+  call_id String
+  area_id String
+  source_record_id String @default("")
+  area CatalogueArea @relation(fields:[area_id],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@id([call_id,area_id,source_record_id])
+  @@index([area_id,call_id], map: "catalogue_call_areas_area_idx")
+  @@map("catalogue_call_areas")
+}
+
+model CatalogueAreaCrosswalk {
+  native_area_id String
+  imported_area_id String
+  mapping_relation String @default("unresolved") @map("relation")
+  approved_by String?
+  approved_at DateTime? @db.Timestamptz(6)
+  area CatalogueArea @relation(fields:[imported_area_id],references:[id],onDelete:Restrict,onUpdate:NoAction)
+  @@id([native_area_id,imported_area_id])
+  @@map("catalogue_area_crosswalk")
+}

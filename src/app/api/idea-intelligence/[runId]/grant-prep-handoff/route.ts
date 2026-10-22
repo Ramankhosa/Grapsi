@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { randomUUID } from 'node:crypto'
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -22,7 +24,7 @@ const handoffSchema = z.object({
   projectName: z.string().trim().min(1).max(200).optional(),
 })
 
-export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { runId: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
@@ -99,3 +101,5 @@ export async function POST(request: NextRequest, { params }: { params: { runId: 
     )
   }
 }
+
+export const POST=withCatalogueProtection(cataloguePOST,'ai','FUNDING_INTELLIGENCE')

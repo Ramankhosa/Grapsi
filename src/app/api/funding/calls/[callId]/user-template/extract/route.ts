@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import crypto from 'crypto'
 import fs from 'fs/promises'
 import os from 'os'
@@ -150,7 +152,7 @@ async function stageTemplateUpload(
   }
 }
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: { callId: string } }
 ) {
@@ -228,3 +230,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_DISCOVERY')

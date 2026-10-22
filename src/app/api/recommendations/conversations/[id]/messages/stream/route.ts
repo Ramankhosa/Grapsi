@@ -1,10 +1,10 @@
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import type { FinderTurnStreamEvent } from '@/lib/recommendations/chatTypes'
 import { conversationMessageRequestSchema } from '@/lib/recommendations/messageSchema'
 import {
-  enforceChatRateLimit,
   requireRecommendationTenantUser,
   toRecommendationAccessScope,
 } from '@/lib/recommendations/request-auth'
@@ -20,15 +20,13 @@ export const dynamic = 'force-dynamic'
  * request schema as the classic POST — but emits progress events and narrative tokens
  * while the turn is processed, then a `final` event carrying the exact classic response.
  */
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   // Same per-user bucket as the classic route and the filter routes.
-  const limited = enforceChatRateLimit(auth.userId)
-  if (limited) return limited
 
   let parsed: z.infer<typeof conversationMessageRequestSchema>
   try {
@@ -68,3 +66,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     { signal: request.signal }
   )
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_CHAT')

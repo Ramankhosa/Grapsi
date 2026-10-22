@@ -98,6 +98,7 @@ export async function POST(request: NextRequest) {
 
     // Step 6: Generate new access token
     const newAccessToken = generateJWT({
+      catalog_session: storedToken.familyId,
       sub: user.id,
       email: user.email,
       tenant_id: user.tenantId,
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
     const userAgent = request.headers.get('user-agent') || undefined
     
     const newRefreshTokenData = generateRefreshToken(user.id, storedToken.familyId)
-    await storeRefreshToken(user.id, newRefreshTokenData, { userAgent, ipAddress: ip })
+    await storeRefreshToken(user.id, newRefreshTokenData, { userAgent, ipAddress: ip, isRefresh: true })
 
     // Step 8: Return new tokens
     const response = NextResponse.json({

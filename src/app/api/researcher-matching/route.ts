@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { researcherSearchService } from '@/lib/services/researcherSearchService'
 import { prisma } from '@/lib/prisma'
@@ -56,7 +58,7 @@ function tenantVisibleCallWhere(context: TenantScopeContext) {
 /**
  * GET — tenant stats (?action=stats) or the tenant-visible funding call list (?q=).
  */
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await requireMatchingAccess(request)
   if (isAccessError(auth)) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
@@ -289,7 +291,7 @@ export async function GET(request: NextRequest) {
   const callDiscipline = (searchParams.get('discipline') || '').trim()
   const callFundingKind = (searchParams.get('fundingKind') || '').trim()
   const closingInDays = Number(searchParams.get('closingInDays')) || 0
-  const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
+  const limit = Math.max(1,Math.min(Number(searchParams.get('limit')) || 12, 50))
 
   const where: any = callId
     ? { AND: [{ id: callId }, tenantVisibleCallWhere(auth)] }
@@ -364,7 +366,7 @@ export async function GET(request: NextRequest) {
 /**
  * POST — search researchers within the caller's tenant, by funding call or free text.
  */
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireMatchingAccess(request)
   if (isAccessError(auth)) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
@@ -426,3 +428,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json(results)
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary', 'FUNDING_DISCOVERY')
+
+export const POST = withCatalogueProtection(cataloguePOST, 'summary', 'FUNDING_DISCOVERY')

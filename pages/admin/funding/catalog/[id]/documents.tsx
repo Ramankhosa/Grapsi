@@ -233,7 +233,7 @@ export async function getServerSideProps() {
 }
 
 export default function FundingDocumentsPage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const { id } = router.query;
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
@@ -301,7 +301,7 @@ export default function FundingDocumentsPage() {
     if (!id) return;
     if (showSpinner) setLoading(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/documents`);
+      const response = await authFetch(`/api/admin/funding/calls/${id}/documents`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to load documents');
       setDocuments(data.documents || []);
@@ -318,7 +318,7 @@ export default function FundingDocumentsPage() {
   async function loadDetail(documentId: string, showToast = true) {
     if (!id) return;
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/documents/${documentId}`);
+      const response = await authFetch(`/api/admin/funding/calls/${id}/documents/${documentId}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to load document detail');
       setDetail(data.document);
@@ -338,7 +338,7 @@ export default function FundingDocumentsPage() {
       const form = new FormData();
       form.append('file', file);
       form.append('documentKind', uploadKind);
-      const response = await fetch(`/api/admin/funding/calls/${id}/documents`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/documents`, {
         method: 'POST',
         body: form,
       });
@@ -371,7 +371,7 @@ export default function FundingDocumentsPage() {
         : action === 'activate' || action === 'deactivate'
           ? JSON.stringify({ active: action === 'activate' })
           : undefined;
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         method: 'POST',
         headers: body ? { 'Content-Type': 'application/json' } : undefined,
         body,

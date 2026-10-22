@@ -220,6 +220,7 @@ export default function FinderAiTab({
             />
           ) : (
             <div className="space-y-5">
+              {conversation.historyBeforeTurn ? <button type="button" className="text-sm text-blue-700 underline" onClick={() => { pinnedToBottomRef.current = false; void chat.loadEarlierMessages(); }}>Load earlier messages</button> : null}
               {conversation.messages.map((message) => (
                 <FinderChatMessage
                   key={message.id}

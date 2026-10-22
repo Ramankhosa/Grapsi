@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
@@ -5,7 +7,7 @@ import { fundingGuidelineService } from '@/lib/fundingGuidelines/service'
 
 export const runtime = 'nodejs'
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: { id: string; runId: string } }
 ) {
@@ -20,3 +22,5 @@ export async function POST(
     return NextResponse.json({ message: error instanceof Error ? error.message : 'Failed to apply guideline run' }, { status: 500 })
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

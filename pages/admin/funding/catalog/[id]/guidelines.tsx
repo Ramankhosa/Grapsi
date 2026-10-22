@@ -528,7 +528,7 @@ function GuidelineBlockEditor({
 }
 
 export default function FundingGuidelineWorkspacePage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const { id } = router.query;
   const [bundle, setBundle] = useState<Bundle | null>(null);
@@ -626,7 +626,7 @@ export default function FundingGuidelineWorkspacePage() {
     }
 
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines`);
+      const response = await authFetch(`/api/admin/funding/calls/${id}/guidelines`);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to load guideline workspace');
@@ -653,7 +653,7 @@ export default function FundingGuidelineWorkspacePage() {
 
     setCreating(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines`, { method: 'POST' });
+      const response = await authFetch(`/api/admin/funding/calls/${id}/guidelines`, { method: 'POST' });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to create blank guidelines');
@@ -683,7 +683,7 @@ export default function FundingGuidelineWorkspacePage() {
         }
         const formData = new FormData();
         formData.append('file', sourcePdf);
-        response = await fetch(`/api/admin/funding/calls/${id}/guidelines/extract`, {
+        response = await authFetch(`/api/admin/funding/calls/${id}/guidelines/extract`, {
           method: 'POST',
           body: formData,
         });
@@ -695,7 +695,7 @@ export default function FundingGuidelineWorkspacePage() {
               ? { sourceMode: 'text', sourceText }
               : { sourceMode: 'intake' };
 
-        response = await fetch(`/api/admin/funding/calls/${id}/guidelines/extract`, {
+        response = await authFetch(`/api/admin/funding/calls/${id}/guidelines/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -725,7 +725,7 @@ export default function FundingGuidelineWorkspacePage() {
 
     setApplyingRunId(runId);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines/runs/${runId}/apply`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/guidelines/runs/${runId}/apply`, {
         method: 'POST',
       });
       const data = await response.json();
@@ -750,7 +750,7 @@ export default function FundingGuidelineWorkspacePage() {
 
     setSaving(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/guidelines`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ guideline_pack_json: guidelinePack }),
@@ -776,7 +776,7 @@ export default function FundingGuidelineWorkspacePage() {
 
     setReverting(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines/revert`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/guidelines/revert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ revisionNo: selectedRevisionNo }),

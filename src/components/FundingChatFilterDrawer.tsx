@@ -1,3 +1,4 @@
+import ImportedAreaPicker from './finder/ImportedAreaPicker';
 import { useState } from 'react';
 import { Check, Clock, Globe2, SlidersHorizontal, Search, Wallet, X } from 'lucide-react';
 import type { RecommendationSearchFilters } from '../lib/recommendations/types';
@@ -26,7 +27,7 @@ import {
   TARGET_GROUP_OPTIONS,
 } from '../lib/recommendations/constants';
 
-type FilterCategoryKey = 'geography' | 'funding' | 'eligibility' | 'timing' | 'search';
+type FilterCategoryKey = 'research' | 'geography' | 'funding' | 'eligibility' | 'timing' | 'search';
 
 interface FundingChatFilterDrawerProps {
   filters: RecommendationSearchFilters;
@@ -114,6 +115,7 @@ function TextArrayField({
 const SDG_OPTIONS = Object.keys(SDG_GOAL_LABELS);
 
 const filterCategories: Array<{ key: FilterCategoryKey; label: string; icon: JSX.Element }> = [
+  { key: 'research', label: 'Research areas', icon: <Search className="h-4 w-4" /> },
   { key: 'geography', label: 'Geography', icon: <Globe2 className="h-4 w-4" /> },
   { key: 'funding', label: 'Funding type', icon: <Wallet className="h-4 w-4" /> },
   { key: 'eligibility', label: 'Eligibility', icon: <Check className="h-4 w-4" /> },
@@ -134,7 +136,12 @@ export default function FundingChatFilterDrawer({
 }: FundingChatFilterDrawerProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategoryKey>('geography');
 
-  const update = (patch: Partial<RecommendationSearchFilters>) => onChange({ ...filters, ...patch });
+  const update = (patch: Partial<RecommendationSearchFilters>) => {
+    const next={...filters,...patch};
+    if(Array.isArray(patch.lifecycleStatuses))next.rollingOnly=patch.lifecycleStatuses.length===1&&patch.lifecycleStatuses[0]==='ROLLING';
+    else if(typeof patch.rollingOnly==='boolean')next.lifecycleStatuses=patch.rollingOnly?['ROLLING']:['OPEN','ROLLING'];
+    onChange(next);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/30 sm:items-center sm:p-4">
@@ -181,6 +188,7 @@ export default function FundingChatFilterDrawer({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+            {activeCategory === 'research' ? <ImportedAreaPicker filters={filters} query="" onChange={update} /> : null}
             {activeCategory === 'geography' ? (
               <div className="space-y-5">
                 <FilterChips
@@ -351,6 +359,7 @@ export default function FundingChatFilterDrawer({
               </div>
             ) : null}
 
+            {activeCategory === 'timing' ? <FilterChips label="Call status" values={filters.lifecycleStatuses} options={['OPEN','ROLLING','FORTHCOMING','CLOSED','UNKNOWN']} labelFor={v=>({OPEN:'Open',ROLLING:'Rolling',FORTHCOMING:'Upcoming',CLOSED:'Closed',UNKNOWN:'Unknown deadline'}[v]||v)} onToggle={v=>update({lifecycleStatuses:toggleListValue(filters.lifecycleStatuses,v),includeExpired:true})} /> : null}
             {activeCategory === 'timing' ? (
               <div className="space-y-5">
                 <div className="grid gap-4 md:grid-cols-2">

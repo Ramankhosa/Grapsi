@@ -22,6 +22,8 @@ export interface RecommendationSearchFilters {
   applicationLanguages?: string[];
   sponsorTypes?: string[];
   taxonomyAreaIds?: string[];
+  importedAreaIds?: string[];
+  lifecycleStatuses?: string[];
   /** Funder ids (funders table). Calls with no funder link match on agency name. */
   funderIds?: string[];
   /** UN Sustainable Development Goal numbers, as strings '1'..'17'. */
@@ -242,6 +244,8 @@ export interface RecommendationCandidate {
   applicationLanguages: string[];
   /** Two-level research-area tags on the call, shared with saved researcher areas. */
   taxonomyAreaIds?: string[];
+  importedAreaIds?: string[];
+  lifecycleStatuses?: string[];
   /** Imported external-catalogue call (GLOBAL_CATALOG). */
   isCatalog?: boolean;
   /** The funder takes a limited number of applications per institution. */
@@ -327,6 +331,8 @@ export interface RecommendationSearchResponse {
 
 export interface RecommendationRawResultItem extends RecommendationSearchResultItem {
   taxonomyAreaIds?: string[];
+  importedAreaIds?: string[];
+  lifecycleStatuses?: string[];
   fullDescription: string | null;
   description: string;
   amountMin: number | null;

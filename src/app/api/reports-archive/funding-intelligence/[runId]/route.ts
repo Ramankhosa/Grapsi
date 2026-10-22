@@ -1,3 +1,4 @@
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 /**
  * One funding-intelligence (idea analysis) run, read-only, for the archive.
  *
@@ -15,7 +16,7 @@ import { loadFundingIntelligenceReport } from '@/lib/reportsArchive/query'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: NextRequest, { params }: { params: { runId: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { runId: string } }) {
   const viewer = await requireArchiveViewer(request)
   if ('response' in viewer) return viewer.response
 
@@ -57,3 +58,5 @@ export async function GET(request: NextRequest, { params }: { params: { runId: s
     return NextResponse.json({ error: 'Could not load this report.' }, { status: 500 })
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_INTELLIGENCE')

@@ -1,3 +1,4 @@
+import { syncCatalogueAreaIndex } from '@/lib/catalogueProtection/areas'
 /**
  * The external catalogue importer: dry run (report only) and apply.
  *
@@ -519,6 +520,7 @@ export async function runCatalogImport(options: RunImportOptions): Promise<{ run
     })
     await writeReviewItems(db, run.id, reviewItems, callIdByExternal, log)
     await refreshReviewStatus(db, run.id, Array.from(callIdByExternal.values()))
+    await syncCatalogueAreaIndex(db)
     if (options.isFullSnapshot && !options.limit) {
       const seen = calls.map((call) => call.externalId)
       await db.externalSourceRecord.updateMany({

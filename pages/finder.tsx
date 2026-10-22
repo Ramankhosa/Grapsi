@@ -35,6 +35,8 @@ const defaultFilters: Required<RecommendationSearchFilters> = {
   applicationLanguages: [],
   sponsorTypes: [],
   taxonomyAreaIds: [],
+  importedAreaIds: [],
+  lifecycleStatuses: ['OPEN', 'ROLLING'],
   funderIds: [],
   sdgGoals: [],
   programmeFrameworks: [],
@@ -59,7 +61,7 @@ const defaultFilters: Required<RecommendationSearchFilters> = {
 
 const manualDefaultFilters: Required<RecommendationSearchFilters> = {
   ...defaultFilters,
-  limit: 8,
+  limit: 12,
   sort: 'best_match',
 };
 
@@ -106,6 +108,7 @@ function decodeDirectoryFilters(raw: unknown): DirectoryFilters {
           : typeof value === typeof fallback;
       if (ok) out[key] = value;
     }
+    if (parsed.includeExpired === true && !('lifecycleStatuses' in parsed)) out.lifecycleStatuses = [];
     return out as DirectoryFilters;
   } catch {
     return manualDefaultFilters;
@@ -117,7 +120,7 @@ export default function FinderPage() {
   const router = useRouter();
   const projectId = typeof router.query.projectId === 'string' ? router.query.projectId : null;
 
-  const [finderTab, setFinderTab] = useState<FinderTab>('ai');
+  const [finderTab, setFinderTab] = useState<FinderTab>('manual');
   const [preferences, setPreferences] = useState<FinderPreferenceValues>({
     useEligibilityProfile: false,
     usePublicationContext: false,
@@ -141,6 +144,7 @@ export default function FinderPage() {
   const [facetLabels, setFacetLabels] = useState<Record<string, string>>({});
   const directorySeq = useRef(0);
   const directoryBootRef = useRef(false);
+  const directoryFetchedRef = useRef(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   // Grant Studio is plan-gated. When the tenant's plan excludes it, the
   // "begin writing" affordances are hidden rather than 403-ing on click.
@@ -156,7 +160,7 @@ export default function FinderPage() {
 
   const chat = useFinderChat({
     authFetch,
-    enabled: Boolean(user),
+    enabled: Boolean(user) && router.isReady && router.query.tab === 'ai',
     preferences,
     finderContext,
     onError: setError,
@@ -222,9 +226,11 @@ export default function FinderPage() {
     const page = options.page ?? 1;
     const prefs = options.prefs ?? preferences;
     const withFacets = options.facets ?? true;
+    directoryFetchedRef.current = true;
     const seq = ++directorySeq.current;
 
     setManualActiveQuery(query);
+    setManualPage(page);
     setManualFilters(filters);
     setManualLoading(true);
     if (withFacets) setDirectoryFacetsLoading(true);
@@ -291,8 +297,8 @@ export default function FinderPage() {
   useEffect(() => {
     if (!user || !router.isReady || directoryBootRef.current) return;
     directoryBootRef.current = true;
-    const fromLink = router.query.tab === 'directory';
-    if (fromLink) setFinderTab('manual');
+    setFinderTab(router.query.tab === 'ai' ? 'ai' : 'manual');
+    if (router.query.tab === 'ai') return;
     const query = typeof router.query.q === 'string' ? router.query.q.slice(0, 300) : '';
     const page = Number(router.query.page) > 1 ? Math.floor(Number(router.query.page)) : 1;
     setManualQuery(query);
@@ -300,13 +306,30 @@ export default function FinderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, router.isReady]);
 
+  useEffect(() => {
+    if (!user || !router.isReady) return;
+    const tab = router.query.tab === 'ai' ? 'ai' : 'manual';
+    setFinderTab(tab);
+    if (tab === 'manual' && directoryBootRef.current) {
+      const query = typeof router.query.q === 'string' ? router.query.q : '';
+      const filters = decodeDirectoryFilters(router.query.f);
+      const page = Math.max(1, Number(router.query.page) || 1);
+      if (!directoryFetchedRef.current || query !== manualActiveQuery || JSON.stringify(filters) !== JSON.stringify(manualFilters) || page !== manualPage) {
+        setManualQuery(query);
+        runDirectory({query,filters,page,syncUrl:false}).catch(()=>undefined);
+      }
+    }
+    // Navigation changes drive restoration, not each result state update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.asPath, router.isReady, user]);
+
   function handleSelectTab(tab: FinderTab) {
     setFinderTab(tab);
     if (tab === 'manual') {
       writeDirectoryUrl(manualActiveQuery, manualFilters, manualPage);
     } else {
       const kept = Object.fromEntries(Object.entries(router.query).filter(([key]) => !DIRECTORY_URL_KEYS.includes(key)));
-      router.replace({ pathname: router.pathname, query: kept }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
+      router.replace({ pathname: router.pathname, query: { ...kept, tab: 'ai' } }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
     }
   }
 

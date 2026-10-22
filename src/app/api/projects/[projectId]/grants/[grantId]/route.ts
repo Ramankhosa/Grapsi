@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { authenticateUser } from '@/lib/auth-middleware'
@@ -199,7 +201,7 @@ async function resolveProjectGrantPrepSession(input: {
   }
 }
 
-export async function GET(
+async function catalogueGET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
@@ -313,3 +315,5 @@ export async function GET(
     }),
   })
 }
+
+export const GET = withCatalogueSourceProtection(catalogueGET)

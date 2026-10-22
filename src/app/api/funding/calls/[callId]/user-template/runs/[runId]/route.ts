@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
@@ -6,7 +8,7 @@ import { fundingTemplateService } from '@/lib/fundingTemplates/service'
 
 export const runtime = 'nodejs'
 
-export async function GET(
+async function catalogueGET(
   request: NextRequest,
   { params }: { params: { callId: string; runId: string } }
 ) {
@@ -31,3 +33,5 @@ export async function GET(
     )
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')

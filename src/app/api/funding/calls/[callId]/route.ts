@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
@@ -136,7 +138,7 @@ function summarizeGuidelineBundle(bundle: unknown) {
   }
 }
 
-export async function GET(request: NextRequest, { params }: { params: { callId: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { callId: string } }) {
   const auth = await requireFundingImporterRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -239,3 +241,5 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     return NextResponse.json({ error: 'Failed to fetch funding call' }, { status: 500 })
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')

@@ -1,3 +1,4 @@
+import { protectCatalogueAiContext } from '@/lib/catalogueProtection/guard'
 // @ts-nocheck
 import prisma from '@/lib/prisma';
 import { fundingCallAccessWhere } from '@/lib/funding/callAccess';
@@ -113,6 +114,7 @@ export function citationsFromChunks(chunks: FundingDocumentSearchResult[]) {
 
 export class FundingDocumentQaService {
   async answerQuestion(request: FundingDocumentQaRequest): Promise<FundingDocumentQaResponse> {
+    await protectCatalogueAiContext([request.callId]);
     const question = String(request.question || '').trim();
     if (!question) {
       throw new Error('Question is required');
@@ -154,7 +156,7 @@ export class FundingDocumentQaService {
       callStatus: 'any',
       topK: 6,
       minSimilarity: 0.25,
-      access: request.access,
+      access: request.access || {tenantId:null,isSuperAdmin:false},
       llmContext: request.llmContext,
     });
 
@@ -165,7 +167,7 @@ export class FundingDocumentQaService {
         callStatus: 'any',
         topK: 6,
         minSimilarity: 0.22,
-        access: request.access,
+        access: request.access || {tenantId:null,isSuperAdmin:false},
         llmContext: request.llmContext,
       });
       const byId = new Map([...chunks, ...widened].map((chunk) => [chunk.chunkId, chunk]));
@@ -276,6 +278,7 @@ export interface FundingDocumentChatAnswer {
 export async function answerCallQuestionForChat(
   request: FundingDocumentChatAnswerRequest
 ): Promise<FundingDocumentChatAnswer> {
+  await protectCatalogueAiContext([request.callId]);
   const question = String(request.question || '').trim();
   if (!question) {
     throw new Error('Question is required');
@@ -330,7 +333,7 @@ export async function answerCallQuestionForChat(
         callStatus: 'any',
         topK: 6,
         minSimilarity: 0.25,
-        access: request.access,
+        access: request.access || {tenantId:null,isSuperAdmin:false},
         llmContext: request.llmContext,
       });
 
@@ -342,7 +345,7 @@ export async function answerCallQuestionForChat(
           callStatus: 'any',
           topK: 6,
           minSimilarity: 0.22,
-          access: request.access,
+          access: request.access || {tenantId:null,isSuperAdmin:false},
           llmContext: request.llmContext,
         });
         const byId = new Map([...chunks, ...widened].map((chunk) => [chunk.chunkId, chunk]));

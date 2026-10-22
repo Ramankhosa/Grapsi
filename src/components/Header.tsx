@@ -312,6 +312,7 @@ export default function Header() {
           items: [
             { href: '/dashboard', icon: '\u{1F3E0}', title: 'Dashboard', description: 'Your home screen and what is waiting on you' },
             { href: '/guide', icon: '\u{1F5FA}\uFE0F', title: 'Where everything is', description: 'A directory of every screen and who it is for' },
+            { href: '/profile/funding-access', icon: '\u{1F512}', title: 'Funding access', description: 'Manage signed-in sessions and viewing allowances' },
             { href: '/funding/my-areas', icon: '\u{1F3AF}', title: 'Funding in My Areas', description: 'Open calls matching your profile and papers, no query needed' },
             ...(canUseGrantStudio
               ? [{ href: '/projects', icon: '\u{1F4C1}', title: 'Projects', description: 'Your grant projects and their drafting workspaces' }]
@@ -497,6 +498,7 @@ export default function Header() {
             label: 'Funding catalog',
             items: [
               { href: '/super-admin/funding', icon: '\u{1F4BC}', title: 'Funding Control', description: 'Platform-wide call intake, catalog curation and publishing' },
+              ...(has('SUPER_ADMIN') ? [{ href: '/admin/funding/catalogue-security', icon: '\u{1F512}', title: 'Catalogue security', description: 'Review access, restrictions and temporary allowances' }] : []),
               { href: '/funding/monitor', icon: '\u{1F4E1}', title: 'Source Watch', description: 'Watch funder websites and confirm what they publish' },
             ],
           },

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -16,7 +18,7 @@ const refineSchema = z.object({
   editedIdeaText: z.string().min(50).max(12000).optional(),
 })
 
-export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { runId: string } }) {
   const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
@@ -45,3 +47,5 @@ export async function POST(request: NextRequest, { params }: { params: { runId: 
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to refine idea' }, { status: 500 })
   }
 }
+
+export const POST=withCatalogueProtection(cataloguePOST,'ai','FUNDING_INTELLIGENCE')

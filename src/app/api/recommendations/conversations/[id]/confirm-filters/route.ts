@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -7,7 +9,6 @@ import {
   conversationQueryPatchSchema,
 } from '@/lib/recommendations/messageSchema'
 import {
-  enforceChatRateLimit,
   requireRecommendationTenantUser,
   toRecommendationAccessScope,
 } from '@/lib/recommendations/request-auth'
@@ -27,14 +28,12 @@ const requestSchema = conversationContextFlagsSchema.extend({
  * search and generates an LLM narrative, so it shares the chat rate bucket and
  * — unlike the other filter routes — reserves a FUNDING_CHAT message slot.
  */
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function cataloguePOST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
-  const limited = enforceChatRateLimit(auth.userId)
-  if (limited) return limited
 
   try {
     const parsed = requestSchema.parse(await request.json().catch(() => ({})))
@@ -50,3 +49,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return recommendationErrorResponse(error, 'Failed to confirm pending filter patch')
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'ai', 'FUNDING_CHAT')

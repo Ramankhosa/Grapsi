@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -20,7 +22,7 @@ const requestSchema = z.object({
   }).nullable().optional(),
 });
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireRecommendationUser(request);
   if ('response' in auth) {
     return auth.response;
@@ -55,3 +57,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST=withCatalogueProtection(cataloguePOST,'detail')

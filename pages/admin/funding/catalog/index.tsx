@@ -52,9 +52,11 @@ type ResearchAreaCoverage = {
 const STATUS_OPTIONS = ['ALL', 'DRAFT', 'PUBLISHED', 'ARCHIVED', 'REJECTED'] as const;
 
 export default function FundingCatalogAdminPage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const [calls, setCalls] = useState<CatalogCallSummary[]>([]);
+  const [page,setPage] = useState(1);
+  const [total,setTotal] = useState(0);
   const [coverage, setCoverage] = useState<EmbeddingCoverage | null>(null);
   const [embeddingHealth, setEmbeddingHealth] = useState<EmbeddingHealth | null>(null);
   const [researchAreaCoverage, setResearchAreaCoverage] = useState<ResearchAreaCoverage | null>(null);
@@ -83,17 +85,18 @@ export default function FundingCatalogAdminPage() {
     if (user && isFundingOperator) {
       void loadCalls();
     }
-  }, [user, isFundingOperator]);
+  }, [user, isFundingOperator, page, statusFilter]);
 
   async function loadCalls() {
     setLoading(true);
     try {
-      const response = await fetch('/api/admin/funding/calls');
+      const response = await authFetch(`/api/admin/funding/calls?page=${page}&status=${statusFilter}`);
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to load funding catalog');
+        throw new Error(data.error || data.message || 'Failed to load funding catalog');
       }
       setCalls(data.calls || []);
+      setTotal(data.total||0);
       setCoverage(data.coverage || null);
       setEmbeddingHealth(data.embeddingHealth || null);
       setResearchAreaCoverage(data.researchAreaCoverage || null);
@@ -107,7 +110,7 @@ export default function FundingCatalogAdminPage() {
   async function runBackfill(target: 'funding_calls' | 'research_areas' | 'all') {
     setBackfillBusy(target);
     try {
-      const response = await fetch('/api/admin/funding/embeddings/backfill', {
+      const response = await authFetch('/api/admin/funding/embeddings/backfill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target, limit: 25 }),
@@ -294,7 +297,7 @@ export default function FundingCatalogAdminPage() {
             <div className="flex flex-wrap items-center gap-3">
               <select
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number])}
+                onChange={(event) => {setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number]);setPage(1)}}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
               >
                 {STATUS_OPTIONS.map((option) => (
@@ -310,6 +313,9 @@ export default function FundingCatalogAdminPage() {
               >
                 Refresh
               </button>
+              <button type="button" disabled={page===1} onClick={()=>setPage(value=>value-1)}>Previous</button>
+              <span className="text-sm">Page {page} of {Math.max(1,Math.ceil(total/50))}</span>
+              <button type="button" disabled={page*50>=total} onClick={()=>setPage(value=>value+1)}>Next</button>
             </div>
           </div>
 

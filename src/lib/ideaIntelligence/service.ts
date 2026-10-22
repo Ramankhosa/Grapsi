@@ -1,3 +1,4 @@
+import { protectCatalogueAiContext } from '@/lib/catalogueProtection/guard'
 import { Prisma } from '@prisma/client'
 
 import prisma from '@/lib/prisma'
@@ -440,6 +441,7 @@ const ANCHORED_CALL_SELECT = {
 } satisfies Prisma.FundingCallSelect
 
 export async function loadAnchoredFundingCall(callId: string, access: RecommendationAccessScope) {
+  await protectCatalogueAiContext([callId])
   try {
     return await prisma.fundingCall.findFirst({
       where: { AND: [{ id: callId }, fundingCallAccessWhere(access)] },
@@ -1541,7 +1543,9 @@ export class IdeaIntelligenceService {
       where: { userId }, orderBy: { createdAt: 'desc' }, take: Math.min(Math.max(limit, 1), 50),
       include: { version: true },
     })
-    return runs.map(publicRun)
+    // Sidebar/history listings never need the retained catalogue evidence or
+    // full reports; the individually authorised run endpoint loads those.
+    return runs.map(run => ({id:run.id,title:run.title,status:run.status,currentStage:run.currentStage,createdAt:run.createdAt,updatedAt:run.updatedAt,sessionId:run.sessionId,versionId:run.versionId,versionNumber:run.version?.versionNumber??null,scores:run.scoresJson}))
   }
 
   // ---------------------------------------------------------------------------
@@ -1799,6 +1803,8 @@ ${CALL_ITEM_RULES}
     const run = await prisma.ideaIntelligenceRun.findFirst({ where: { id: runId, userId } })
     if (!run) throw new Error('Idea analysis not found')
     if (run.status !== 'COMPLETED') throw new Error('Finding funding opportunities is available after the analysis completes.')
+    const retrieval = run.retrievalResultsJson as {fundingCalls?:Array<{id:string}>} | null
+    await protectCatalogueAiContext((retrieval?.fundingCalls||[]).slice(0,10).map(call=>call.id))
     return run
   }
 
@@ -2305,6 +2311,7 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
       const comparisonCalls = Array.from(callRoles.entries()).map(([callId, role]) =>
         buildComparisonCallPayload(callId, role, anchoredCall, fundingCalls)
       )
+      await protectCatalogueAiContext(fundingCalls.slice(0,10).map(call=>call.id))
       const comparisonResponse = await runFundingGatewayText({
         taskCode: IDEA_INTELLIGENCE_TASK_CODE,
         stageCode: IDEA_INTELLIGENCE_EVIDENCE_MAP_STAGE_CODE,

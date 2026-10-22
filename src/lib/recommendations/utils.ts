@@ -533,6 +533,8 @@ export function normalizeRecommendationSearchRequest(
     applicationLanguages:
       normalizeApplicationLanguageList(clampArray(filters.applicationLanguages || [], 20)) || [],
     sponsorTypes: normalizeSponsorTypeList(clampArray(filters.sponsorTypes || [], 20)) || [],
+    importedAreaIds: clampArray(filters.importedAreaIds || [], 50),
+    lifecycleStatuses: clampArray(filters.lifecycleStatuses || [], 5).filter(s => ['OPEN','ROLLING','FORTHCOMING','CLOSED','UNKNOWN'].includes(s)),
     taxonomyAreaIds: clampArray(filters.taxonomyAreaIds || [], 50),
     funderIds: clampArray(filters.funderIds || [], 20).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id)),
     sdgGoals: normalizeSdgGoalList(clampArray(filters.sdgGoals || [], 17)) || [],
@@ -552,7 +554,7 @@ export function normalizeRecommendationSearchRequest(
     amountCurrency: normalizeCurrencyCode(filters.amountCurrency) || '',
     includeUnknownAmount: Boolean(filters.includeUnknownAmount),
     includeExpired: Boolean(filters.includeExpired),
-    limit: Math.min(Math.max(filters.limit || 10, 1), 25),
+    limit: Math.min(Math.max(filters.limit || 12, 1), 50),
     sort: filters.sort === 'deadline_soonest' ? 'deadline_soonest' : 'best_match',
   };
 
@@ -661,6 +663,8 @@ export function summarizeFilters(filters: RecommendationSearchFilters): string {
     filters.careerStages?.length ? `careerStages=${filters.careerStages.length}` : '',
     filters.sponsorTypes?.length ? `sponsorTypes=${filters.sponsorTypes.length}` : '',
     filters.taxonomyAreaIds?.length ? `taxonomyAreaIds=${filters.taxonomyAreaIds.length}` : '',
+    filters.importedAreaIds?.length ? `importedAreaIds=${filters.importedAreaIds.length}` : '',
+    filters.lifecycleStatuses?.length ? `lifecycleStatuses=${filters.lifecycleStatuses.join(',')}` : '',
     filters.funderIds?.length ? `funderIds=${filters.funderIds.length}` : '',
     filters.sdgGoals?.length ? `sdgGoals=${filters.sdgGoals.length}` : '',
     filters.programmeFrameworks?.length ? `programmeFrameworks=${filters.programmeFrameworks.length}` : '',

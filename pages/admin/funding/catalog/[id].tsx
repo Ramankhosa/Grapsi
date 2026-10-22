@@ -73,7 +73,7 @@ function toggleArrayValue(currentValue: unknown, nextValue: string): string[] {
 }
 
 export default function FundingCatalogDetailPage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const { id } = router.query;
   const [details, setDetails] = useState<CatalogDetails | null>(null);
@@ -127,9 +127,9 @@ export default function FundingCatalogDetailPage() {
 
     try {
       const [response, taxonomyResponse, mappingsResponse] = await Promise.all([
-        fetch(`/api/admin/funding/calls/${id}`),
-        fetch('/api/super-admin/research-area-taxonomy'),
-        fetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`),
+        authFetch(`/api/admin/funding/calls/${id}`),
+        authFetch('/api/super-admin/research-area-taxonomy'),
+        authFetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`),
       ]);
 
       const data = await response.json();
@@ -184,7 +184,7 @@ export default function FundingCatalogDetailPage() {
 
     setSaving(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draftValues),
@@ -214,7 +214,7 @@ export default function FundingCatalogDetailPage() {
 
     setActing(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/${action}`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/${action}`, {
         method: 'POST',
       });
       const data = await response.json();
@@ -285,7 +285,7 @@ export default function FundingCatalogDetailPage() {
 
     setTaxonomySaving(true);
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`, {
+      const response = await authFetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taxonomyAreaIds: selectedTaxonomyAreaIds }),

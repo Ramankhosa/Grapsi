@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingPublisherRequest } from '@/lib/fundingIntake/routeAuth'
@@ -5,7 +7,7 @@ import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
 
 export const runtime = 'nodejs'
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireFundingPublisherRequest(request)
   if ('response' in auth) {
     return auth.response
@@ -25,3 +27,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY')

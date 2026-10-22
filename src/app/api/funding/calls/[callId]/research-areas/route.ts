@@ -1,3 +1,4 @@
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -69,7 +70,7 @@ async function loadCall(callId: string) {
   })
 }
 
-export async function GET(request: NextRequest, { params }: { params: { callId: string } }) {
+async function catalogueGET(request: NextRequest, { params }: { params: { callId: string } }) {
   const context = await requireTenantUser(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
@@ -120,7 +121,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   })
 }
 
-export async function PUT(request: NextRequest, { params }: { params: { callId: string } }) {
+async function cataloguePUT(request: NextRequest, { params }: { params: { callId: string } }) {
   const context = await requireTenantUser(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
@@ -221,3 +222,7 @@ export async function PUT(request: NextRequest, { params }: { params: { callId: 
 
   return NextResponse.json({ ok: true, manualAreas: areas.length })
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'detail', 'FUNDING_DISCOVERY')
+
+export const PUT = withCatalogueProtection(cataloguePUT, 'detail', 'FUNDING_DISCOVERY')

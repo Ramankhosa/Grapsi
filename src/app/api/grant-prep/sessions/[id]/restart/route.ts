@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
@@ -5,7 +7,7 @@ import { serializeGrantPrepSession } from '@/lib/grantPrep/compat'
 import { createOrReuseGrantPrepSession, loadGrantPrepSession } from '@/lib/grantPrep/server'
 import type { GrantPrepStageKey } from '@/lib/grantPrep/types'
 
-export async function POST(
+async function cataloguePOST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -66,3 +68,5 @@ export async function POST(
     )
   }
 }
+
+export const POST = withCatalogueSourceProtection(cataloguePOST)

@@ -1,8 +1,8 @@
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { authenticateUser } from '@/lib/auth-middleware'
 import {
-  MY_AREAS_DEFAULT_LIMIT,
   findCallsInMyAreas,
   type MyAreasStatus,
 } from '@/lib/funding/myAreasService'
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic'
  * The calls that match the signed-in researcher.
  *
  * Deliberately the plainest endpoint in the funding surface: it takes no query
- * text, spends no quota and makes no LLM call, because it compares vectors both
+ * text, makes no paid model call, because it compares vectors both
  * sides already have. That is the whole point — the researcher should be able
  * to press a button and see their calls, rather than describe their own work to
  * a chatbot to be told what the system already knew.
@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic'
  * Always scoped to the caller. There is no `userId` parameter, so this cannot
  * become a way to read someone else's research profile by proxy.
  */
-export async function GET(request: NextRequest) {
+async function catalogueGET(request: NextRequest) {
   const auth = await authenticateUser(request)
   if (auth.error || !auth.user) {
     return NextResponse.json(
@@ -36,12 +36,14 @@ export async function GET(request: NextRequest) {
     requested === 'expired' || requested === 'all' ? (requested as MyAreasStatus) : 'active'
 
   const limitParam = Number(searchParams.get('limit'))
-  const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : MY_AREAS_DEFAULT_LIMIT
+  const limit = Math.min(50,Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 12)
+  const offset = Math.max(0,Math.min(10000,Math.floor(Number(searchParams.get('offset'))||0)))
 
   try {
     const result = await findCallsInMyAreas(auth.user.id, auth.user.tenantId ?? null, {
       status,
       limit,
+      offset,
     })
     return NextResponse.json({ status, ...result })
   } catch (error) {
@@ -49,3 +51,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Could not work out your matching calls.' }, { status: 500 })
   }
 }
+
+export const GET = withCatalogueProtection(catalogueGET, 'summary', 'FUNDING_DISCOVERY')

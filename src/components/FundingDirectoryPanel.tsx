@@ -1,3 +1,4 @@
+import ImportedAreaPicker from './finder/ImportedAreaPicker';
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ExternalLink, Globe2, Search, SlidersHorizontal, X } from 'lucide-react';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
@@ -29,7 +30,7 @@ const FACET_LABEL: Record<DirectoryFacetDimension, string> = {
   fundingKind: 'Funding type',
   funder: 'Funder',
   sponsorType: 'Funder type',
-  taxonomyArea: 'Research area',
+  taxonomyArea: 'Previous Grapsi areas',
   sdgGoal: 'Sustainable Development Goal',
   programmeFramework: 'Programme',
   region: 'Region',
@@ -119,7 +120,7 @@ function appliedChips(filters: Filters, labelFor: (dimension: DirectoryFacetDime
         : `Deadline by ${formatDay(filters.deadlineTo)}`;
     chips.push({ key: 'deadline', label, remove: (current) => ({ ...current, deadlineFrom: '', deadlineTo: '' }) });
   }
-  if (filters.rollingOnly) chips.push({ key: 'rolling', label: 'Rolling calls only', remove: (current) => ({ ...current, rollingOnly: false }) });
+  if (filters.rollingOnly) chips.push({ key: 'rolling', label: 'Rolling calls only', remove: (current) => ({ ...current, rollingOnly: false, lifecycleStatuses:['OPEN','ROLLING'] }) });
   if (filters.noMembershipNeeded) {
     chips.push({ key: 'membership', label: 'No society membership needed', remove: (current) => ({ ...current, noMembershipNeeded: false }) });
   }
@@ -343,7 +344,7 @@ function DeadlineControl({ filters, onChange }: { filters: Filters; onChange: (f
         <input
           type="checkbox"
           checked={filters.rollingOnly}
-          onChange={(event) => onChange({ ...filters, rollingOnly: event.target.checked })}
+          onChange={(event) => onChange({ ...filters, rollingOnly: event.target.checked, lifecycleStatuses:event.target.checked?['ROLLING']:['OPEN','ROLLING'] })}
           className="h-3.5 w-3.5 accent-cobalt-600"
         />
         Rolling calls only
@@ -352,7 +353,7 @@ function DeadlineControl({ filters, onChange }: { filters: Filters; onChange: (f
         <input
           type="checkbox"
           checked={filters.includeExpired}
-          onChange={(event) => onChange({ ...filters, includeExpired: event.target.checked })}
+          onChange={(event) => onChange({ ...filters, includeExpired: event.target.checked, lifecycleStatuses: event.target.checked ? [] : ['OPEN','ROLLING'] })}
           className="h-3.5 w-3.5 accent-cobalt-600"
         />
         Include closed calls
@@ -686,6 +687,12 @@ export default function FundingDirectoryPanel({
 }: FundingDirectoryPanelProps) {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [wideLayout,setWideLayout]=useState(false);
+  useEffect(()=>{
+    const media=window.matchMedia('(min-width: 1024px)');
+    const update=()=>{setWideLayout(media.matches);if(media.matches)setMobileFiltersOpen(false)};
+    update();media.addEventListener('change',update);return()=>media.removeEventListener('change',update);
+  },[]);
   const funderNames = useFunderNames(filters.funderIds);
 
   const labelFor = useMemo(() => {
@@ -706,8 +713,8 @@ export default function FundingDirectoryPanel({
   const items = (dimension: DirectoryFacetDimension) => facets?.facets[dimension] || [];
   const activePreferenceCount = (preferences.useEligibilityProfile ? 1 : 0) + (preferences.usePublicationContext ? 1 : 0);
   const busy = loading || facetsLoading;
-  const resultNoun = filters.includeExpired ? 'calls' : 'open calls';
-  const set = onFiltersChange;
+  const resultNoun = filters.lifecycleStatuses.length === 2 && filters.lifecycleStatuses.includes('OPEN') && filters.lifecycleStatuses.includes('ROLLING') ? 'open or rolling calls' : 'calls';
+  const set = (next:Required<RecommendationSearchFilters>) => onFiltersChange({...next,rollingOnly:next.lifecycleStatuses.length===1&&next.lifecycleStatuses[0]==='ROLLING'});
 
   const rail = (
     <div className={facetsLoading ? 'opacity-70 transition-opacity' : 'transition-opacity'}>
@@ -742,6 +749,10 @@ export default function FundingDirectoryPanel({
         </label>
       </RailSection>
 
+      <RailSection title="Call status">
+        {(['OPEN','ROLLING','FORTHCOMING','CLOSED','UNKNOWN'] as const).map(status=><label key={status} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={filters.lifecycleStatuses.includes(status)} onChange={()=>set({...filters,lifecycleStatuses:filters.lifecycleStatuses.includes(status)?filters.lifecycleStatuses.filter(s=>s!==status):[...filters.lifecycleStatuses,status],includeExpired:true})}/>{({OPEN:'Open',ROLLING:'Rolling',FORTHCOMING:'Upcoming',CLOSED:'Closed',UNKNOWN:'Unknown deadline'})[status]}</label>)}
+        {!filters.lifecycleStatuses.length&&<p className="cb-hint">All statuses are included.</p>}
+      </RailSection>
       <RailSection title="Deadline">
         <DeadlineControl filters={filters} onChange={set} />
       </RailSection>
@@ -775,7 +786,8 @@ export default function FundingDirectoryPanel({
       </RailSection>
 
       <RailSection title="Research">
-        <FacetGroup dimension="taxonomyArea" items={items('taxonomyArea')} filters={filters} labelFor={labelFor} onChange={set} defaultOpen />
+        <ImportedAreaPicker filters={filters} query={activeQuery} onChange={set} />
+        <FacetGroup dimension="taxonomyArea" items={items('taxonomyArea')} filters={filters} labelFor={labelFor} onChange={set} />
         <FacetGroup dimension="sdgGoal" items={items('sdgGoal')} filters={filters} labelFor={labelFor} onChange={set} />
         <FacetGroup dimension="programmeFramework" items={items('programmeFramework')} filters={filters} labelFor={labelFor} onChange={set} />
       </RailSection>
@@ -859,12 +871,12 @@ export default function FundingDirectoryPanel({
 
       <div className="grid gap-4 lg:grid-cols-[288px_minmax(0,1fr)]">
         {/* Filter rail — desktop */}
-        <aside className="hidden lg:block" aria-label="Filters">
+        {wideLayout ? <aside className="hidden lg:block" aria-label="Filters">
           <div className="cb-card sticky top-32 max-h-[calc(100vh-10rem)] overflow-y-auto px-4 py-1">{rail}</div>
-        </aside>
+        </aside> : null}
 
         {/* Filter sheet — phones and tablets */}
-        {mobileFiltersOpen ? (
+        {!wideLayout&&mobileFiltersOpen ? (
           <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Filters">
             <button type="button" aria-label="Close filters" onClick={() => setMobileFiltersOpen(false)} className="absolute inset-0 bg-ink/25" />
             <div className="absolute inset-y-0 left-0 flex w-[90%] max-w-sm flex-col bg-ground shadow-cb-sheet">

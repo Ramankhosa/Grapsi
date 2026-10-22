@@ -1,4 +1,6 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server';
+import { withCatalogueProtection } from '@/lib/catalogueProtection/guard';
 
 import { requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth';
 import { isFundingDocumentSectionType } from '@/lib/fundingDocuments/constants';
@@ -7,7 +9,7 @@ import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 
 export const runtime = 'nodejs';
 
-export async function POST(request: NextRequest) {
+async function cataloguePOST(request: NextRequest) {
   const auth = await requireFundingReadOperatorRequest(request);
   if ('response' in auth) return auth.response;
 
@@ -47,3 +49,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withCatalogueProtection(cataloguePOST, 'detail', 'FUNDING_DISCOVERY');
