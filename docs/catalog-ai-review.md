@@ -175,3 +175,13 @@ The browser sends bounded chunks of ten frozen result IDs with confirmation hash
 
 
 The **AI confidence above (%)** filter applies to both saved result pagination and collective approval previews, defaulting to strictly greater than 90%. Blank includes all scores. A result at exactly 90% is excluded from a 90% cutoff. The server validates the range and applies the same cutoff during confirmation; confidence remains a self-reported score, not measured accuracy. Collective approval uses the newest accepted result per conflict within its selected batch scope, and does not fall back to older high-confidence results when the newest result falls below the cutoff.
+
+### Production deployment and human approvals — 22 October 2026
+
+Deployed `cd16997` with the confidence filter and collective approval controls; rebuilt the incoming app and restarted only `grantmentor`. Health, authenticated directory search, confidence-filter pagination and superadmin API checks passed. Local validation: 32 focused tests and TypeScript passed. No schema migration or additional model requests were needed.
+
+A fresh focused six-table backup and checksum are retained under production `backups/catalog-collective-20261022/`, alongside the plan, write-ahead approval journal, per-item outcomes and preservation checks. During the build, an intake call was edited through the existing workflow (guideline approval, discipline and save metadata). A comparison against the backup found no missing intake records; the change was documented and a fresh baseline captured. No live data was restored or overwritten.
+
+With the user's explicit acceptance of the reviewed predictions, applied **1,174 decisions strictly above 90% confidence**: 1,036 separate-call decisions and 138 same-call decisions. Four stale/already-resolved results were excluded from the initial plan; seven further results changed during processing and were skipped. No stale decision was forced. Confidence is a model score, not calibrated accuracy.
+
+Final state: 10,359 call records retained (239 intake and 10,120 imported). Imported calls: 8,390 published/clear, 1,225 staged/clear, 365 staged/needs-review, 140 rejected/archived. The 140 total includes previously archived records; this run applied 138 same-call archival decisions. There are 208 blocking conflicts still open. Call and source factual digests, alert digest, published count and original conflict IDs passed preservation checks; every captured intake/DSR/user/tenant row stayed unchanged during approval. Other PM2 processes retained their PIDs. Publication and embeddings for newly cleared calls remain separate.
