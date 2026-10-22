@@ -23,7 +23,10 @@ export async function readBoundedCatalogueJson(request:NextRequest){
 async function authorizeIds(c:Context,ids:string[]) {
   if(!ids.length)return
   const visible=buildFundingCallAccessWhere(c.actor,{includeCatalog:true,includeTenantDrafts:await actorCanSeeTenantDrafts(c.actor)})
-  const rows=await prisma.fundingCall.findMany({where:{AND:[{id:{in:ids}},{OR:[visible,...(c.actor.tenantId?[{tenantId:c.actor.tenantId,visibility:'TENANT_PRIVATE' as const,createdByUserId:c.actor.id}]:[])]}]},select:{id:true}})
+  // An empty platform scope means all records. In Prisma, adding that empty
+  // object to an OR beside an owner predicate can discard the platform scope.
+  const scope=Object.keys(visible).length?{OR:[visible,...(c.actor.tenantId?[{tenantId:c.actor.tenantId,visibility:'TENANT_PRIVATE' as const,createdByUserId:c.actor.id}]:[])]}:visible
+  const rows=await prisma.fundingCall.findMany({where:{AND:[{id:{in:ids}},scope]},select:{id:true}})
   if(rows.length!==new Set(ids).size)throw new CatalogueAccessError('NOT_FOUND','Funding call not found.',404)
 }
 /** Call before sending full call text into any user-facing model context. */

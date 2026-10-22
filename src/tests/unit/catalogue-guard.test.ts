@@ -24,6 +24,7 @@ describe('catalogue guard boundary',()=>{
   const handler=vi.fn(async()=>NextResponse.json({results:[{id:'call',schemeTitle:'Title',description:'a'.repeat(900),metadata:{secret:true},fullDescription:'hidden'}]}))
   const response=await withCatalogueProtection(handler)(request());expect(response.status).toBe(200)
   const result=await response.json();expect(result.results[0].description).toHaveLength(320);expect(JSON.stringify(result)).not.toContain('hidden');expect(mocks.reserve).toHaveBeenCalledWith({userId:'user',sessionId:'session'},'lease',['call'],'summary');expect(response.headers.get('cache-control')).toBe('private, no-store');expect(mocks.end).toHaveBeenCalledWith('lease')
+  expect(mocks.find.mock.calls[0][0].where.AND[1]).toEqual({})
  })
  it('rejects cross-scope record IDs before data leaves the boundary',async()=>{
   mocks.find.mockResolvedValue([]);const response=await withCatalogueProtection(async()=>NextResponse.json({results:[{id:'call',schemeTitle:'private'}]}))(request())
