@@ -1423,7 +1423,7 @@ export default function TenantFacultyPage() {
                         {group.level1Name}
                       </p>
                       <div className="mt-1 grid gap-1 sm:grid-cols-2">
-                        {group.areas.filter(area=>[area.level2Name,area.level1Name].some(name=>name.toLowerCase().includes(areaCatalogueQuery.toLowerCase()))).map(area => (
+                        {group.areas.filter(area=>[area.level2Name,group.level1Name].some(name=>name.toLowerCase().includes(areaCatalogueQuery.toLowerCase()))).map(area => (
                           <label
                             key={area.id}
                             className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-200"
