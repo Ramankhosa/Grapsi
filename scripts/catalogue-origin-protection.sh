@@ -36,6 +36,10 @@ zone.write_text('limit_req_zone $binary_remote_addr zone=grapsi_catalogue_flood:
 for name in ['aigrantmentor.com','aigrantmentor.online']:
  p=Path('/etc/nginx/sites-enabled',name).resolve()
  s=p.read_text()
+ if '# grapsi-private-funding-uploads' not in s:
+  import re
+  locations='\n    # grapsi-private-funding-uploads\n'+''.join('    location ^~ /uploads/funding-'+kind+'/ { return 404; }\n' for kind in ['documents','templates','intake'])
+  s=re.sub(r'(server_name\s+[^;]+;)',lambda m:m.group(1)+locations,s)
  if '# grapsi-catalogue-protection' not in s:
   import re
   s=re.sub(r'(server_name\s+[^;]+;)',r'\1\n    # grapsi-catalogue-protection\n    limit_req zone=grapsi_catalogue_flood burst=200 nodelay;\n    limit_req_status 429;\n    limit_conn grapsi_catalogue_connections 500;\n    limit_conn_status 429;',s)

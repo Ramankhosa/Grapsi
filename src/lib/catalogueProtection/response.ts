@@ -44,6 +44,7 @@ export function sanitizeCatalogueResponse(input:any, mode:CatalogueMode,preserve
         if(diagnostics?.strictFilterRecovery)out[k]={strictFilterRecovery:walk(diagnostics.strictFilterRecovery,'strictFilterRecovery')}
         continue
       }
+      if(/^(?:storage_?path|source_file_path)$/i.test(k))continue
       if(forbidden.test(k)&&!(mode==='detail'&&k==='fullDescription'))continue
       if(isChunk&&(!chunkFields.has(k)||(mode!=='detail'&&k==='chunkText')))continue
       if(isCall&&!common.has(k)&&!(mode==='detail'&&detail.has(k)))continue

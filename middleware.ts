@@ -5,6 +5,14 @@ export function middleware(request: NextRequest) {
   // Get the pathname of the request (e.g. /api/users, /dashboard)
   const { pathname } = request.nextUrl
 
+  // Source files are server-side evidence, never public catalogue downloads.
+  // Keep existing files in place for parsing, while closing static/image URLs.
+  const protectedUpload = /^\/uploads\/funding-(?:documents|templates|intake)(?:\/|$)/i
+  const imageSource = pathname === '/_next/image' ? request.nextUrl.searchParams.get('url') : null
+  if (protectedUpload.test(pathname) || (imageSource && protectedUpload.test(imageSource))) {
+    return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'private, no-store' } })
+  }
+
   // Skip middleware for static files, Next.js internals, and public assets
   if (
     pathname.startsWith('/_next/') ||
@@ -31,6 +39,6 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      */
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    '/((?!api|_next/static|favicon.ico).*)',
   ],
 }

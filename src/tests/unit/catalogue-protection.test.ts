@@ -36,6 +36,10 @@ describe('catalogue output and extraction controls',()=>{
     const safe=sanitizeCatalogueResponse({session:{metadata:{userSetting:'keep',embedding:[1]},call}},'detail',true)
     expect(safe.value.session.metadata.userSetting).toBe('keep');expect(safe.value.session.metadata).not.toHaveProperty('embedding');expect(safe.value.session.call).not.toHaveProperty('metadata')
   })
+  it('never exposes local source-file storage paths',()=>{
+    const safe=sanitizeCatalogueResponse({assets:[{id:'asset',file_name:'source.pdf',storage_path:'/var/www/private.pdf',source_file_path:'/private/intake.csv'}]},'detail')
+    expect(safe.value.assets[0]).toEqual({id:'asset',file_name:'source.pdf'})
+  })
   it('bounds citations and refuses oversized call lists',()=>{
     expect(sanitizeCatalogueResponse({citations:{resultIds:Array.from({length:20},(_,n)=>String(n))}},'ai').callIds).toHaveLength(10)
     expect(()=>sanitizeCatalogueResponse({results:Array(51).fill(call)},'summary')).toThrow()
