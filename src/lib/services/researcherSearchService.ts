@@ -13,6 +13,7 @@ import {
 } from '../recommendations/utils';
 import { EmbeddingService } from './embeddingService';
 import { voyageRerankService } from './voyageRerankService';
+import { callAreaRowsSql } from '@/lib/researchAreas/queries';
 
 const embeddingService = new EmbeddingService();
 
@@ -667,7 +668,7 @@ function buildRerankDocument(result: ResearcherSearchResult) {
   ].filter(Boolean).join('\n')).slice(0, 5000);
 }
 
-async function buildFundingCallQuery(fundingCallId: string) {
+export async function buildFundingCallQuery(fundingCallId: string) {
   const rows = await prisma.$queryRaw<Array<{
     id: string;
     title: string | null;
@@ -676,6 +677,7 @@ async function buildFundingCallQuery(fundingCallId: string) {
     description: string | null;
     eligibilityText: string | null;
     disciplines: string[];
+    classifiedAreas: string[];
     fundingKinds: string[];
   }>>(Prisma.sql`
     SELECT
@@ -686,7 +688,10 @@ async function buildFundingCallQuery(fundingCallId: string) {
       description,
       eligibility_text AS "eligibilityText",
       COALESCE(disciplines, ARRAY[]::text[]) AS disciplines,
-      COALESCE(funding_kinds, ARRAY[]::text[]) AS "fundingKinds"
+      COALESCE(funding_kinds, ARRAY[]::text[]) AS "fundingKinds",
+      ARRAY(SELECT DISTINCT coalesce(nullif(a.taxonomy_level2_name,''),a.taxonomy_level1_name)
+        FROM ${callAreaRowsSql()} a WHERE a.funding_call_id=${fundingCallId}
+        ORDER BY 1) AS "classifiedAreas"
     FROM funding_calls
     WHERE id = ${fundingCallId}
     LIMIT 1
@@ -701,7 +706,8 @@ async function buildFundingCallQuery(fundingCallId: string) {
     call.schemeTitle || call.title || '',
     call.agencyName ? `agency: ${call.agencyName}` : '',
     call.description || '',
-    call.disciplines.length ? `research areas: ${call.disciplines.join(', ')}` : '',
+    call.classifiedAreas.length ? `research areas: ${call.classifiedAreas.join(', ')}` :
+      call.disciplines.length ? `source topic hints: ${call.disciplines.join(', ')}` : '',
     call.fundingKinds.length ? `funding types: ${call.fundingKinds.join(', ')}` : '',
     call.eligibilityText ? `eligibility context: ${call.eligibilityText}` : '',
   ].filter(Boolean).join(' | '));

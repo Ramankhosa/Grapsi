@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
+import { callAreaRowsSql } from '@/lib/researchAreas/queries'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
@@ -60,10 +61,12 @@ export type CallMatchState = {
  * tenant's people. A changed profile re-censuses the calls, a changed call
  * re-censuses that call, and nothing else moves.
  */
-async function callFingerprint(tenantId: string, callId: string) {
+export async function callFingerprint(tenantId: string, callId: string) {
   const rows = await prisma.$queryRaw<Array<{ fingerprint: string }>>(Prisma.sql`
     SELECT md5(concat_ws('|', ${CALL_MATCH_CENSUS_VERSION},
       (SELECT concat_ws(':', id, "updatedAt", xmin::text) FROM funding_calls WHERE id = ${callId}),
+      (SELECT string_agg(concat_ws(':', a.taxonomy_area_id, a.taxonomy_level2_name, a.taxonomy_level1_name), ',' ORDER BY a.taxonomy_area_id)
+         FROM ${callAreaRowsSql()} a WHERE a.funding_call_id=${callId}),
       (SELECT string_agg(concat_ws(':', u.id, u."updatedAt", p.updated_at, p.org_unit_id, u.status, u.xmin::text, p.xmin::text)::text, ',' ORDER BY u.id)
          FROM users u LEFT JOIN researcher_profiles p ON p.user_id = u.id WHERE u."tenantId" = ${tenantId}),
       (SELECT string_agg(concat_ws(':', a.id, a.updated_at, a.xmin::text)::text, ',' ORDER BY a.id)
