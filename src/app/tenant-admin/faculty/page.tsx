@@ -187,6 +187,7 @@ export default function TenantFacultyPage() {
   const [areasTarget, setAreasTarget] = useState<{ id: string; name: string } | null>(null)
   const [catalog, setCatalog] = useState<CatalogGroup[]>([])
   const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([])
+  const [areaCatalogueQuery,setAreaCatalogueQuery]=useState('')
   const [previousScopeAreas,setPreviousScopeAreas]=useState<Array<{taxonomyAreaId:string;label:string}>>([])
   const [areaKeywords, setAreaKeywords] = useState('')
   const [inheritedAreas, setInheritedAreas] = useState<Array<{ label: string; unit_name: string }>>([])
@@ -513,6 +514,7 @@ export default function TenantFacultyPage() {
       if (!unitRes.ok) throw new Error(unitData.error || 'Could not load this unit&apos;s research areas')
 
       setCatalog(catalogData.groups || [])
+      setAreaCatalogueQuery('')
       setSelectedAreaIds((unitData.areas || []).map((area: { taxonomyAreaId: string }) => area.taxonomyAreaId))
       setPreviousScopeAreas((unitData.areas||[]).filter((area:{taxonomyAreaId:string})=>!area.taxonomyAreaId.startsWith('scientify:discipline:')))
       setAreaKeywords((unitData.keywords || []).join(', '))
@@ -1413,6 +1415,7 @@ export default function TenantFacultyPage() {
                 )}
 
                 {previousScopeAreas.length>0&&<fieldset className="mt-4 space-y-2 rounded border border-amber-200 bg-amber-50 p-3"><legend className="text-sm font-semibold">Previous routing scope</legend><p className="text-xs">These saved settings keep existing coverage while standard areas are reviewed. Uncheck a setting only when you intend to remove that coverage. Existing assignments remain.</p>{previousScopeAreas.map(area=><label className="flex gap-2 text-sm" key={area.taxonomyAreaId}><input type="checkbox" checked={selectedAreaIds.includes(area.taxonomyAreaId)} onChange={()=>setSelectedAreaIds(ids=>ids.includes(area.taxonomyAreaId)?ids.filter(id=>id!==area.taxonomyAreaId):[...ids,area.taxonomyAreaId])}/>{area.label}</label>)}</fieldset>}
+                <input type="search" aria-label="Search standard research areas" placeholder="Search standard research areas" className="mt-4 w-full rounded border border-gray-300 p-2 text-sm" value={areaCatalogueQuery} onChange={e=>setAreaCatalogueQuery(e.target.value)}/>
                 <div className="mt-4 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-3">
                   {catalog.map(group => (
                     <div key={group.level1Code} className="mb-3 last:mb-0">
@@ -1420,7 +1423,7 @@ export default function TenantFacultyPage() {
                         {group.level1Name}
                       </p>
                       <div className="mt-1 grid gap-1 sm:grid-cols-2">
-                        {group.areas.map(area => (
+                        {group.areas.filter(area=>[area.level2Name,area.level1Name].some(name=>name.toLowerCase().includes(areaCatalogueQuery.toLowerCase()))).map(area => (
                           <label
                             key={area.id}
                             className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-200"
