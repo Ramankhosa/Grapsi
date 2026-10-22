@@ -49,6 +49,7 @@ describe('catalogue output and extraction controls',()=>{
 })
 describe('catalogue route coverage',()=>{
   it('keeps registered catalogue reads behind the shared guard',()=>{
+    expect(Object.keys(manifest).length).toBeGreaterThanOrEqual(75)
     for(const [file,rule]of Object.entries(manifest)){
       const code=readFileSync(path.resolve(file),'utf8')
       const guard=rule.guard||'withCatalogueProtection'

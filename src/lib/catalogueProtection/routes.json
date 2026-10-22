@@ -1,1 +1,572 @@
-{}
+{
+  "src/app/api/admin/funding/ai-review/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/bulk-publish/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/delete-all/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/route.ts": {
+    "methods": [
+      "GET",
+      "PATCH"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/archive/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/documents/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/documents/[documentId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/documents/[documentId]/activate/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/documents/[documentId]/reembed/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/documents/[documentId]/reprocess/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/guidelines/route.ts": {
+    "methods": [
+      "GET",
+      "POST",
+      "PUT"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/guidelines/approve/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/guidelines/extract/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/guidelines/revert/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/guidelines/runs/[runId]/apply/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/publish/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/reject/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/research-area-taxonomy/route.ts": {
+    "methods": [
+      "GET",
+      "PUT"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/route.ts": {
+    "methods": [
+      "GET",
+      "POST",
+      "PUT"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/approve/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/assets/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/assets/intake/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/extract/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/revert/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/calls/[id]/template/runs/[runId]/apply/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/document-search/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/import-review/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/import-review/promote/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/admin/funding/import-review/promoted/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/chatbot/funding-detailed-analysis/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/publish/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/qa/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/research-areas/route.ts": {
+    "methods": [
+      "GET",
+      "PUT"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/start-grant-prep/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/summary/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-guidelines/accept/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-guidelines/extract/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-guidelines/runs/[runId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-template/accept/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-template/extract/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/calls/[callId]/user-template/runs/[runId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/funding/my-areas/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/grant-prep/sessions/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/active-stage/route.ts": {
+    "methods": [
+      "PUT"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/archive/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/draft-zero/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/draft-zero/ai-fill/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/draft-zero/claims/route.ts": {
+    "methods": [
+      "PATCH"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/draft-zero/generate/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/engagement-mode/route.ts": {
+    "methods": [
+      "PUT"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/handoff/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/handoff-preview/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/message/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/points/[pointKey]/route.ts": {
+    "methods": [
+      "PATCH"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/priority-areas/route.ts": {
+    "methods": [
+      "PUT"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/refresh-mapping/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/restart/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/stages/ideation/decision/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/stages/[stageKey]/disable/route.ts": {
+    "methods": [
+      "PUT"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/grant-prep/sessions/[id]/stages/[stageKey]/enable/route.ts": {
+    "methods": [
+      "PUT"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/idea-intelligence/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/call-fit/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/execute/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/funding-match/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/grant-prep-handoff/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/refine/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/idea-intelligence/[runId]/refine/candidates/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/projects/[projectId]/grants/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/projects/[projectId]/grants/[grantId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueSourceProtection"
+  },
+  "src/app/api/projects/[projectId]/grants/[grantId]/reviewer/recommendations/route.ts": {
+    "methods": [
+      "GET",
+      "PATCH"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/route.ts": {
+    "methods": [
+      "GET",
+      "PATCH",
+      "DELETE"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/clear/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/confirm-filters/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/filters/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/messages/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/messages/stream/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/conversations/[id]/reset-filters/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/directory/areas/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/directory/facets/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/directory/statistics/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/funders/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/recommendations/manual-search/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/reports-archive/funding-intelligence/[runId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/researcher/search/route.ts": {
+    "methods": [
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/researcher-matching/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/super-admin/researcher-matching/route.ts": {
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "guard": "withCatalogueProtection"
+  }
+}
