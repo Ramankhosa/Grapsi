@@ -408,7 +408,7 @@ export default function FinderPage() {
     }
   }
 
-  if (isLoading || chat.loadingList) {
+  if (isLoading || (finderTab === 'ai' && chat.loadingList)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-inset">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />

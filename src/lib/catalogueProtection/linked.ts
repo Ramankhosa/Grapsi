@@ -28,7 +28,7 @@ export function withCatalogueSourceProtection<T>(handler:(request:NextRequest,ar
         const project=/\/projects\/([^/]+)\/grants$/.exec(request.nextUrl.pathname)?.[1]
         if(project){
           const row=await prisma.grantPrepSession.findFirst({where:{project_id:project,funding_call_id:{not:null}},select:{funding_call_id:true}});id=row?.funding_call_id||null
-          if(!id){const legacy=await prisma.grantSession.findFirst({where:{projectId:project,fundingCallId:{not:null}},select:{fundingCallId:true}});id=legacy?.fundingCallId||null}
+          if(!id){const legacy=await prisma.grantSession.findFirst({where:{projectId:project},select:{fundingCallId:true}});id=legacy?.fundingCallId||null}
         }
       }
       if(!id)return await handler(request,arg as T)||catalogueError(new Error('Missing response'))
