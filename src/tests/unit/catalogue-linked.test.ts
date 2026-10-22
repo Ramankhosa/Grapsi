@@ -1,8 +1,8 @@
 import { beforeEach,describe,expect,it,vi } from 'vitest'
 import { NextRequest,NextResponse } from 'next/server'
-const mocks=vi.hoisted(()=>({jwt:vi.fn(),prep:vi.fn(),grant:vi.fn(),source:vi.fn(),protect:vi.fn()}))
+const mocks=vi.hoisted(()=>({jwt:vi.fn(),prep:vi.fn(),grant:vi.fn(),legacy:vi.fn(),source:vi.fn(),protect:vi.fn()}))
 vi.mock('@/lib/auth',()=>({verifyJWT:mocks.jwt}))
-vi.mock('@/lib/prisma',()=>({default:{grantPrepSession:{findUnique:mocks.prep,findFirst:mocks.grant},fundingCall:{findUnique:mocks.source}}}))
+vi.mock('@/lib/prisma',()=>({default:{grantPrepSession:{findUnique:mocks.prep,findFirst:mocks.grant},grantSession:{findFirst:mocks.legacy},fundingCall:{findUnique:mocks.source}}}))
 vi.mock('@/lib/catalogueProtection/guard',()=>({catalogueError:()=>NextResponse.json({error:'unavailable'},{status:503}),readBoundedCatalogueJson:async(r:NextRequest)=>r.clone().json(),withCatalogueProtection:mocks.protect}))
 import { withCatalogueSourceProtection } from '@/lib/catalogueProtection/linked'
 describe('source-bound workspaces',()=>{
@@ -25,5 +25,10 @@ describe('source-bound workspaces',()=>{
  it('fails closed if a source binding cannot be checked',async()=>{
   mocks.prep.mockRejectedValue(new Error('DB offline'));const handler=vi.fn();const response=await withCatalogueSourceProtection(handler)(new NextRequest('http://localhost/api/grant-prep/sessions/prep',{headers:{authorization:'Bearer test'}}))
   expect(response.status).toBe(503);expect(handler).not.toHaveBeenCalled()
+ })
+ it.each(['/api/projects/project/grants/old-session','/api/projects/project/grants'])('protects legacy grant bindings at %s before a preparation workspace exists',async path=>{
+  mocks.grant.mockResolvedValue(null);mocks.legacy.mockResolvedValue({fundingCallId:'legacy-call'});const handler=vi.fn(async()=>NextResponse.json({ok:true}))
+  await withCatalogueSourceProtection(handler)(new NextRequest('http://localhost'+path,{headers:{authorization:'Bearer test'}}))
+  expect(mocks.protect).toHaveBeenCalledWith(handler,'detail','GRANT_PREP',['legacy-call'])
  })
 })

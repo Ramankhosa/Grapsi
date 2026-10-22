@@ -17,13 +17,19 @@ export function withCatalogueSourceProtection<T>(handler:(request:NextRequest,ar
       const prepId=/\/grant-prep\/sessions\/([^/]+)/.exec(request.nextUrl.pathname)?.[1]
       const grant=/\/projects\/([^/]+)\/grants\/([^/]+)/.exec(request.nextUrl.pathname)
       if(prepId){const row=await prisma.grantPrepSession.findUnique({where:{id:prepId},select:{funding_call_id:true}});id=row?.funding_call_id||null}
-      else if(grant){const row=await prisma.grantPrepSession.findFirst({where:{project_id:grant[1],OR:[{id:grant[2]},{grant_session_id:grant[2]}]},select:{funding_call_id:true}});id=row?.funding_call_id||null}
+      else if(grant){
+        const row=await prisma.grantPrepSession.findFirst({where:{project_id:grant[1],OR:[{id:grant[2]},{grant_session_id:grant[2]}]},select:{funding_call_id:true}});id=row?.funding_call_id||null
+        if(!id){const legacy=await prisma.grantSession.findFirst({where:{id:grant[2],projectId:grant[1]},select:{fundingCallId:true}});id=legacy?.fundingCallId||null}
+      }
       else if(request.headers.get('content-type')?.includes('application/json')){
         const body=await readBoundedCatalogueJson(request);id=typeof body?.fundingCallId==='string'?body.fundingCallId:null
       }
       if(!id&&request.method==='GET'){
         const project=/\/projects\/([^/]+)\/grants$/.exec(request.nextUrl.pathname)?.[1]
-        if(project){const row=await prisma.grantPrepSession.findFirst({where:{project_id:project,funding_call_id:{not:null}},select:{funding_call_id:true}});id=row?.funding_call_id||null}
+        if(project){
+          const row=await prisma.grantPrepSession.findFirst({where:{project_id:project,funding_call_id:{not:null}},select:{funding_call_id:true}});id=row?.funding_call_id||null
+          if(!id){const legacy=await prisma.grantSession.findFirst({where:{projectId:project,fundingCallId:{not:null}},select:{fundingCallId:true}});id=legacy?.fundingCallId||null}
+        }
       }
       if(!id)return await handler(request,arg as T)||catalogueError(new Error('Missing response'))
       const source=await prisma.fundingCall.findUnique({where:{id},select:{source:true,import_run_id:true}})
