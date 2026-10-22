@@ -3,6 +3,7 @@ import type { ServiceType } from '@prisma/client'
 
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { getActiveTenantEntitlement } from '@/lib/entitlement-service'
 import type { PlatformPermissionCode } from '@/lib/platformTeamRoles'
 import { getUserPlatformPermissionCodes } from '@/lib/services/platformTeamRoleService'
 
@@ -61,6 +62,8 @@ export async function requireFundingActor(
      * blocked from them while still reaching the directory.
      */
     requiredServiceType?: ServiceType
+    /** Catalogue reads must not inherit the legacy missing-plan tolerance. */
+    strictEntitlement?: boolean
   }
 ): Promise<{ actor: FundingActor; user: any } | { response: NextResponse }> {
   const { user, error } = await authenticateUser(request)
@@ -161,6 +164,17 @@ export async function requireFundingActor(
   }
 
   if (actor.tenantId) {
+    if (options?.strictEntitlement) {
+      const entitlement = await getActiveTenantEntitlement(actor.tenantId)
+      const service = options.requiredServiceType ?? 'FUNDING_DISCOVERY'
+      // Existing institutional plans bundle grant preparation with discovery;
+      // they have no separate GRANT_PREP feature row. Keep its established
+      // service/role checks below while requiring current catalogue access.
+      const catalogueFeature = service === 'GRANT_PREP' ? 'FUNDING_DISCOVERY' : service
+      if (!entitlement?.plan.planFeatures.some(entry => entry.feature.code === catalogueFeature)) {
+        return { response: NextResponse.json({ error: 'Current funding access is required. Contact your administrator.', code: 'ENTITLEMENT_REQUIRED' }, { status: 403 }) }
+      }
+    }
     const access = await enforceServiceAccess(
       actor.id,
       actor.tenantId,

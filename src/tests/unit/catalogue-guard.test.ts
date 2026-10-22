@@ -14,6 +14,7 @@ describe('catalogue guard boundary',()=>{
  it('honours entitlement denial before session/quota work',async()=>{
   mocks.auth.mockResolvedValue({response:NextResponse.json({error:'Entitlement required'},{status:403})});const handler=vi.fn()
   expect((await withCatalogueProtection(handler)(request())).status).toBe(403);expect(handler).not.toHaveBeenCalled();expect(mocks.begin).not.toHaveBeenCalled()
+  expect(mocks.auth).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({strictEntitlement:true}))
  })
  it('requires a server-tracked login rather than accepting a legacy bearer token',async()=>{
   mocks.jwt.mockReturnValue({sub:'user'});const handler=vi.fn();const response=await withCatalogueProtection(handler)(request())

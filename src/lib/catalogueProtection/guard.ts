@@ -52,7 +52,7 @@ export function withCatalogueProtection<T>(handler:(request:NextRequest,arg:T)=>
   return async(request:NextRequest,arg?:T):Promise<Response>=>{
     let c:Context|undefined
     try{
-      const auth=await requireFundingActor(request,{allowPlatform:true,requiredServiceType:service})
+      const auth=await requireFundingActor(request,{allowPlatform:true,requiredServiceType:service,strictEntitlement:true})
       if('response'in auth){const headers=new Headers(auth.response.headers);headers.set('Cache-Control','private, no-store');return new Response(auth.response.body,{status:auth.response.status,headers})}
       const token=verifyJWT((request.headers.get('authorization')||'').replace(/^Bearer /,''))
       if(!token?.catalog_session)throw new CatalogueAccessError('REAUTH_REQUIRED','Please sign in again to access funding calls.',401)
