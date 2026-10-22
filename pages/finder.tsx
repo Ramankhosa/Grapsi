@@ -144,6 +144,7 @@ export default function FinderPage() {
   const [facetLabels, setFacetLabels] = useState<Record<string, string>>({});
   const directorySeq = useRef(0);
   const directoryBootRef = useRef(false);
+  const directoryNavigationRef = useRef<string | null>(null);
   const directoryFetchedRef = useRef(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   // Grant Studio is plan-gated. When the tenant's plan excludes it, the
@@ -299,6 +300,7 @@ export default function FinderPage() {
     directoryBootRef.current = true;
     setFinderTab(router.query.tab === 'ai' ? 'ai' : 'manual');
     if (router.query.tab === 'ai') return;
+    directoryNavigationRef.current = router.asPath;
     const query = typeof router.query.q === 'string' ? router.query.q.slice(0, 300) : '';
     const page = Number(router.query.page) > 1 ? Math.floor(Number(router.query.page)) : 1;
     setManualQuery(query);
@@ -310,7 +312,8 @@ export default function FinderPage() {
     if (!user || !router.isReady) return;
     const tab = router.query.tab === 'ai' ? 'ai' : 'manual';
     setFinderTab(tab);
-    if (tab === 'manual' && directoryBootRef.current) {
+    if (tab === 'manual' && directoryBootRef.current && directoryNavigationRef.current !== router.asPath) {
+      directoryNavigationRef.current = router.asPath;
       const query = typeof router.query.q === 'string' ? router.query.q : '';
       const filters = decodeDirectoryFilters(router.query.f);
       const page = Math.max(1, Number(router.query.page) || 1);
