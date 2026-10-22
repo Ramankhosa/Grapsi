@@ -17,6 +17,21 @@ function section(overrides: Partial<RoutedSectionLike>): RoutedSectionLike {
 }
 
 describe('composeRoutedSectionText', () => {
+  it('preserves embedded form questions alongside budget and attachments without including unrelated prose', () => {
+    const sections = [
+      section({ id: 'intro', section_type: 'overview', section_text: 'About the funding foundation.' }),
+      section({ id: 'plan', section_type: 'overview', section_title: 'Section B: Research plan', section_text: 'Question 4: Scientific abstract (maximum 300 words).\nQuestion 5: Research methodology.' }),
+      section({ id: 'budget', section_type: 'budget_rules', section_text: 'Budget table in INR.' }),
+      section({ id: 'cv', section_type: 'required_documents', section_text: 'Attach the PI CV.' }),
+    ]
+    const composed = composeRoutedSectionText(sections, TEMPLATE_SECTION_TYPES, { includeApplicationQuestions: true })
+    expect(composed.usedSectionIds).toEqual(['plan', 'budget', 'cv'])
+    expect(composed.text).toContain('Scientific abstract')
+    expect(composed.text).toContain('Research methodology')
+    expect(composed.text).not.toContain('About the funding foundation')
+    expect(composeRoutedSectionText(sections, GUIDELINE_SECTION_TYPES).usedSectionIds).toEqual(['budget', 'cv'])
+  })
+
   it('keeps only sections whose type is relevant', () => {
     const composed = composeRoutedSectionText(
       [

@@ -41,11 +41,18 @@ export function composeRoutedSectionText(
     /** Label per document id, shown when more than one document contributes. */
     documentLabels?: Map<string, string>;
     maxChars?: number;
+    /** Include explicit form questions even if their section was typed as overview/other. */
+    includeApplicationQuestions?: boolean;
   } = {}
 ): ComposedSectionSource {
   const usable = sections.filter((section) => String(section.section_text || '').trim());
   const relevantSet = new Set(relevantTypes);
-  const typedMatches = usable.filter((section) => relevantSet.has(section.section_type));
+  const typedMatches = usable.filter((section) => relevantSet.has(section.section_type) || (
+    options.includeApplicationQuestions && (
+      /\bapplication\s+(?:form|format|template)\b/i.test(section.section_title || '') ||
+      /^\s*(?:question\s+\d+|q\d+)\s*[:.)-]/im.test(section.section_text)
+    )
+  ));
   const confidentMatches = typedMatches.filter((section) => section.classification_method !== 'fallback');
 
   const useAll = confidentMatches.length === 0;

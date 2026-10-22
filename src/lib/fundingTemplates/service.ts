@@ -836,7 +836,10 @@ export class FundingTemplateService {
       const documentLabels = new Map(
         routed.documents.map((document) => [document.id, `${document.original_filename} (v${document.version})`])
       );
-      const composed = composeRoutedSectionText(routed.sections, TEMPLATE_SECTION_TYPES, { documentLabels });
+      const composed = composeRoutedSectionText(routed.sections, TEMPLATE_SECTION_TYPES, {
+        documentLabels,
+        includeApplicationQuestions: true,
+      });
       const hasApplicationSections = !composed.usedAllSections;
 
       if (routed.usedKind === 'template_document' || hasApplicationSections) {

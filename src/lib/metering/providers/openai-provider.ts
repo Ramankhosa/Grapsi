@@ -182,7 +182,9 @@ export class OpenAIProvider implements LLMProvider {
     const supportsTemperatureTuning = !(isO1Model || isGPT5Model)
     
     // Apply enforcement limits - some models use max_completion_tokens instead of max_tokens
-    const maxTokens = limits.maxTokensOut || 4096
+    // A fallback can receive limits intended for a larger primary model.
+    // Enforce the selected model's capability before sending either API shape.
+    const maxTokens = Math.min(limits.maxTokensOut || 4096, this.getTokenLimits(modelToUse).output)
     const timeoutMs = this.getTimeoutMs(modelToUse)
     const maxAttempts = this.getMaxRetries()
     console.log(`[OpenAIProvider] Token limits: admin=${limits.maxTokensOut || 'not set'}, using=${maxTokens}`)
