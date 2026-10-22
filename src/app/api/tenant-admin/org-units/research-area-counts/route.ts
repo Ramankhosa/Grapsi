@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { orgAreaRowsSql } from '@/lib/researchAreas/queries'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
 
   const rows = await prisma.$queryRaw<Array<{ org_unit_id: string; count: number }>>(Prisma.sql`
     SELECT org_unit_id, COUNT(*)::int AS count
-      FROM tenant_org_unit_research_areas
+      FROM ${orgAreaRowsSql(true)}
      WHERE tenant_id = ${context.tenantId}
      GROUP BY org_unit_id
   `)

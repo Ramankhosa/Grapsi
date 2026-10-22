@@ -10,6 +10,7 @@ import { applicationSubmittedSql, queueStateSql, untouchedSql } from './reportDe
 import { getDeptSettings, type DeptSettings } from './settings'
 import { amountIn, mergeMoneyTotals, sumByCurrency, type MoneyTotal } from '@/lib/i18n/format'
 import { getTenantLocale } from '@/lib/tenant/locale'
+import { callHasAreasSql } from '@/lib/researchAreas/queries'
 
 /**
  * Each school as a funnel: how much is relevant, how much is untouched, how
@@ -317,9 +318,7 @@ export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRo
       SELECT COUNT(*)::int AS count FROM funding_calls fc
        WHERE ${visibleSql(tenantId)}
          AND ${openCallSql('fc', timeZone)}
-         AND NOT EXISTS (
-           SELECT 1 FROM funding_call_research_area_taxonomies m WHERE m.funding_call_id = fc.id
-         )
+         AND NOT ${callHasAreasSql(Prisma.sql`fc.id`)}
     `),
   ])
 

@@ -27,8 +27,8 @@ import {
   runFundingGatewayText,
 } from './llmRouting'
 import { fundingCallResearchAreaTaxonomyService } from '@/lib/services/fundingCallResearchAreaTaxonomyService'
-import { canonicalAreasEnabled,activeCallExclusion } from '@/lib/researchAreas/core'
-import { loadCallClassificationInput,loadAreaVectors,saveAreaProposal,acceptCallAreaProposal,currentEntityAreas,loadStandardAreas } from '@/lib/researchAreas/store'
+import { areaInputHash,canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { callClassificationExclusion,loadCallClassificationInput,loadAreaVectors,saveAreaProposal,acceptCallAreaProposal,currentEntityAreas,loadStandardAreas } from '@/lib/researchAreas/store'
 import { newAreaCostLedger,proposeResearchAreas } from '@/lib/researchAreas/ai'
 
 /** Reuses the intake text stage so no new WorkflowStage needs seeding. */
@@ -212,16 +212,18 @@ export async function classifyFundingCall(
   if(canonicalAreasEnabled()) {
     const input=await loadCallClassificationInput(fundingCallId)
     if(!input)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'call_not_found'}
-    const excluded=activeCallExclusion(input)
+    const excluded=await callClassificationExclusion(input,'intake')
     if(excluded)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:excluded}
     if(input.hasManualMapping)return {fundingCallId,method:'manual',areaIds:[],labels:[],reason:'manual_mapping_exists'}
     const current=await currentEntityAreas('CALL',fundingCallId)
-    if(current.length&&(!force||current.some(a=>a.source==='manual')))return {fundingCallId,method:'none',areaIds:current.map(a=>a.id),labels:current.map(a=>a.label),reason:'already_classified'}
+    const [revision]=await prisma.$queryRaw<Array<{source:string;input_hash:string;usage:any}>>`SELECT source,input_hash,usage FROM research_area_classifications WHERE entity_kind='CALL' AND entity_id=${fundingCallId} AND status='ACCEPTED' AND revoked_at IS NULL`
+    const sameResearch=revision&&(revision.input_hash===areaInputHash(input)||revision.usage?.researchHash===areaInputHash({title:input.title,description:input.description,tags:input.tags}))
+    if(revision?.source==='manual'||current.length&&!force&&sameResearch)return {fundingCallId,method:revision?.source==='manual'?'manual':'none',areaIds:current.map(a=>a.id),labels:current.map(a=>a.label),reason:'already_classified'}
     if(!allowLlm)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'requires_contextual_review'}
     const vectors=await loadAreaVectors(),proposal=await proposeResearchAreas(input,vectors,newAreaCostLedger(.10))
     const id=await saveAreaProposal(input,proposal.decision,proposal.candidates,proposal.usage,'system:call-classifier')
     if(proposal.decision.needsReview)return {fundingCallId,method:'none',areaIds:[],labels:[],reason:'classification_pending_review'}
-    await acceptCallAreaProposal(id,'system:call-classifier')
+    await acceptCallAreaProposal(id,'system:call-classifier',{workflow:'intake'})
     return {fundingCallId,method:'llm',areaIds:proposal.decision.areaIds,labels:proposal.decision.areaIds.map(id=>vectors.find(a=>a.id===id)!.label)}
   }
 

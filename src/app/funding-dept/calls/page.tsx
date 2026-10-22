@@ -120,6 +120,7 @@ interface FunnelFilters {
   q: string
   agency: string
   discipline: string
+  researchAreaId: string
   fundingKind: string
   orgUnitId: string
   closingInDays: string
@@ -131,6 +132,7 @@ const DEFAULT_FILTERS: FunnelFilters = {
   q: '',
   agency: '',
   discipline: '',
+  researchAreaId: '',
   fundingKind: '',
   orgUnitId: '',
   closingInDays: '',
@@ -140,6 +142,7 @@ const DEFAULT_FILTERS: FunnelFilters = {
 interface CallFacets {
   agencies: string[]
   disciplines: string[]
+  researchAreas: Array<{id:string;label:string;callCount:number}>
   fundingKinds: string[]
 }
 
@@ -167,9 +170,10 @@ export default function DeptCallFunnelPage() {
   // picking. Only Search / a chip commits, so the table never thrashes.
   const [filters, setFilters] = useState<FunnelFilters>(DEFAULT_FILTERS)
   const [draftFilters, setDraftFilters] = useState<FunnelFilters>(DEFAULT_FILTERS)
-  const [facets, setFacets] = useState<CallFacets>({ agencies: [], disciplines: [], fundingKinds: [] })
+  const [facets, setFacets] = useState<CallFacets>({ agencies: [], disciplines: [], researchAreas:[], fundingKinds: [] })
   const [schools, setSchools] = useState<SchoolOption[]>([])
   const [showFilters, setShowFilters] = useState(false)
+  const [areaQuery,setAreaQuery]=useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -194,6 +198,7 @@ export default function DeptCallFunnelPage() {
         if (next.q) params.set('q', next.q)
         if (next.agency) params.set('agency', next.agency)
         if (next.discipline) params.set('discipline', next.discipline)
+        if (next.researchAreaId) params.set('researchAreaId', next.researchAreaId)
         if (next.fundingKind) params.set('fundingKind', next.fundingKind)
         if (next.orgUnitId) params.set('orgUnitId', next.orgUnitId)
         if (next.closingInDays) params.set('closingInDays', next.closingInDays)
@@ -236,6 +241,7 @@ export default function DeptCallFunnelPage() {
         setFacets({
           agencies: callFacets.agencies || [],
           disciplines: callFacets.disciplines || [],
+          researchAreas: callFacets.researchAreas || [],
           fundingKinds: callFacets.fundingKinds || [],
         })
       }
@@ -263,6 +269,7 @@ export default function DeptCallFunnelPage() {
   const activeFilterCount =
     (filters.agency ? 1 : 0) +
     (filters.discipline ? 1 : 0) +
+    (filters.researchAreaId ? 1 : 0) +
     (filters.fundingKind ? 1 : 0) +
     (filters.orgUnitId ? 1 : 0) +
     (filters.closingInDays ? 1 : 0)
@@ -417,18 +424,19 @@ export default function DeptCallFunnelPage() {
               </label>
 
               <label className="block">
-                <span className="nk-label mb-1 block">Discipline</span>
+                <span className="nk-label mb-1 block">Research area</span>
+                <input type="search" className="nk-input mb-2 w-full" aria-label="Find research area" placeholder="Find research area" value={areaQuery} onChange={e=>setAreaQuery(e.target.value)}/>
                 <select
                   className="nk-select w-full"
-                  value={draftFilters.discipline}
+                  value={draftFilters.researchAreaId}
                   onChange={(event) =>
-                    void load(0, { ...draftFilters, discipline: event.target.value })
+                    void load(0, { ...draftFilters, researchAreaId: event.target.value,discipline:'' })
                   }
                 >
-                  <option value="">All disciplines</option>
-                  {facets.disciplines.map((discipline) => (
-                    <option key={discipline} value={discipline}>
-                      {discipline}
+                  <option value="">All research areas</option>
+                  {facets.researchAreas.filter(area=>area.id===draftFilters.researchAreaId||area.label.toLowerCase().includes(areaQuery.toLowerCase())).map((area) => (
+                    <option key={area.id} value={area.id}>
+                      {area.label} ({area.callCount})
                     </option>
                   ))}
                 </select>

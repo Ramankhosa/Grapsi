@@ -3,8 +3,8 @@ import { loadActiveAreas } from '@/lib/funding/disciplineClassifier'
 import { isGroupArea, matchAreas, type MatchableArea } from '@/lib/funding/disciplineMatcher'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
-const orgAreaTable=()=>canonicalAreasEnabled()?Prisma.sql`(SELECT e.org_unit_id,e.area_id taxonomy_area_id,u.tenant_id FROM selected_org_unit_research_area_links e JOIN tenant_org_units u ON u.id=e.org_unit_id)`:Prisma.raw('tenant_org_unit_research_areas')
+import { orgAreaRowsSql } from '@/lib/researchAreas/queries'
+const orgAreaTable=()=>orgAreaRowsSql(true)
 
 import { listSubtreeUnitIds } from './tree'
 

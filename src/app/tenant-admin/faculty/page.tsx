@@ -187,6 +187,7 @@ export default function TenantFacultyPage() {
   const [areasTarget, setAreasTarget] = useState<{ id: string; name: string } | null>(null)
   const [catalog, setCatalog] = useState<CatalogGroup[]>([])
   const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([])
+  const [previousScopeAreas,setPreviousScopeAreas]=useState<Array<{taxonomyAreaId:string;label:string}>>([])
   const [areaKeywords, setAreaKeywords] = useState('')
   const [inheritedAreas, setInheritedAreas] = useState<Array<{ label: string; unit_name: string }>>([])
   const [areasLoading, setAreasLoading] = useState(false)
@@ -513,6 +514,7 @@ export default function TenantFacultyPage() {
 
       setCatalog(catalogData.groups || [])
       setSelectedAreaIds((unitData.areas || []).map((area: { taxonomyAreaId: string }) => area.taxonomyAreaId))
+      setPreviousScopeAreas((unitData.areas||[]).filter((area:{taxonomyAreaId:string})=>!area.taxonomyAreaId.startsWith('scientify:discipline:')))
       setAreaKeywords((unitData.keywords || []).join(', '))
       setInheritedAreas(unitData.inherited || [])
     } catch (e: any) {
@@ -1410,6 +1412,7 @@ export default function TenantFacultyPage() {
                   </p>
                 )}
 
+                {previousScopeAreas.length>0&&<fieldset className="mt-4 space-y-2 rounded border border-amber-200 bg-amber-50 p-3"><legend className="text-sm font-semibold">Previous routing scope</legend><p className="text-xs">These saved settings keep existing coverage while standard areas are reviewed. Uncheck a setting only when you intend to remove that coverage. Existing assignments remain.</p>{previousScopeAreas.map(area=><label className="flex gap-2 text-sm" key={area.taxonomyAreaId}><input type="checkbox" checked={selectedAreaIds.includes(area.taxonomyAreaId)} onChange={()=>setSelectedAreaIds(ids=>ids.includes(area.taxonomyAreaId)?ids.filter(id=>id!==area.taxonomyAreaId):[...ids,area.taxonomyAreaId])}/>{area.label}</label>)}</fieldset>}
                 <div className="mt-4 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-3">
                   {catalog.map(group => (
                     <div key={group.level1Code} className="mb-3 last:mb-0">

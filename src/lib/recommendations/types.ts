@@ -93,6 +93,7 @@ export interface RecommendationSelectedResearchArea {
   queryText: string;
   /** Level-1/level-2 taxonomy the user filed this area under, when they picked one. */
   taxonomyAreaId?: string | null;
+  taxonomyAreaIds?: string[];
   taxonomyPath?: string | null;
 }
 
@@ -119,6 +120,7 @@ export interface RecommendationProfileSavedAreaSnapshot {
   keywords: string[];
   disciplines: string[];
   taxonomyAreaId: string | null;
+  taxonomyAreaIds?: string[];
   taxonomyPath: string | null;
 }
 

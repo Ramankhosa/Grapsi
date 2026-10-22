@@ -97,9 +97,9 @@ const CALL_INGESTION_LINKS: CallIngestionLink[] = [
   },
   {
     href: '/super-admin/research-areas',
-    title: 'Research Taxonomy',
-    description: 'Upload and maintain funding research-area taxonomy used by call discovery and tagging.',
-    cta: 'Manage taxonomy',
+    title: 'Shared Research Areas',
+    description: 'Browse the common research areas and review call and department classifications.',
+    cta: 'Manage research areas',
     icon: DatabaseZap,
     access: 'write',
   },

@@ -31,6 +31,17 @@ export function activeCallExclusion(input: ClassificationInput, asOf = new Date(
  if(input.description.trim().length<100) return 'insufficient_research_text'
  return null
 }
+/** Normal intake can classify a working draft before it is published. This
+ * policy never expands the active-only historical backfill. */
+export function intakeCallExclusion(input:ClassificationInput, linkedDraft:boolean, asOf=new Date().toISOString().slice(0,10)) {
+ if(input.importRunId)return 'imported_call_preserved'
+ if(!input.published&&!linkedDraft)return 'not_intake_draft'
+ if(input.published&&!input.active)return 'inactive_call'
+ if(input.closedAt)return 'source_closed'
+ if(input.deadline&&input.deadline.slice(0,10)<asOf)return 'deadline_passed'
+ if(input.description.trim().length<100)return 'insufficient_research_text'
+ return null
+}
 export function cosineSimilarity(a: number[], b: number[]) {
  if(a.length!==b.length || !a.length || [...a,...b].some(n=>!Number.isFinite(n))) throw new Error('Incompatible area embeddings')
  let dot=0,aa=0,bb=0;for(let i=0;i<a.length;i++){dot+=a[i]*b[i];aa+=a[i]*a[i];bb+=b[i]*b[i]}

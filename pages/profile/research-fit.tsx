@@ -58,6 +58,8 @@ async function apiRequest<T>(
 }
 
 function formatTaxonomy(area: ResearcherSavedResearchAreaRecord) {
+  if(area.canonicalAreas?.length)return area.canonicalAreas.map(a=>a.label).join(' · ');
+  if(area.taxonomy?.areaId&&!area.taxonomy.areaId.startsWith('scientify:discipline:'))return 'Previous classification: '+[area.taxonomy.level1Name,area.taxonomy.level2Name].filter(Boolean).join(' / ');
   return [area.taxonomy?.level1Name, area.taxonomy?.level2Name].filter(Boolean).join(' / ');
 }
 

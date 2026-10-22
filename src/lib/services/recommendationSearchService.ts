@@ -1,6 +1,6 @@
 import { importedAreaCondition, LIVE_STATUS_SQL, catalogueAreaAssociationsSql } from '@/lib/catalogueProtection/areas'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
-import { canonicalCallTaxonomiesSql } from '@/lib/researchAreas/store'
+import { callAreaRowsSql, callAreaSelectionSql } from '@/lib/researchAreas/queries'
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
@@ -240,20 +240,7 @@ function buildFunderCondition(funderIds: string[]) {
 }
 
 function buildTaxonomyAreaCondition(areaIds: string[], callId: Prisma.Sql = Prisma.raw('funding_calls.id')):Prisma.Sql {
-  if(canonicalAreasEnabled() && areaIds.some(id=>id.startsWith('scientify:discipline:'))) {
-    const standard=areaIds.filter(id=>id.startsWith('scientify:discipline:')),legacy=areaIds.filter(id=>!id.startsWith('scientify:discipline:'));
-    const current=importedAreaCondition(standard,callId);
-    return legacy.length?Prisma.sql`(${current} OR ${buildTaxonomyAreaCondition(legacy,callId)})`:current;
-  }
-  const ids = sqlTextArray(areaIds);
-  return Prisma.sql`
-    EXISTS (
-      SELECT 1
-      FROM funding_call_research_area_taxonomies taxonomy_filter
-      WHERE taxonomy_filter.funding_call_id = ${callId}
-        AND taxonomy_filter.taxonomy_area_id = ANY(${ids})
-    )
-  `;
+  return callAreaSelectionSql(areaIds,callId);
 }
 
 /**
@@ -288,7 +275,7 @@ function buildFundingCallTextSearchCondition(fullTextQuery: string) {
     WHERE text_call.ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
     UNION
     SELECT taxonomy_text.funding_call_id
-    FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_text
+    FROM ${callAreaRowsSql()} taxonomy_text
     WHERE ${taxonomyTextVectorSql('taxonomy_text')} @@ websearch_to_tsquery('english', ${fullTextQuery})
   )`;
 }
@@ -298,7 +285,7 @@ export function legacyFundingCallTextSearchCondition(fullTextQuery: string) {
     ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
     OR EXISTS (
       SELECT 1
-      FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_text
+      FROM ${callAreaRowsSql()} taxonomy_text
       WHERE taxonomy_text.funding_call_id = funding_calls.id
         AND to_tsvector(
           'english',
@@ -751,7 +738,7 @@ function selectCandidateColumns() {
     COALESCE(
       ARRAY(
         SELECT taxonomy_tag.taxonomy_area_id
-        FROM ${canonicalAreasEnabled()?canonicalCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')} taxonomy_tag
+        FROM ${callAreaRowsSql()} taxonomy_tag
         WHERE taxonomy_tag.funding_call_id = funding_calls.id
       ),
       ARRAY[]::text[]
@@ -1733,6 +1720,7 @@ type SearchAreaBranch = {
   label: string;
   queryText: string;
   taxonomyAreaId: string | null;
+  taxonomyAreaIds?: string[];
   taxonomyPath: string | null;
   request: RecommendationSearchRequest;
 };
@@ -1763,6 +1751,7 @@ function normalizeSelectedResearchAreas(
       label: normalizeWhitespace(String(area?.label || '')) || queryText,
       queryText,
       taxonomyAreaId: normalizeWhitespace(String(area?.taxonomyAreaId || '')) || null,
+      taxonomyAreaIds: [...new Set((area?.taxonomyAreaIds||[]).filter(id=>typeof id==='string'&&id.length<=100))].slice(0,50),
       taxonomyPath: normalizeWhitespace(String(area?.taxonomyPath || '')) || null,
     });
   });
@@ -1815,6 +1804,7 @@ function buildSearchAreaBranches(request: RecommendationSearchRequest): SearchAr
       label: area.label,
       queryText: area.queryText,
       taxonomyAreaId: area.taxonomyAreaId || null,
+      taxonomyAreaIds: area.taxonomyAreaIds,
       taxonomyPath: area.taxonomyPath || null,
       request: {
         ...request,
@@ -1858,7 +1848,7 @@ function mergeAreaSearchResults(
 
     response.rawResults.forEach((result, rank) => {
       const taxonomyHit = Boolean(
-        branch.taxonomyAreaId && (result.taxonomyAreaIds || []).includes(branch.taxonomyAreaId)
+        [...(branch.taxonomyAreaIds||[]),...(branch.taxonomyAreaId?[branch.taxonomyAreaId]:[])].some(id=>(result.taxonomyAreaIds||[]).includes(id))
       );
       const areaScore = Math.min(1, result.score + (taxonomyHit ? TAXONOMY_TAG_BONUS : 0));
       const match: RecommendationAreaMatch = {
@@ -2918,6 +2908,11 @@ Rules:
         WHERE ${combineConditions(chosen.map((entry) => entry.condition))}
         UNION ALL
         SELECT * FROM (
+          WITH selected_areas AS MATERIALIZED(
+            SELECT matched.id,taxonomy.taxonomy_area_id,taxonomy.taxonomy_level1_code,taxonomy.taxonomy_level1_name,taxonomy.taxonomy_level2_code,taxonomy.taxonomy_level2_name
+            FROM matched INNER JOIN ${callAreaRowsSql()} taxonomy ON taxonomy.funding_call_id=matched.id
+            WHERE ${exceptOwn('taxonomyArea')}
+          ), universal AS (SELECT DISTINCT id FROM selected_areas WHERE taxonomy_level2_name='All disciplines')
           SELECT
             'taxonomyArea' AS dimension,
             taxonomy.taxonomy_area_id AS value,
@@ -2929,11 +2924,8 @@ Rules:
             taxonomy.taxonomy_level1_name AS "level1Name",
             taxonomy.taxonomy_level2_code AS "level2Code",
             taxonomy.taxonomy_level2_name AS "level2Name",
-            COUNT(DISTINCT matched.id)::int AS count
-          FROM matched
-          INNER JOIN funding_call_research_area_taxonomies taxonomy
-            ON taxonomy.funding_call_id = matched.id
-          WHERE ${exceptOwn('taxonomyArea')}
+            (COUNT(DISTINCT taxonomy.id) FILTER(WHERE taxonomy.id NOT IN(SELECT id FROM universal))+(SELECT count(*) FROM universal))::int AS count
+          FROM selected_areas taxonomy
           GROUP BY taxonomy.taxonomy_area_id, taxonomy.taxonomy_level1_code, taxonomy.taxonomy_level1_name,
                    taxonomy.taxonomy_level2_code, taxonomy.taxonomy_level2_name
           ORDER BY count DESC, value ASC LIMIT ${TAXONOMY_LIMIT}
@@ -3023,6 +3015,16 @@ Rules:
       });
     }
 
+    if(canonicalAreasEnabled()&&filters.taxonomyAreaIds.some(id=>!id.startsWith('scientify:'))){
+      const legacyIds=filters.taxonomyAreaIds.filter(id=>!id.startsWith('scientify:'))
+      const legacyWhere=combineConditions([...buildBaseConditions({...normalized,filters:{...filters,taxonomyAreaIds:[]}},false,request.access),rawQuery?directoryTextCondition(rawQuery):Prisma.sql`TRUE`])
+      const selectedLegacy=await prisma.$queryRaw<Array<{value:string;label:string;count:number}>>`WITH scoped AS MATERIALIZED(SELECT id FROM funding_calls WHERE ${legacyWhere}),
+        compatible AS MATERIALIZED(SELECT c.* FROM ${callAreaRowsSql(true)} c JOIN scoped s ON s.id=c.funding_call_id)
+        SELECT n.id value,coalesce(nullif(n.level2_name,''),n.level1_name) label,
+          (SELECT count(DISTINCT c.funding_call_id)::int FROM compatible c WHERE c.taxonomy_area_id=n.id OR c.taxonomy_level2_name='All disciplines') count
+        FROM research_area_taxonomy_areas n WHERE n.id=ANY(${legacyIds}::text[]) ORDER BY n.id`
+      facets.taxonomyArea.push(...selectedLegacy)
+    }
     return {
       totalPublished: total,
       facets,

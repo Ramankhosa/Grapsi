@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import type { PrismaClient } from '@/lib/prisma-generated'
-import { activeCallExclusion, areaInputHash, CLASSIFICATION_PROMPT_VERSION, validateAreaDecision, type ClassificationInput, type EntityKind, type ValidatedDecision, type Candidate } from './core'
+import { activeCallExclusion, intakeCallExclusion, areaInputHash, CLASSIFICATION_PROMPT_VERSION, validateAreaDecision, type ClassificationInput, type EntityKind, type ValidatedDecision, type Candidate } from './core'
 
 export type ClassificationDb = Pick<PrismaClient,'$queryRaw'|'$executeRaw'>
 export async function loadStandardAreas(db:ClassificationDb=prisma) {
@@ -26,8 +26,9 @@ export async function listActiveExistingCallInputs(db:ClassificationDb=prisma) {
 }
 export async function saveAreaProposal(input:ClassificationInput,decision:ValidatedDecision,candidates:Candidate[],usage:unknown,actorId:string,db:ClassificationDb=prisma) {
  const id=randomUUID()
+ const recordedUsage={...(usage&&typeof usage==='object'?usage:{}),researchHash:areaInputHash({title:input.title,description:input.description,tags:input.tags})}
  await db.$executeRaw`INSERT INTO research_area_classifications(id,entity_kind,entity_id,input_hash,status,scope,source,model,prompt_version,candidates,evidence,usage,actor_id)
-  VALUES(${id},'CALL',${input.id},${areaInputHash(input)},'PROPOSED',${decision.scope},'ai:verified','gpt-5.4-mini',${CLASSIFICATION_PROMPT_VERSION},${JSON.stringify(candidates)}::jsonb,${JSON.stringify({...decision})}::jsonb,${JSON.stringify(usage)}::jsonb,${actorId})`
+  VALUES(${id},'CALL',${input.id},${areaInputHash(input)},'PROPOSED',${decision.scope},'ai:verified','gpt-5.4-mini',${CLASSIFICATION_PROMPT_VERSION},${JSON.stringify(candidates)}::jsonb,${JSON.stringify({...decision})}::jsonb,${JSON.stringify(recordedUsage)}::jsonb,${actorId})`
  for(const areaId of decision.areaIds)await db.$executeRaw`INSERT INTO research_area_classification_links(classification_id,area_id) VALUES(${id},${areaId})`
  return id
 }
@@ -57,14 +58,21 @@ export async function setManualAreaLinks(kind:EntityKind,entityId:string,ids:str
  }
  return '$transaction' in db?db.$transaction(write):write(db)
 }
-export async function acceptCallAreaProposal(id:string,actorId:string,options:{confirmManual?:boolean;confirmReview?:boolean}={},db:PrismaClient=prisma) {
+export async function callClassificationExclusion(input:ClassificationInput,workflow:'active-backfill'|'intake'='active-backfill',db:ClassificationDb=prisma) {
+ if(workflow==='active-backfill')return activeCallExclusion(input)
+ const rows=await db.$queryRaw<Array<{draft:boolean;retired:boolean}>>`SELECT (catalog_status::text='DRAFT' AND intake_job_id IS NOT NULL) draft,
+  (status::text IN ('ARCHIVED','FAILED') OR catalog_status::text IN ('ARCHIVED','REJECTED')) retired FROM funding_calls WHERE id=${input.id}`
+ if(!rows.length||rows[0].retired)return 'retired_call'
+ return intakeCallExclusion(input,rows[0].draft)
+}
+export async function acceptCallAreaProposal(id:string,actorId:string,options:{confirmManual?:boolean;confirmReview?:boolean;workflow?:'active-backfill'|'intake'}={},db:PrismaClient=prisma) {
  return db.$transaction(async tx=>{
   const rows=await tx.$queryRaw<Array<{id:string;entity_id:string;input_hash:string;status:string;scope:string;evidence:any;candidates:Candidate[];prompt_version:string}>>`SELECT * FROM research_area_classifications WHERE id=${id} AND entity_kind='CALL' FOR UPDATE`
   const proposal=rows[0];if(!proposal||proposal.status!=='PROPOSED')throw new Error('Area proposal is not pending')
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`canonical:CALL:${proposal.entity_id}`},0))::text`
   await tx.$queryRaw`SELECT id FROM funding_calls WHERE id=${proposal.entity_id} FOR UPDATE`
   const input=await loadCallClassificationInput(proposal.entity_id,tx)
-  if(!input||activeCallExclusion(input))throw new Error('Call is no longer an eligible open existing call')
+  if(!input||await callClassificationExclusion(input,options.workflow,tx))throw new Error('Call is no longer an eligible open existing call or intake draft')
   if(areaInputHash(input)!==proposal.input_hash)throw new Error('Call changed after classification; generate a fresh proposal')
   if(proposal.prompt_version!==CLASSIFICATION_PROMPT_VERSION)throw new Error('Classification policy changed; generate a fresh proposal')
   const validated=validateAreaDecision(proposal.evidence,proposal.candidates,input)

@@ -33,7 +33,7 @@ export const dynamic = 'force-dynamic'
  */
 
 const putSchema = z.object({
-  taxonomyAreaIds: z.array(z.string().trim().min(1)).max(12),
+  taxonomyAreaIds: z.array(z.string().trim().min(1)).max(50),
 })
 
 type Authorized = { ok: true } | { ok: false; error: string; status: number }

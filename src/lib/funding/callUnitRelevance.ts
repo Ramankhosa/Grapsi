@@ -19,8 +19,8 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { activeMappingSql } from '@/lib/fundingDept/callSchoolMapping'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
-import { canonicalSchoolCallTaxonomiesSql } from '@/lib/researchAreas/store'
-const callAreaTable = () => canonicalAreasEnabled()?canonicalSchoolCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')
+import { callAreaRowsSql, orgAreaRowsSql } from '@/lib/researchAreas/queries'
+const callAreaTable = () => callAreaRowsSql(true)
 
 /**
  * Strongest first. `unclassified` is not a weak match — it is the absence of
@@ -86,23 +86,14 @@ export async function loadUnitAreaProfile(
   const rootArray = textArray(roots)
 
   const [areaRows, keywordRows] = await Promise.all([
-    canonicalAreasEnabled()?prisma.$queryRaw<Array<{taxonomy_area_id:string;level1_code:string}>>(Prisma.sql`
-      SELECT DISTINCT e.area_id taxonomy_area_id,coalesce(n.level1_code,'') level1_code FROM effective_org_unit_research_area_links e
-      JOIN tenant_org_units unit ON unit.id=e.org_unit_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id WHERE unit.tenant_id=${tenantId} AND unit.is_active AND unit.path && ${rootArray}`):prisma.$queryRaw<Array<{ taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
-      SELECT DISTINCT ra.taxonomy_area_id, area.level1_code
-      FROM tenant_org_unit_research_areas ra
+    prisma.$queryRaw<Array<{ taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
+      SELECT DISTINCT ra.taxonomy_area_id, coalesce(area.level1_code,'') level1_code
+      FROM ${orgAreaRowsSql()} ra
       INNER JOIN tenant_org_units unit ON unit.id = ra.org_unit_id
-      INNER JOIN research_area_taxonomy_areas area ON area.id = ra.taxonomy_area_id
-      INNER JOIN research_area_taxonomy_uploads upload ON upload.id = area.upload_id
+      LEFT JOIN research_area_taxonomy_areas area ON area.id = ra.taxonomy_area_id
       WHERE ra.tenant_id = ${tenantId}
         AND unit.is_active = true
         AND unit.path && ${rootArray}
-        -- Only the live catalog counts. Replacing the catalog archives the old
-        -- upload without deleting its rows, so without this a unit mapped
-        -- against a superseded catalog would keep matching on codes nobody can
-        -- see or edit any more.
-        AND area.is_active = true
-        AND upload.status = 'ACTIVE' 
     `),
     prisma.$queryRaw<Array<{ keyword: string }>>(Prisma.sql`
       SELECT DISTINCT unnest(unit.keywords) AS keyword
@@ -172,9 +163,9 @@ export function relevantCallWhereSql(
 
   const clauses: Prisma.Sql[] = []
   if (pinnedSql) clauses.push(pinnedSql)
+  if(canonicalAreasEnabled())clauses.push(Prisma.sql`EXISTS(SELECT 1 FROM ${callAreaTable()} universal WHERE universal.funding_call_id=${callId} AND universal.taxonomy_level2_name='All disciplines')`)
 
   if (profile.areaIds.length > 0) {
-    if(canonicalAreasEnabled())clauses.push(Prisma.sql`EXISTS(SELECT 1 FROM ${callAreaTable()} universal WHERE universal.funding_call_id=${callId} AND universal.taxonomy_level2_name='All disciplines')`)
     clauses.push(Prisma.sql`
       EXISTS (
         SELECT 1 FROM ${callAreaTable()} m
@@ -296,7 +287,7 @@ export interface CallMappingRow {
  */
 export function tierForCall(
   mappings: CallMappingRow[],
-  sets: { areaIds: Set<string>; level1Codes: Set<string> },
+  sets: { areaIds: Set<string>; level1Codes: Set<string>; hasConfiguredScope?:boolean },
   keywordHit?: string | null
 ): CallRelevance {
   if (mappings.length === 0) {
@@ -312,7 +303,7 @@ export function tierForCall(
   }
 
   for (const mapping of mappings) {
-    if(mapping.taxonomy_level2_name==='All disciplines'&&sets.areaIds.size)consider('direct','Open to all research disciplines')
+    if(mapping.taxonomy_level2_name==='All disciplines'&&(sets.areaIds.size||sets.hasConfiguredScope))consider('direct','Open to all research disciplines')
     const label = mapping.taxonomy_level2_name
       ? `${mapping.taxonomy_level1_name} → ${mapping.taxonomy_level2_name}`
       : mapping.taxonomy_level1_name || ''
@@ -401,7 +392,7 @@ export async function relevanceForCalls(
       id,
       tierForCall(
         mappingsByCall.get(id) || [],
-        { areaIds: areaIdSet, level1Codes: level1Set },
+        { areaIds: areaIdSet, level1Codes: level1Set,hasConfiguredScope:!profile.isUnmapped },
         keywordHitByCall.get(id)
       )
     )

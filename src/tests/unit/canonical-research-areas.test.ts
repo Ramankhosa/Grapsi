@@ -1,10 +1,18 @@
 import { describe,it,expect } from 'vitest'
-import { activeCallExclusion,shortlistAreas,validateAreaDecision,researchContent,cosineSimilarity,estimateAreaCost,type ClassificationInput } from '@/lib/researchAreas/core'
+import { activeCallExclusion,intakeCallExclusion,shortlistAreas,validateAreaDecision,researchContent,cosineSimilarity,estimateAreaCost,type ClassificationInput } from '@/lib/researchAreas/core'
 
 const call:ClassificationInput={id:'old-call',title:'Blood cancer research',description:'This grant funds hematopoietic stem cell transplantation and cell manufacturing to treat blood cancer. Research must address immune complications and cell therapy.',tags:['cell manufacturing'],published:true,active:true,rolling:false,deadline:'2026-11-16'}
 const candidates=[{id:'blood',label:'Hematology',similarity:.8},{id:'engineering',label:'Mechanical engineering',similarity:.7},{id:'all',label:'All disciplines',similarity:.2}]
 const decision={scope:'SPECIFIC',areaIds:['blood'],evidence:[{areaId:'blood',quote:'to treat blood cancer'}],needsReview:false,shortlistInsufficient:false,reason:'The stated funding purpose is treatment of blood cancer.'}
 describe('canonical research area safety',()=>{
+ it('classifies linked intake drafts without expanding the historical batch',()=>{
+  const draft={...call,published:false,active:false,deadline:null}
+  expect(activeCallExclusion(draft,'2026-10-22')).toBe('not_published_active')
+  expect(intakeCallExclusion(draft,true,'2026-10-22')).toBeNull()
+  expect(intakeCallExclusion(draft,false,'2026-10-22')).toBe('not_intake_draft')
+  expect(intakeCallExclusion({...draft,importRunId:'source'},true,'2026-10-22')).toBe('imported_call_preserved')
+  expect(intakeCallExclusion({...draft,deadline:'2020-01-01'},true,'2026-10-22')).toBe('deadline_passed')
+ })
  it('limits the old-call batch to published active accepting opportunities',()=>{
   expect(activeCallExclusion(call,'2026-10-22')).toBeNull()
   expect(activeCallExclusion({...call,importRunId:'import'},'2026-10-22')).toBe('imported_call_preserved')

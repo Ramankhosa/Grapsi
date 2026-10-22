@@ -328,6 +328,7 @@ export class ResearchAreaTaxonomyService {
   }
 
   async getActiveAreaById(areaId: string): Promise<ResearchAreaTaxonomyAreaRecord | null> {
+    if(canonicalAreasEnabled()&&!areaId.startsWith('scientify:discipline:'))return null;
     if(canonicalAreasEnabled() && areaId.startsWith('scientify:discipline:')) {
       const area=(await loadStandardAreas()).find(a=>a.id===areaId);
       return area?standardAreaRecord(area):null;
@@ -347,6 +348,7 @@ export class ResearchAreaTaxonomyService {
   }
 
   async hasActiveTaxonomy(): Promise<boolean> {
+    if(canonicalAreasEnabled())return (await loadStandardAreas()).length>0;
     const rows = await prisma.$queryRaw<Array<{ count: bigint | number }>>(Prisma.sql`
       SELECT COUNT(*) AS count
       FROM research_area_taxonomy_areas area
@@ -364,6 +366,7 @@ export class ResearchAreaTaxonomyService {
     sourceName?: string | null;
     uploadedBy: string;
   }): Promise<ResearchAreaTaxonomyUploadResult> {
+    if(canonicalAreasEnabled())throw new Error('The shared research-area collection is active. Legacy CSV replacement is disabled; use area compatibility management for historical mappings.');
     const parsed = parseResearchAreaTaxonomyCsv(input.csvText);
     const activeRows = parsed.rows.filter((row) => row.isActive);
     if (activeRows.length === 0) {

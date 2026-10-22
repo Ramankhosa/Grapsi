@@ -31,7 +31,7 @@ import { fundingPublicationService } from '../researcherProfile/funding-publicat
 import { countryNameFor, resolveCountryList } from '@/lib/geo/countries';
 import { getTenantLocale } from '@/lib/tenant/locale';
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core';
-import { currentEntityAreas, setManualAreaLinks } from '@/lib/researchAreas/store';
+import { setManualAreaLinks } from '@/lib/researchAreas/store';
 
 const embeddingService = new EmbeddingService();
 const RESEARCH_AREA_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
@@ -435,7 +435,7 @@ export function buildRecommendationProfileSnapshot(
           .filter((area) => area.useForAlerts !== false)
           .slice(0, 10)
           .map((area) => {
-            const taxonomyPath = [area.taxonomy?.level1Name, area.taxonomy?.level2Name].filter(Boolean).join(' / ');
+            const taxonomyPath = buildSavedAreaTaxonomyPath(area);
             return {
               id: area.id,
               label: normalizeWhitespace(area.label),
@@ -443,6 +443,7 @@ export function buildRecommendationProfileSnapshot(
               keywords: normalizeTextArray(area.keywords),
               disciplines: normalizeTextArray(area.disciplines),
               taxonomyAreaId: area.taxonomy?.areaId || null,
+              taxonomyAreaIds: area.canonicalAreas?.map(a=>a.id) || (area.taxonomy?.areaId?[area.taxonomy.areaId]:[]),
               taxonomyPath: taxonomyPath || null,
             };
           })
@@ -508,6 +509,7 @@ async function listFundingPublicationSignals(userId: string, limit = 5): Promise
 }
 
 function buildSavedAreaTaxonomyPath(area: ResearcherSavedResearchAreaRecord) {
+  if(area.canonicalAreas?.length)return area.canonicalAreas.map(a=>a.label).join(' / ');
   if (!area.taxonomy) {
     return null;
   }
@@ -550,6 +552,7 @@ export async function loadSelectedResearchAreas(
         label: area.label || area.researchArea,
         queryText,
         taxonomyAreaId: area.taxonomy?.areaId || null,
+        taxonomyAreaIds: area.canonicalAreas?.map(a=>a.id) || (area.taxonomy?.areaId?[area.taxonomy.areaId]:[]),
         taxonomyPath,
       };
     })
@@ -791,7 +794,7 @@ export class ResearcherProfileService {
   async listResearchAreas(userId: string): Promise<ResearcherSavedResearchAreaRecord[]> {
     const areas = await querySavedResearchAreas(userId);
     if(canonicalAreasEnabled()) return Promise.all(areas.map(async row=>{
-      const result=serializeResearchArea(row),canonical=await currentEntityAreas('SAVED_AREA',row.id);
+      const result=serializeResearchArea(row),canonical=await prisma.$queryRaw<Array<{id:string;label:string;source:string}>>`SELECT a.id,a.label,'current'::text source FROM effective_saved_research_area_links e JOIN catalogue_areas a ON a.id=e.area_id WHERE e.saved_area_id=${row.id} ORDER BY a.label`;
       const active=await prisma.$queryRaw<Array<{id:string}>>`SELECT id FROM research_area_classifications WHERE entity_kind='SAVED_AREA' AND entity_id=${row.id} AND status='ACCEPTED' AND revoked_at IS NULL`;
       if(canonical.length||active.length)result.canonicalAreas=canonical;
       if(active.length&&!canonical.length)result.taxonomy=null;

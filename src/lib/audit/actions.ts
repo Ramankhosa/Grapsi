@@ -93,6 +93,8 @@ export const ACTION_GROUPS: Record<string, AuditGroup> = {
   ORG_UNIT_MOVE: 'org',
   ORG_UNIT_DELETE: 'org',
   ORG_RESEARCH_AREAS_SET: 'org',
+  ORG_CANONICAL_AREAS_REVIEWED: 'org',
+  ORG_CANONICAL_EXACT_TRANSLATION: 'org',
   ORG_HEAD_GRANT: 'org',
   ORG_HEAD_REVOKE: 'org',
   FUNDING_DEPT_MEMBER_ADD: 'org',

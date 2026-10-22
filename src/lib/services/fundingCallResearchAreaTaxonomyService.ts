@@ -82,7 +82,8 @@ export class FundingCallResearchAreaTaxonomyService {
   }): Promise<FundingCallResearchAreaTaxonomyRecord[]> {
     const fundingCallId = normalizeWhitespace(input.fundingCallId);
     const areaIds = normalizeAreaIds(input.taxonomyAreaIds);
-    if(canonicalAreasEnabled() && areaIds.every(id=>id.startsWith('scientify:discipline:'))) {
+    if(canonicalAreasEnabled()) {
+      if(areaIds.some(id=>!id.startsWith('scientify:discipline:')))throw new Error('Choose areas from the shared research-area collection. Previous classifications are retained in history.');
       await setManualAreaLinks('CALL',fundingCallId,areaIds,'operator:call-area-editor');
       return this.listMappings(fundingCallId);
     }

@@ -31,7 +31,7 @@ export const POST=withCatalogueProtection(async(request:NextRequest)=>{
    const rows=await prisma.$queryRaw<Array<{entity_id:string}>>`SELECT entity_id FROM research_area_classifications WHERE id=${id} AND entity_kind='CALL'`
    if(!rows.length)throw new Error('Proposal not found')
    await protectCatalogueAiContext([rows[0].entity_id])
-   outcomes.push({ok:true,...await acceptCallAreaProposal(id,auth.actor.id,{confirmManual:parsed.data.confirmManual,confirmReview:true})})
+   outcomes.push({ok:true,...await acceptCallAreaProposal(id,auth.actor.id,{confirmManual:parsed.data.confirmManual,confirmReview:true,workflow:'intake'})})
   }catch(error){outcomes.push({id,ok:false,error:error instanceof Error?error.message:'Approval failed'})}
  }
  return NextResponse.json({outcomes})

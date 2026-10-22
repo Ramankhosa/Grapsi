@@ -1,4 +1,8 @@
 {
+  "src/app/api/admin/funding/department-area-review/route.ts": {
+    "methods": ["GET", "POST"],
+    "guard": "withCatalogueProtection"
+  },
   "src/app/api/admin/funding/research-area-review/route.ts": {
     "methods": ["GET", "POST"],
     "guard": "withCatalogueProtection"

@@ -3,6 +3,7 @@
 import type { FormEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 import { useAuth } from '@/lib/auth-context';
 import type { ResearchAreaTaxonomyPayload } from '@/lib/researcherProfile/types';
@@ -120,12 +121,12 @@ export default function SuperAdminResearchAreasPage() {
           <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Super Admin</div>
           <h1 className="mt-3 text-3xl font-semibold text-slate-900">Research Area Taxonomy</h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-            Upload the two-level OECD FORD-style research area CSV used by researcher profiles, embeddings, Finder, and later funding-call classification.
+            {taxonomy?.vocabulary==='canonical'?'The shared research-area collection used across funding discovery, profiles, intake and department workflows.':'Manage the research-area collection used across Grapsi.'}
           </p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          {taxonomy?.vocabulary==='canonical'?<section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h2 className="text-xl font-semibold">Shared research areas</h2><p className="mt-3 text-sm leading-6">{taxonomy.areas.length} standard areas are available. Previous classifications remain in history. Legacy CSV replacement is disabled to preserve existing mappings.</p><Link className="mt-4 block text-sm underline" href="/admin/funding/research-area-review">Review call classifications</Link><Link className="mt-3 block text-sm underline" href="/admin/funding/department-area-review">Review department classifications</Link><Link className="mt-3 block text-sm underline" href="/admin/funding/catalogue-areas">Manage historical compatibility</Link></section>:<section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">CSV Upload</div>
             <h2 className="mt-2 text-xl font-semibold text-slate-900">Replace Active Taxonomy</h2>
             <p className="mt-3 text-sm leading-6 text-slate-600">
@@ -175,7 +176,7 @@ export default function SuperAdminResearchAreasPage() {
                 {uploading ? 'Uploading...' : 'Upload and activate'}
               </button>
             </form>
-          </section>
+          </section>}
 
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-4">

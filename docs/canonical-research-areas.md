@@ -27,6 +27,30 @@ infer a one-to-many inverse mapping for old preferences. The derived
 a newly classified hematology call without retaining an erroneous engineering
 tag. Old department rows, structure IDs, assigned work and triage stay intact.
 User-facing department selections exclude derived routing compatibility targets.
+Precise new department selections do not inherit native compatibility targets:
+two new areas sharing an old broad category are not therefore interchangeable.
+Only an explicitly retained previous scope keeps that broader routing behaviour.
+
+All live classification consumers use `researchAreas/queries.ts`. This includes
+DSR filters/facets, unclassified queues, department totals, organisation counts
+and advanced search. Researcher snapshots carry every selected standard area.
+Legacy CSV replacement is disabled while the common collection is active.
+Historical links retain labels and use authoritative current-call precedence.
+
+Superadmin can review department proposals at
+`/admin/funding/department-area-review`. Generation displays a US$0.10 maximum
+per unit, uses the existing Voyage index and GPT reviewer, and reuses unchanged
+pending proposals. Approval requires fresh authentication and preserves existing
+department scope. It creates no DSR allocations or notifications. The department
+editor separately shows retained previous scope for deliberate removal.
+`scripts/migrate-exact-research-area-settings.ts` previews mechanical exact
+translations; production application additionally requires a verified fresh
+backup/restore/rehearsal. Ambiguous mappings are never automatically expanded.
+
+Normal intake may classify a linked draft before publication. The open-only
+historical backfill remains separately guarded. Purpose hashes avoid redundant
+review after publication while changed research content triggers fresh review;
+accepted human decisions remain protected.
 
 The migration adds four tables and four views only. No funding/profile column
 is altered, no old classification is deleted, and no notification is emitted.

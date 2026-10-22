@@ -787,7 +787,7 @@ export default function FundingDirectoryPanel({
 
       <RailSection title="Research">
         <ImportedAreaPicker filters={filters} query={activeQuery} onChange={set} />
-        <FacetGroup dimension="taxonomyArea" items={items('taxonomyArea')} filters={filters} labelFor={labelFor} onChange={set} />
+        {filters.taxonomyAreaIds.length>0&&<FacetGroup dimension="taxonomyArea" items={items('taxonomyArea').filter(item=>filters.taxonomyAreaIds.includes(item.value))} filters={filters} labelFor={labelFor} onChange={set} />}
         <FacetGroup dimension="sdgGoal" items={items('sdgGoal')} filters={filters} labelFor={labelFor} onChange={set} />
         <FacetGroup dimension="programmeFramework" items={items('programmeFramework')} filters={filters} labelFor={labelFor} onChange={set} />
       </RailSection>

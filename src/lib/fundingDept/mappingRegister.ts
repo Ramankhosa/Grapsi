@@ -18,6 +18,7 @@ import { openCallSql, textArray, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { getDeptSettings } from './settings'
+import { callHasAreasSql, orgAreaRowsSql } from '@/lib/researchAreas/queries'
 
 export async function getMappedCalls(tenantId: string, f: { scopeSchoolIds?: string[]; schoolId?: string | null; source?: string | null; active?: string | null; callSearch?: string | null; page?: number; pageSize?: number; all?: boolean }) {
   const page = Math.max(1, f.page || 1), pageSize = Math.min(100, Math.max(1, f.pageSize || 20))
@@ -49,7 +50,7 @@ export async function getUnclassifiedQueue(tenantId: string, f: { page?: number;
   const settings = await getDeptSettings(tenantId)
   const asOf = f.asOf ?? new Date()
   const where = Prisma.sql`${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
-    AND NOT EXISTS (SELECT 1 FROM funding_call_research_area_taxonomies t WHERE t.funding_call_id = fc.id)`
+    AND NOT ${callHasAreasSql(Prisma.sql`fc.id`)}`
   const [count, rows] = await Promise.all([
     prisma.$queryRaw<Array<{ n: number; overdue: number }>>(Prisma.sql`SELECT count(*)::int n,
         count(*) FILTER (WHERE COALESCE(fc."publishedAt", fc."createdAt") < ${new Date(asOf.getTime() - settings.untouchedDays * 86400000)})::int overdue
@@ -71,7 +72,7 @@ export async function getUnclassifiedQueue(tenantId: string, f: { page?: number;
 export async function getSchoolRoutingGaps(tenantId: string, scopeSchoolIds?: string[]) {
   const rows = await prisma.$queryRaw<Array<{ id: string; name: string; areas: number; keywords: number; coordinator: string | null; active_mappings: number }>>(Prisma.sql`
     SELECT s.id, s.name,
-      (SELECT count(*)::int FROM tenant_org_unit_research_areas ra JOIN tenant_org_units u ON u.id=ra.org_unit_id AND u.is_active WHERE ra.tenant_id=${tenantId} AND u.path[1]=s.id) areas,
+      (SELECT count(DISTINCT ra.taxonomy_area_id)::int FROM ${orgAreaRowsSql()} ra JOIN tenant_org_units u ON u.id=ra.org_unit_id AND u.is_active WHERE ra.tenant_id=${tenantId} AND u.path[1]=s.id) areas,
       (SELECT count(*)::int FROM tenant_org_units u, unnest(u.keywords) k WHERE u.tenant_id=${tenantId} AND u.is_active AND u.path[1]=s.id) keywords,
       (SELECT COALESCE(us.name, us.email) FROM funding_dept_school_assignments sa JOIN funding_dept_members dm ON dm.id=sa.member_id AND dm.is_active JOIN users us ON us.id=dm.user_id
         WHERE sa.tenant_id=${tenantId} AND sa.org_unit_id=s.id AND NOT sa.is_deputy LIMIT 1) coordinator,

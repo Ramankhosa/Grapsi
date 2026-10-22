@@ -31,9 +31,8 @@ import { Prisma } from '@/lib/prisma-generated'
 import { openCallSql, textArray, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { getDeptSettings } from './settings'
-import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
-import { canonicalSchoolCallTaxonomiesSql } from '@/lib/researchAreas/store'
-const callAreaTable = () => canonicalAreasEnabled()?canonicalSchoolCallTaxonomiesSql:Prisma.raw('funding_call_research_area_taxonomies')
+import { callAreaRowsSql, orgAreaRowsSql } from '@/lib/researchAreas/queries'
+const callAreaTable = () => callAreaRowsSql(true)
 
 export const MAPPING_SOURCES = ['ORIGIN', 'INGESTION_DIRECT', 'INGESTION_KEYWORD', 'INGESTION_BROAD', 'ADDED_BY_HEAD', 'RECONSTRUCTED_FROM_WORK', 'MANUAL_ALLOCATION'] as const
 export type MappingSource = (typeof MAPPING_SOURCES)[number]
@@ -84,14 +83,11 @@ export async function loadSchoolProfiles(tenantId: string, schoolIds?: string[])
   if (!schools.length) return []
   const ids = textArray(schools.map(s => s.id))
   const [areas, keywords] = await Promise.all([
-    canonicalAreasEnabled()?prisma.$queryRaw<Array<{school_id:string;taxonomy_area_id:string;level1_code:string}>>(Prisma.sql`
-      SELECT DISTINCT unit.path[1] school_id,e.area_id taxonomy_area_id,coalesce(n.level1_code,'') level1_code FROM effective_org_unit_research_area_links e
-      JOIN tenant_org_units unit ON unit.id=e.org_unit_id LEFT JOIN research_area_taxonomy_areas n ON n.id=e.area_id WHERE unit.tenant_id=${tenantId} AND unit.is_active AND unit.path[1]=ANY(${ids})`):prisma.$queryRaw<Array<{ school_id: string; taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
-      SELECT DISTINCT unit.path[1] school_id, ra.taxonomy_area_id, area.level1_code
-        FROM tenant_org_unit_research_areas ra
+    prisma.$queryRaw<Array<{ school_id: string; taxonomy_area_id: string; level1_code: string }>>(Prisma.sql`
+      SELECT DISTINCT unit.path[1] school_id, ra.taxonomy_area_id, coalesce(area.level1_code,'') level1_code
+        FROM ${orgAreaRowsSql()} ra
         JOIN tenant_org_units unit ON unit.id = ra.org_unit_id AND unit.is_active
-        JOIN research_area_taxonomy_areas area ON area.id = ra.taxonomy_area_id AND area.is_active
-        JOIN research_area_taxonomy_uploads upload ON upload.id = area.upload_id AND upload.status = 'ACTIVE'
+        LEFT JOIN research_area_taxonomy_areas area ON area.id = ra.taxonomy_area_id
        WHERE ra.tenant_id = ${tenantId} AND unit.path[1] = ANY(${ids})`),
     prisma.$queryRaw<Array<{ school_id: string; keyword: string }>>(Prisma.sql`
       SELECT DISTINCT unit.path[1] school_id, lower(btrim(k)) keyword

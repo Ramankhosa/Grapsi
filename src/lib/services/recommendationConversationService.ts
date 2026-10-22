@@ -1022,7 +1022,7 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   applicationLanguages: 'Language (or not stated)',
   sponsorTypes: 'Sponsor types',
   taxonomyAreaIds: 'Previous Grapsi areas',
-  importedAreaIds: 'Imported research areas',
+  importedAreaIds: 'Research areas',
   lifecycleStatuses: 'Call status',
   funderIds: 'Funders',
   sdgGoals: 'SDGs',

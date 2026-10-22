@@ -81,6 +81,76 @@ async function main(){
   await setManualAreaLinks('SAVED_AREA',saved.id,[],'areas-user',db as any)
   assert.equal((await researcherProfileService.listResearchAreas('areas-user'))[0].taxonomy,null)
   console.log('PASS flat canonical selectors, free-text interests, confirmed areas and preference preservation on '+database)
+  const {callAreaSelectionSql,orgAreaRowsSql}=await import('../src/lib/researchAreas/queries')
+  const neuro='scientify:discipline:neuro'
+  await db.$executeRaw`INSERT INTO catalogue_areas(id,source_key,kind,label,normalized_label,version) VALUES(${neuro},'scientify','discipline','Neuroscience','neuroscience','fixture')`
+  await db.$executeRaw`INSERT INTO research_area_legacy_targets(area_id,native_area_id,crosswalk_version) VALUES(${neuro},${med.id},'reviewed-fixture')`
+  const neuroCall=await db.fundingCall.create({data:{title:'Neuroscience programme',description:'Research funding for neuroscience and brain studies.',createdByUserId:'areas-user',updatedByUserId:'areas-user',visibility:'GLOBAL_PUBLISHED',status:'PUBLISHED',catalog_status:'PUBLISHED',is_active:true,close_date:new Date('2099-12-31')}})
+  await setManualAreaLinks('CALL',neuroCall.id,[neuro],'areas-user',db as any)
+  await setManualAreaLinks('CALL',call.id,[ids.blood],'areas-user',db as any)
+  const precise=await loadUnitAreaProfile(tenant.id,[clinic.id])
+  const preciseCalls=await db.$queryRaw<Array<{id:string}>>`SELECT f.id FROM funding_calls f WHERE ${relevantCallWhereSql(precise,'f')}`
+  assert(preciseCalls.some(c=>c.id===call.id));assert(!preciseCalls.some(c=>c.id===neuroCall.id),'A precise blood-research selection must not expand through a shared old medical category')
+  const selectedCount=await db.$queryRaw<Array<{n:number}>>`SELECT count(*)::int n FROM ${orgAreaRowsSql(true)} a WHERE a.org_unit_id=${clinic.id}`
+  assert.equal(selectedCount[0].n,1,'Department badges count actual selections, not projected legacy targets')
+  const oldFilter=await db.$queryRaw<Array<{id:string}>>`SELECT f.id FROM funding_calls f WHERE ${callAreaSelectionSql([legacy.id],(await import('@prisma/client')).Prisma.sql`f.id`)}`
+  assert(!oldFilter.some(c=>c.id===call.id),'Saved legacy filters must respect corrected authoritative labels')
+  const unknown=await db.fundingCall.create({data:{title:'Unknown purpose',description:'Administrative office without a stated research funding purpose.',createdByUserId:'areas-user',updatedByUserId:'areas-user',visibility:'GLOBAL_PUBLISHED',status:'PUBLISHED',catalog_status:'PUBLISHED',is_active:true,close_date:new Date('2099-12-31')}})
+  await setManualAreaLinks('CALL',unknown.id,[],'areas-user',db as any)
+  const {getUnclassifiedQueue}=await import('../src/lib/fundingDept/mappingRegister')
+  const {getDepartmentTotals}=await import('../src/lib/fundingDept/schoolFunnelService')
+  const queue=await getUnclassifiedQueue(tenant.id),totals=await getDepartmentTotals(tenant.id,[])
+  assert.equal(queue.total,1);assert.equal(queue.rows[0].id,unknown.id);assert.equal(totals.unclassifiedCalls,queue.total,'Queue and headline classification counts must agree')
+  const directoryFacets=await recommendationSearchService.getDirectoryFacets({filters:{lifecycleStatuses:['OPEN','ROLLING']},access:{tenantId:null,isSuperAdmin:false}})
+  assert.equal(directoryFacets.facets.taxonomyArea.find(a=>a.value===ids.blood)?.count,2,'Advanced facet counts include universal calls')
+  const oldDirectoryFacets=await recommendationSearchService.getDirectoryFacets({filters:{taxonomyAreaIds:[legacy.id],lifecycleStatuses:['OPEN','ROLLING']},access:{tenantId:null,isSuperAdmin:false}})
+  assert.equal(oldDirectoryFacets.totalPublished,1);assert.equal(oldDirectoryFacets.facets.taxonomyArea.find(a=>a.value===legacy.id)?.count,1,'Old links retain readable, accurate compatibility counts')
+  const {researchAreaFacetsSql}=await import('../src/lib/researchAreas/queries')
+  const dsrAreas=await db.$queryRaw<Array<{taxonomy_area_id:string;call_count:number}>>(researchAreaFacetsSql([call.id,broad.id,neuroCall.id,unknown.id]))
+  assert.equal(dsrAreas.find(a=>a.taxonomy_area_id===ids.blood)?.call_count,2)
+  assert.equal(dsrAreas.find(a=>a.taxonomy_area_id===ids.eng)?.call_count,1,'All standard labels are offered with accurate universal-call counts')
+  await setManualAreaLinks('SAVED_AREA',saved.id,[ids.blood,neuro],'areas-user',db as any)
+  const {loadSelectedResearchAreas,buildRecommendationProfileSnapshot}=await import('../src/lib/services/researcherProfileService')
+  const selectedAreas=await loadSelectedResearchAreas('areas-user',[saved.id])
+  assert.deepEqual(new Set(selectedAreas[0].taxonomyAreaIds),new Set([ids.blood,neuro]))
+  assert(selectedAreas[0].taxonomyPath?.includes('Hematology')&&selectedAreas[0].taxonomyPath?.includes('Neuroscience'))
+  const snapshot=buildRecommendationProfileSnapshot(await researcherProfileService.getFinderContext('areas-user'))
+  assert.deepEqual(new Set(snapshot.savedResearchAreas[0]?.taxonomyAreaIds||[]),new Set(),'Alerts-disabled interests must remain excluded from AI profile context')
+  await researcherProfileService.saveResearchArea('areas-user',{id:saved.id,label:saved.label,researchArea:saved.researchArea,useForAlerts:true})
+  const included=buildRecommendationProfileSnapshot(await researcherProfileService.getFinderContext('areas-user'))
+  assert.deepEqual(new Set(included.savedResearchAreas[0].taxonomyAreaIds),new Set([ids.blood,neuro]))
+  console.log('PASS precise department scope, legacy filter precedence, unified queues/counts and multi-area AI context')
+  const {exactOrganisationPlan,applyExactOrganisationItem,organisationReviewInput,acceptOrganisationProposal}=await import('../src/lib/researchAreas/organisationReview')
+  const exact=await exactOrganisationPlan(),engItem=exact.find(p=>p.unitId===engineering.id)!
+  assert(engItem.newIds.includes(ids.eng));await applyExactOrganisationItem(engItem,'areas-user')
+  assert(!(await exactOrganisationPlan()).some(p=>p.unitId===engineering.id&&p.newIds.length),'Exact conversion must be idempotent')
+  assert.deepEqual(await db.tenantOrgUnitResearchArea.findMany({orderBy:{id:'asc'}}),orgBefore,'Exact conversion preserves every original department row')
+  const oldMedical=await db.tenantOrgUnit.create({data:{tenant_id:tenant.id,kind:'SCHOOL',name:'Clinical medicine unit'}})
+  await db.tenantOrgUnitResearchArea.create({data:{tenant_id:tenant.id,org_unit_id:oldMedical.id,taxonomy_area_id:med.id}})
+  const orgInput=await organisationReviewInput(oldMedical.id),orgProposal='00000000-0000-4000-8000-000000000001'
+  const orgDecision={scope:'SPECIFIC',areaIds:[ids.blood],evidence:[{areaId:ids.blood,quote:'Clinical medicine'}],needsReview:true,shortlistInsufficient:false,reason:'Proposed related subject; existing clinical scope remains retained.'}
+  const {CLASSIFICATION_PROMPT_VERSION}=await import('../src/lib/researchAreas/core')
+  await db.$executeRaw`INSERT INTO research_area_classifications(id,entity_kind,entity_id,input_hash,status,scope,source,prompt_version,candidates,evidence,actor_id)
+   VALUES(${orgProposal},'ORG_UNIT',${oldMedical.id},${orgInput.hash},'PROPOSED','SPECIFIC','ai:department-review',${CLASSIFICATION_PROMPT_VERSION},${JSON.stringify(candidates)}::jsonb,${JSON.stringify(orgDecision)}::jsonb,'areas-user')`
+  await db.$executeRaw`INSERT INTO research_area_classification_links(classification_id,area_id) VALUES(${orgProposal},${ids.blood})`
+  await db.tenantOrgUnit.update({where:{id:oldMedical.id},data:{name:'Changed department scope'}})
+  await assert.rejects(acceptOrganisationProposal(orgProposal,'areas-user'),/settings or review policy changed/)
+  await db.tenantOrgUnit.update({where:{id:oldMedical.id},data:{name:orgInput.unit.name}})
+  await acceptOrganisationProposal(orgProposal,'areas-user')
+  const retained=await loadUnitAreaProfile(tenant.id,[oldMedical.id])
+  const retainedCalls=await db.$queryRaw<Array<{id:string}>>`SELECT f.id FROM funding_calls f WHERE ${relevantCallWhereSql(retained,'f')}`
+  assert(retainedCalls.some(c=>c.id===neuroCall.id),'Department approval cannot silently narrow retained previous scope')
+  assert(retainedCalls.some(c=>c.id===call.id))
+  assert.equal((await db.$queryRaw<Array<{n:number}>>`SELECT count(*)::int n FROM dsr_call_school_mappings`)[0].n,0,'Classification conversion cannot create DSR allocations')
+  console.log('PASS reviewed department proposals, stale-scope rejection, exact idempotence and preserved routing scope')
+  const job=await db.fundingIntakeJob.create({data:{submitted_by_user_id:'areas-user',input_type:'text'}})
+  const draft=await db.fundingCall.create({data:{title:input.title,description:input.description,disciplines:input.tags,createdByUserId:'areas-user',updatedByUserId:'areas-user',tenantId:tenant.id,visibility:'TENANT_PRIVATE',status:'READY_FOR_REVIEW',catalog_status:'DRAFT',is_active:false,intake_job_id:job.id}})
+  const draftInput=(await loadCallClassificationInput(draft.id,db as any))!
+  const draftProposal=await saveAreaProposal(draftInput,decision,candidates,{},'areas-user',db as any)
+  await assert.rejects(acceptCallAreaProposal(draftProposal,'areas-user',{},db as any),/eligible/)
+  await acceptCallAreaProposal(draftProposal,'areas-user',{workflow:'intake'},db as any)
+  assert.equal((await db.$queryRaw<Array<{area_id:string}>>`SELECT area_id FROM effective_call_research_areas WHERE call_id=${draft.id}`)[0].area_id,ids.blood)
+  console.log('PASS linked inactive intake-draft classification with historical-batch protection')
  })
 }
 main().catch(error=>{console.error(error);process.exitCode=1})

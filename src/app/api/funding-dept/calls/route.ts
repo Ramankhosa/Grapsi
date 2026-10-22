@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
-import { loadUnitAreaProfile } from '@/lib/funding/callUnitRelevance'
+import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { callAreaSelectionSql, researchAreaFacetsSql } from '@/lib/researchAreas/queries'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { canReviewDept } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
@@ -64,6 +65,12 @@ export async function GET(request: NextRequest) {
   // Drafts are part of the desk's work-in-progress, so the funnel shows them
   // (this endpoint is admin/head-only; the faculty-facing lists still hide them).
   const visible = visibleFundingCallWhere(context.tenantId, { includeTenantDrafts: true })
+  // Bound the classification lookup to records this tenant may actually see.
+  // The resulting ID predicate is applied before counts, ordering and paging.
+  const areaVisibleIds = researchAreaId || orgUnitId
+    ? (await prisma.fundingCall.findMany({where:visible,select:{id:true}})).map(c=>c.id) : []
+  const classifiedIds = async (condition:Prisma.Sql) => (await prisma.$queryRaw<Array<{id:string}>>`
+    SELECT fc.id FROM funding_calls fc WHERE fc.id=ANY(${areaVisibleIds}::text[]) AND ${condition}`).map(c=>c.id)
   const tenantCurrency = (await getTenantLocale(context.tenantId)).currency
 
   const draftPredicate: Prisma.FundingCallWhereInput = {
@@ -110,9 +117,7 @@ export async function GET(request: NextRequest) {
     filters.push({ disciplines: { has: discipline } })
   }
   if (researchAreaId) {
-    filters.push({
-      research_area_taxonomies: { some: { taxonomy_area_id: researchAreaId } },
-    })
+    filters.push({id:{in:await classifiedIds(callAreaSelectionSql([researchAreaId],Prisma.sql`fc.id`))}})
   }
   if (fundingKind) {
     filters.push({ funding_kinds: { has: fundingKind } })
@@ -141,23 +146,8 @@ export async function GET(request: NextRequest) {
       // always given rather than widening to the whole catalog.
       filters.push(assignedHere)
     } else {
-      const relevantHere: Prisma.FundingCallWhereInput[] = []
-      if (profile.areaIds.length > 0) {
-        relevantHere.push({
-          research_area_taxonomies: { some: { taxonomy_area_id: { in: profile.areaIds } } },
-        })
-      }
-      if (profile.level1Codes.length > 0) {
-        relevantHere.push({
-          research_area_taxonomies: {
-            some: { taxonomy_level1_code: { in: profile.level1Codes } },
-          },
-        })
-      }
-      if (profile.keywords.length > 0) {
-        relevantHere.push({ disciplines: { hasSome: profile.keywords } })
-      }
-      filters.push({ OR: [assignedHere, ...relevantHere] })
+      const relevant = await classifiedIds(relevantCallWhereSql(profile,'fc',{includeUnclassified:false}))
+      filters.push({ OR: [assignedHere, {id:{in:relevant}}] })
     }
   }
   if (closingInDays > 0) {
@@ -194,23 +184,7 @@ export async function GET(request: NextRequest) {
     // tag list still covers whatever has not been classified yet.
     const areaRows = await prisma.$queryRaw<
       Array<{ taxonomy_area_id: string; label: string; call_count: number }>
-    >(Prisma.sql`
-      SELECT m.taxonomy_area_id,
-             CASE WHEN COALESCE(m.taxonomy_level2_name, '') <> ''
-                  THEN m.taxonomy_level1_name || ' → ' || m.taxonomy_level2_name
-                  ELSE m.taxonomy_level1_name END AS label,
-             COUNT(DISTINCT m.funding_call_id)::int AS call_count
-        FROM funding_call_research_area_taxonomies m
-       WHERE m.funding_call_id = ANY(${
-         facetRows.length > 0
-           ? Prisma.sql`ARRAY[${Prisma.join(
-               facetRows.map((row) => Prisma.sql`${row.id}`)
-             )}]::text[]`
-           : Prisma.sql`ARRAY[]::text[]`
-       })
-       GROUP BY m.taxonomy_area_id, label
-       ORDER BY label ASC
-    `)
+    >(researchAreaFacetsSql(facetRows.map(row=>row.id)))
 
     return NextResponse.json({
       agencies: sortedUnique(facetRows.map((row) => row.agency_name || row.agencyName)),
