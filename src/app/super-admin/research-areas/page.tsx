@@ -18,6 +18,7 @@ export default function SuperAdminResearchAreasPage() {
   const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const [taxonomy, setTaxonomy] = useState<ResearchAreaTaxonomyPayload | null>(null);
+  const [areaSearch,setAreaSearch]=useState('');
   const [file, setFile] = useState<File | null>(null);
   const [sourceName, setSourceName] = useState('OECD FORD');
   const [loading, setLoading] = useState(true);
@@ -119,7 +120,7 @@ export default function SuperAdminResearchAreasPage() {
       <div className="mx-auto max-w-6xl space-y-8">
         <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Super Admin</div>
-          <h1 className="mt-3 text-3xl font-semibold text-slate-900">Research Area Taxonomy</h1>
+          <h1 className="mt-3 text-3xl font-semibold text-slate-900">{taxonomy?.vocabulary==='canonical'?'Shared Research Areas':'Research Area Taxonomy'}</h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             {taxonomy?.vocabulary==='canonical'?'The shared research-area collection used across funding discovery, profiles, intake and department workflows.':'Manage the research-area collection used across Grapsi.'}
           </p>
@@ -209,30 +210,31 @@ export default function SuperAdminResearchAreasPage() {
                     <div className="mt-2 text-2xl font-semibold text-slate-900">{taxonomy.upload.activeRowCount}</div>
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Level 1</div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">{taxonomy.groups.length}</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{taxonomy.vocabulary==='canonical'?'Collection':'Level 1'}</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">{taxonomy.vocabulary==='canonical'?'Shared':taxonomy.groups.length}</div>
                   </div>
                 </div>
 
-                <div className="mt-6 text-sm leading-6 text-slate-600">
+                {taxonomy.vocabulary==='canonical'?<p className="mt-6 text-sm leading-6 text-slate-600">Source: imported research-area collection, source-v1. Broad subjects remain separate from research areas.</p>:<div className="mt-6 text-sm leading-6 text-slate-600">
                   Uploaded file: {taxonomy.upload.originalFilename || 'CSV upload'}
                   <br />
                   Activated: {taxonomy.upload.activatedAt ? new Date(taxonomy.upload.activatedAt).toLocaleString() : 'Not recorded'}
-                </div>
+                </div>}
 
+                <input type="search" aria-label="Search the shared area collection" placeholder="Search research areas" className="mt-4 w-full rounded border border-slate-300 p-2 text-sm" value={areaSearch} onChange={e=>setAreaSearch(e.target.value)}/>
                 <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-slate-200">
                   {taxonomy.groups.slice(0, 30).map((group) => (
                     <div key={group.level1Code} className="border-b border-slate-100 p-4 last:border-b-0">
                       <div className="font-semibold text-slate-900">{group.level1Name}</div>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {group.areas.slice(0, 10).map((area) => (
+                        {group.areas.filter(area=>[area.level2Name,group.level1Name].some(name=>name.toLowerCase().includes(areaSearch.toLowerCase()))).slice(0, 50).map((area) => (
                           <span key={area.id} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
                             {area.level2Name || 'General'}
                           </span>
                         ))}
-                        {group.areas.length > 10 ? (
+                        {!areaSearch&&group.areas.length > 50 ? (
                           <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white">
-                            +{group.areas.length - 10}
+                            +{group.areas.length - 50} · search to find more
                           </span>
                         ) : null}
                       </div>
