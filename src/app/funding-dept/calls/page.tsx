@@ -428,6 +428,7 @@ export default function DeptCallFunnelPage() {
                 <input type="search" className="nk-input mb-2 w-full" aria-label="Find research area" placeholder="Find research area" value={areaQuery} onChange={e=>setAreaQuery(e.target.value)}/>
                 <select
                   className="nk-select w-full"
+                  aria-label="Research area"
                   value={draftFilters.researchAreaId}
                   onChange={(event) =>
                     void load(0, { ...draftFilters, researchAreaId: event.target.value,discipline:'' })
