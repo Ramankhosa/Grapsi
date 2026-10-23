@@ -10,6 +10,7 @@ import { extractReviewerContextFromUrls } from '@/lib/reviewer/callExtraction';
 import { createReviewerCallFromContext } from '@/lib/reviewer/template-bridge';
 import { MAX_REVIEWER_SOURCE_URLS } from '@/lib/reviewer/sourceText';
 import { withCataloguePagesProtection } from '@/lib/catalogueProtection/pages';
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Check authentication
@@ -129,10 +130,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (mode === 'library') {
         const fundingCall = await prisma.fundingCall.findFirst({
           where: {
-            id: String(fundingCallId),
-            OR: [
-              { visibility: 'GLOBAL_PUBLISHED' },
-              ...(session.user.tenantId ? [{ tenantId: session.user.tenantId }] : []),
+            AND: [
+              { id: String(fundingCallId) },
+              visibleFundingCallWhere(session.user.tenantId ?? null, { includeCatalog: true }),
             ],
           },
           select: { id: true },

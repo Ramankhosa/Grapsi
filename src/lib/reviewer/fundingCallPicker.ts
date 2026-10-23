@@ -1,5 +1,5 @@
 /**
- * Pure helpers behind the reviewer's stored-funding-call picker.
+ * Request and display helpers behind the reviewer's stored-funding-call picker.
  *
  * Kept out of the component so the list maths — which decides what the user can
  * actually click — can be tested without a DOM.
@@ -16,6 +16,37 @@ export type FundingCallOption = {
   sourceUrl?: string | null
   readiness?: FundingCallReadiness
   readinessLabel?: string
+}
+
+export const FUNDING_LIBRARY_UNAVAILABLE = 'Could not load the funding call library. Retry, or start from a call URL instead.'
+
+export class FundingCallLibraryError extends Error {}
+
+/** Use the app's authenticated request path so refresh and reauthentication work. */
+export async function loadFundingCallOptions(
+  authFetch: (url: string, options?: RequestInit) => Promise<Response>,
+  options: { search?: string; limit?: number } = {}
+): Promise<FundingCallOption[]> {
+  const params = new URLSearchParams({ limit: String(Math.min(Math.max(options.limit || 50, 1), 50)) })
+  if (options.search?.trim()) params.set('search', options.search.trim())
+  const response = await authFetch(`/api/reviewer/funding-calls?${params}`)
+  if (!response.ok) {
+    const message = response.status === 401
+      ? 'Please sign in again to load the funding call library.'
+      : response.status === 403
+        ? 'Your account cannot access the funding call library. Contact your administrator.'
+        : response.status === 429
+          ? 'Funding call viewing is temporarily limited. Please wait and retry.'
+          : FUNDING_LIBRARY_UNAVAILABLE
+    throw new FundingCallLibraryError(message)
+  }
+  const payload = await response.json()
+  if (!Array.isArray(payload?.calls)) throw new FundingCallLibraryError(FUNDING_LIBRARY_UNAVAILABLE)
+  return dedupeById(payload.calls)
+}
+
+export function fundingCallLibraryErrorMessage(error: unknown): string {
+  return error instanceof FundingCallLibraryError ? error.message : FUNDING_LIBRARY_UNAVAILABLE
 }
 
 export const READINESS_BADGE_CLASS: Record<string, string> = {

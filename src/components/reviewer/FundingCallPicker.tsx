@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import axios from 'axios'
+import { useAuth } from '@/lib/auth-context'
 import {
   FaCheck,
   FaExclamationTriangle,
@@ -12,7 +12,8 @@ import {
 import {
   READINESS_BADGE_CLASS,
   READINESS_HELP,
-  dedupeById,
+  loadFundingCallOptions,
+  fundingCallLibraryErrorMessage,
   formatCallDeadline,
   resolveVisibleCalls,
   splitOnQuery,
@@ -37,7 +38,7 @@ export type { FundingCallOption }
 const SEARCH_DEBOUNCE_MS = 250
 // Below this, the local list is a better answer than a round trip.
 const MIN_REMOTE_QUERY = 2
-const LIBRARY_PAGE_SIZE = 100
+const LIBRARY_PAGE_SIZE = 50
 const SEARCH_PAGE_SIZE = 50
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -132,6 +133,8 @@ export default function FundingCallPicker({
   invalid?: boolean
   onUseUrlMode?: () => void
 }) {
+  const { authFetch, isLoading: authLoading, user } = useAuth()
+  const userId = user?.user_id
   const [library, setLibrary] = useState<FundingCallOption[]>([])
   const [libraryLoading, setLibraryLoading] = useState(true)
   const [libraryError, setLibraryError] = useState('')
@@ -147,22 +150,20 @@ export default function FundingCallPicker({
   const trimmedQuery = query.trim()
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || authLoading || !userId) return
     let cancelled = false
 
     const loadLibrary = async () => {
       try {
         setLibraryLoading(true)
-        const response = await axios.get('/api/reviewer/funding-calls', {
-          params: { limit: LIBRARY_PAGE_SIZE },
-        })
+        const calls = await loadFundingCallOptions(authFetch, { limit: LIBRARY_PAGE_SIZE })
         if (cancelled) return
-        setLibrary(dedupeById(response.data?.calls || []))
+        setLibrary(calls)
         setLibraryError('')
       } catch (error) {
         if (cancelled) return
         console.error('Failed to load funding calls:', error)
-        setLibraryError('Could not load the funding call library. Retry, or start from a call URL instead.')
+        setLibraryError(fundingCallLibraryErrorMessage(error))
       } finally {
         if (!cancelled) setLibraryLoading(false)
       }
@@ -172,13 +173,13 @@ export default function FundingCallPicker({
     return () => {
       cancelled = true
     }
-  }, [enabled, reloadKey])
+  }, [enabled, authLoading, userId, authFetch, reloadKey])
 
   // The library list is only the most recently updated page of calls, so a call
   // that is genuinely in the database can sit outside it. Anything typed goes
   // back to the server, which searches the whole table.
   useEffect(() => {
-    if (!enabled || trimmedQuery.length < MIN_REMOTE_QUERY) {
+    if (!enabled || authLoading || !userId || trimmedQuery.length < MIN_REMOTE_QUERY) {
       setRemote(null)
       setSearching(false)
       return
@@ -189,11 +190,9 @@ export default function FundingCallPicker({
 
     const timer = setTimeout(async () => {
       try {
-        const response = await axios.get('/api/reviewer/funding-calls', {
-          params: { search: trimmedQuery, limit: SEARCH_PAGE_SIZE },
-        })
+        const calls = await loadFundingCallOptions(authFetch, { search: trimmedQuery, limit: SEARCH_PAGE_SIZE })
         if (cancelled) return
-        setRemote({ query: trimmedQuery, calls: dedupeById(response.data?.calls || []) })
+        setRemote({ query: trimmedQuery, calls })
       } catch (error) {
         if (cancelled) return
         // Fall back to filtering what is already loaded.
@@ -208,7 +207,7 @@ export default function FundingCallPicker({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [enabled, trimmedQuery])
+  }, [enabled, authLoading, userId, authFetch, trimmedQuery])
 
   const results = useMemo(
     () => resolveVisibleCalls({ library, query: trimmedQuery, remote }),

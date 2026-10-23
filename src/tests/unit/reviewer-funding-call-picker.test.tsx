@@ -1,12 +1,17 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/lib/auth-context', () => ({ useAuth: () => ({ authFetch: vi.fn(), isLoading: true, user: null }) }))
 
 import FundingCallPicker from '@/components/reviewer/FundingCallPicker'
 import {
   dedupeById,
   filterCallsLocally,
   formatCallDeadline,
+  loadFundingCallOptions,
+  fundingCallLibraryErrorMessage,
+  FUNDING_LIBRARY_UNAVAILABLE,
   resolveVisibleCalls,
   splitOnQuery,
   type FundingCallOption,
@@ -24,6 +29,33 @@ function makeCall(overrides: Partial<FundingCallOption> = {}): FundingCallOption
     readinessLabel: overrides.readinessLabel || 'Approved template',
   }
 }
+
+describe('authenticated funding library requests', () => {
+  it('uses authenticated fetch for bounded, encoded searches and deduplicates returned calls', async () => {
+    const authFetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ calls: [makeCall(), makeCall()] })))
+    const calls = await loadFundingCallOptions(authFetch, { search: '  C++ research  ', limit: 100 })
+    const url = new URL(authFetch.mock.calls[0][0], 'https://example.invalid')
+    expect(url.pathname).toBe('/api/reviewer/funding-calls')
+    expect(url.searchParams.get('limit')).toBe('50')
+    expect(url.searchParams.get('search')).toBe('C++ research')
+    expect(calls).toHaveLength(1)
+  })
+
+  it.each<[number, RegExp]>([[401, /sign in again/i], [403, /administrator/i], [429, /wait and retry/i]])(
+    'explains a %i response without exposing server diagnostics', async (status, message) => {
+      const authFetch = vi.fn(async () => new Response(JSON.stringify({ error: 'Prisma SELECT private FROM records' }), { status }))
+      const error = await loadFundingCallOptions(authFetch).catch(error => error)
+      expect(fundingCallLibraryErrorMessage(error)).toMatch(message)
+      expect(fundingCallLibraryErrorMessage(error)).not.toContain('Prisma')
+    }
+  )
+
+  it('does not interpret an invalid successful response as an empty library', async () => {
+    const authFetch = vi.fn(async () => new Response('{}'))
+    await expect(loadFundingCallOptions(authFetch)).rejects.toThrow(FUNDING_LIBRARY_UNAVAILABLE)
+    expect(fundingCallLibraryErrorMessage(new Error('private network diagnostic'))).toBe(FUNDING_LIBRARY_UNAVAILABLE)
+  })
+})
 
 describe('funding call picker list maths', () => {
   it('drops duplicate ids so two rows can never share a React key', () => {

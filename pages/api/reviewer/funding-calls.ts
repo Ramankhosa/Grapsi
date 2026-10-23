@@ -2,6 +2,7 @@ import { withCataloguePagesProtection } from '@/lib/catalogueProtection/pages'
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { getReviewerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api'
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import prisma from '../../../lib/prisma'
 
 type ReadinessTier = 'template_manual' | 'guideline_manual' | 'call_fields'
@@ -21,7 +22,7 @@ const READINESS_RANK: Record<ReadinessTier, number> = {
 /**
  * Funding calls the signed-in user can start a reviewer workspace from.
  *
- * Every accessible call is listed, not just template-approved ones: reviewer
+ * Published, active calls are listed, not just template-approved ones: reviewer
  * context degrades from template rules to guideline rules to the call record's
  * own fields, so a call without an approved template is still a usable
  * starting point. `readiness` tells the UI how rich the rules will be.
@@ -42,12 +43,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : ''
   const take = Math.min(Math.max(Number.parseInt(String(req.query.limit || '12'), 10) || 12, 1), 50)
 
-  const visibilityFilter = {
-    OR: [
-      { visibility: 'GLOBAL_PUBLISHED' as const },
-      ...(session.user.tenantId ? [{ tenantId: session.user.tenantId }] : []),
-    ],
-  }
+  // Match the catalogue boundary before pagination: a single inactive/draft
+  // row in the old visibility-only list made the guard reject the entire page.
+  // Released imports are valid reviewer sources without DSR promotion.
+  const visibilityFilter = visibleFundingCallWhere(session.user.tenantId ?? null, { includeCatalog: true })
 
   const calls = await prisma.fundingCall.findMany({
     where: search
