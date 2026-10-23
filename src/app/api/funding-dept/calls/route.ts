@@ -13,6 +13,12 @@ import { amountIn, sumByCurrency } from '@/lib/i18n/format'
 
 export const dynamic = 'force-dynamic'
 
+function privateJson(data: unknown, init?: ResponseInit) {
+  const response = NextResponse.json(data, init)
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
+
 /**
  * The per-call funnel: EVERY call the department can act on, each with its
  * matched / assigned / accepted / submitted / awarded counts.
@@ -29,10 +35,10 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
   const context = await requireTenantScope(request)
   if (isAccessError(context)) {
-    return NextResponse.json({ error: context.error }, { status: context.status })
+    return privateJson({ error: context.error }, { status: context.status })
   }
   if (!canReviewDept(context, context.scope)) {
-    return NextResponse.json(
+    return privateJson(
       { error: 'The call funnel is available to administrators and the department head.' },
       { status: 403 }
     )
@@ -186,7 +192,7 @@ export async function GET(request: NextRequest) {
       Array<{ taxonomy_area_id: string; label: string; call_count: number }>
     >(researchAreaFacetsSql(facetRows.map(row=>row.id)))
 
-    return NextResponse.json({
+    return privateJson({
       agencies: sortedUnique(facetRows.map((row) => row.agency_name || row.agencyName)),
       disciplines: sortedUnique(facetRows.flatMap((row) => row.disciplines)),
       fundingKinds: sortedUnique(facetRows.flatMap((row) => row.funding_kinds)),
@@ -336,7 +342,7 @@ export async function GET(request: NextRequest) {
     }
   })
 
-  return NextResponse.json({
+  return privateJson({
     calls,
     total,
     limit,
