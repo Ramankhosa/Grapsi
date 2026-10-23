@@ -10,13 +10,12 @@ import { isNudgeTitle } from '@/lib/fundingDept/escalationService'
 import { getMembership } from '@/lib/fundingDept/membershipService'
 import { queueStateFor } from '@/lib/fundingDept/queueState'
 import { callMatchStates, storedCallMatches } from '@/lib/fundingDept/callMatchCensus'
-import { DEFAULT_MATCH_WIDTH, MATCH_BAND_LABELS, bandForScore, isMatchWidth, type MatchWidth } from '@/lib/fundingDept/matchBands'
+import { DEFAULT_MATCH_WIDTH, MATCH_BAND_LABELS, isMatchWidth, type MatchWidth } from '@/lib/fundingDept/matchBands'
 import { getMatchWidth } from '@/lib/fundingDept/settings'
 import { queueSchoolMatchRefresh } from '@/lib/fundingDept/currentMatches'
 import { canOpenSchoolWork } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
-import { researcherSearchService } from '@/lib/services/researcherSearchService'
 import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
 
 export const dynamic = 'force-dynamic'
@@ -37,7 +36,6 @@ export const dynamic = 'force-dynamic'
 
 /** Per-source row cap. Truncation is reconciled by buildTimeline's horizon rule. */
 const SOURCE_CAP = 500
-const PEOPLE_LIMIT = 30
 
 export async function GET(request: NextRequest, { params }: { params: { callId: string } }) {
   const context = await requireTenantScope(request)
@@ -387,46 +385,25 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   // again here) is what stops the number above the list disagreeing with the
   // list: they are now the same rows.
   //
-  // A call nobody has censused yet falls back to a live search, flagged, so an
-  // officer is never blocked by a background job that has not run.
+  // An uncensused call waits for the shared census: a separate live search
+  // would list people who are not yet included in the school's count.
   let people: Array<Record<string, unknown>> = []
   let peopleError: string | null = null
-  let peopleBasis: 'census' | 'live' = 'census'
+  let peopleBasis: 'census' | 'pending' = 'census'
   let matchWidth: MatchWidth = DEFAULT_MATCH_WIDTH
   try {
     const requestedWidth = new URL(request.url).searchParams.get('width')
     matchWidth = isMatchWidth(requestedWidth) ? requestedWidth : await getMatchWidth(context.tenantId)
     const censusState = (await callMatchStates(context.tenantId, [call.id])).get(call.id)
-    let matched: Array<{ userId: string; name: string; department: string | null; score: number | null; matchTier: string | null; matchReason: string | null; researchAreas: string[] }> =
-      censusState?.refreshedAt
-        ? (await storedCallMatches(context.tenantId, call.id, [school.id], PEOPLE_LIMIT, matchWidth)).map((row) => ({
+    const matched: Array<{ userId: string; name: string; department: string | null; score: number | null; matchTier: string | null; matchReason: string | null; researchAreas: string[] }> =
+      (await storedCallMatches(context.tenantId, call.id, [school.id], null, matchWidth)).map((row) => ({
             userId: row.userId, name: row.name, department: row.department,
             score: row.score, matchTier: row.matchTier, matchReason: row.matchReason,
             researchAreas: row.researchAreas.slice(0, 4),
           }))
-        : []
 
-    if (!censusState?.refreshedAt) {
-      peopleBasis = 'live'
-      const search = await researcherSearchService.search({
-        fundingCallId: call.id,
-        filters: { orgUnitIds: scopeIds, tenantOnly: true, includeSelf: true },
-        limit: PEOPLE_LIMIT,
-        requesterUserId: context.user.id,
-        requesterTenantId: context.tenantId,
-      })
-      matched = (search.results || []).map((result: any) => ({
-        userId: result.userId, name: result.displayName, department: result.department,
-        score: result.score,
-        // Re-banded at the office's width, exactly as a stored row would be.
-        // The search's own tier comes from the shipped thresholds, so leaving it
-        // alone would make the width control do nothing on a call the census
-        // has not reached yet — the one case where a coordinator is most likely
-        // to be reaching for it.
-        matchTier: bandForScore(result.score, matchWidth, result.matchTier),
-        matchReason: result.matchReason,
-        researchAreas: (result.researchAreas || []).slice(0, 4),
-      }))
+    if (!censusState?.refreshedAt && matched.length === 0) {
+      peopleBasis = 'pending'
     }
     if (!censusState?.fresh) queueSchoolMatchRefresh(context.tenantId, school.id)
 
@@ -618,8 +595,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     peopleError,
     /**
      * Where the list came from. `census` means these are the same rows the
-     * "Matched faculty" figures count; `live` means the census has not run for
-     * this call yet and the screen is ranking it on the spot.
+     * "Matched faculty" figures count; `pending` means the census has not run.
      */
     peopleBasis,
     /** The width these bands were derived at, and the words for each band. */

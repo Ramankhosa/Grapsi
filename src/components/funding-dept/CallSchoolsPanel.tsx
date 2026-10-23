@@ -7,7 +7,7 @@
  * Picking a school opens its matching faculty below, where they can be
  * allocated or shortlisted.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 
 import { useAuth } from '@/lib/auth-context'
@@ -37,17 +37,20 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
   const { authFetch } = useAuth()
   const [data, setData] = useState<Payload | null>(null); const [error, setError] = useState(''); const [marking, setMarking] = useState(false)
   const [own, setOwn] = useState(0)
+  const latestLoad = useRef(0)
   const load = useCallback(async () => {
+    const requestId = ++latestLoad.current
     try {
       const query = width ? `?width=${encodeURIComponent(width)}` : ''
       const r = await authFetch(`/api/funding-dept/calls/${encodeURIComponent(callId)}/schools${query}`)
       const body = await r.json().catch(() => null)
+      if (requestId !== latestLoad.current) return
       if (!r.ok) throw Error(body?.error || 'Could not load the schools for this call.')
       setData(body); setError('')
       onLoaded?.((body as Payload).row?.schools.map(s => s.schoolId) || [])
       // The office's own setting, once, so the control starts where they left it.
       if (!width && (body as Payload).width) onWidthChange((body as Payload).width)
-    } catch (e) { setError((e as Error).message) }
+    } catch (e) { if (requestId === latestLoad.current) setError((e as Error).message) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authFetch, callId, width])
   useEffect(() => { void load() }, [load, revision, own])
@@ -96,7 +99,7 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
             <td className="border-t border-nickel-100 px-3 py-2 text-right"><button className={on ? 'nk-btn-primary nk-btn-xs' : 'nk-btn-secondary nk-btn-xs'} onClick={() => onSelect(s.schoolId)}>{on ? 'Showing below' : 'Show faculty'}</button></td>
           </tr> })}</tbody></table>}
     {data.canAddSchool && data.otherSchools.length > 0 && <AddSchool callId={callId} schools={data.otherSchools} onAdded={changed} />}
-    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = people scored against this call who reach the <strong>{MATCH_WIDTH_COPY[data.width].label.toLowerCase()}</strong> width{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: clientTimeZone(), dateStyle: 'medium', timeStyle: 'short' })}` : ''}. {MATCH_WIDTH_COPY[data.width].help} Picking a school lists those same people below, possible matches included, so you can see everyone who was considered. Changing the width re-counts what is already scored; it never changes the scores.</p>
+    <p className="nk-sub px-3 pb-3 pt-2 text-xs">Matched faculty = people scored against this call who reach the <strong>{MATCH_WIDTH_COPY[data.width].label.toLowerCase()}</strong> width{data.matchesRefreshedAt ? `, refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: clientTimeZone(), dateStyle: 'medium', timeStyle: 'short' })}` : ''}. {MATCH_WIDTH_COPY[data.width].help} Picking a school lists only those matched people below. Changing the width re-counts what is already scored; it never changes the scores.</p>
   </section>
 }
 

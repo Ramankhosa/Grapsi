@@ -16,6 +16,8 @@ import { voyageRerankService } from './voyageRerankService';
 import { callAreaRowsSql } from '@/lib/researchAreas/queries';
 
 const embeddingService = new EmbeddingService();
+/** Included in census fingerprints when the scored document or population changes. */
+export const RESEARCHER_SEARCH_SCORING_VERSION = 'profile-and-retrieved-evidence-v1';
 
 const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const VECTOR_BRANCH_LIMIT = 80;
@@ -284,7 +286,7 @@ function buildArrayContainsCondition(columnName: string, values: string[]) {
 
 function buildHardFilterConditions(input: ResearcherSearchRequest) {
   const filters = input.filters || {};
-  const conditions: Prisma.Sql[] = [];
+  const conditions: Prisma.Sql[] = [Prisma.sql`u.status = 'ACTIVE'`];
 
   if (!filters.includeSelf && input.requesterUserId) {
     conditions.push(Prisma.sql`rp.user_id <> ${input.requesterUserId}`);
@@ -659,6 +661,8 @@ function rerankInputHash(query: string, document: string) {
 function buildRerankDocument(result: ResearcherSearchResult) {
   return normalizeWhitespace([
     result.displayName ? `Researcher: ${result.displayName}` : '',
+    ...result.evidence.filter(entry => entry.source === 'publication' || entry.source === 'research_area')
+      .map(entry => `Relevant ${entry.source === 'publication' ? 'publication' : 'saved research interest'}: ${entry.title || ''} ${entry.snippet || ''}`),
     result.researchSummary ? `Summary: ${result.researchSummary}` : '',
     result.researchAreas.length ? `Research areas: ${result.researchAreas.join(', ')}` : '',
     result.keywords.length ? `Keywords: ${result.keywords.join(', ')}` : '',

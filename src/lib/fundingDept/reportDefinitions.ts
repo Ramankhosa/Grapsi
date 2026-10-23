@@ -359,6 +359,10 @@ export function currentQualifyingMatchSql(matchAlias: string, width: MatchWidth 
   const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
   return Prisma.sql`(${Prisma.raw(`${matchAlias}.is_current AND ${matchAlias}.inferred = false
     AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
+    AND EXISTS (SELECT 1 FROM users current_match_user
+      WHERE current_match_user.id = ${Prisma.raw(`${matchAlias}.user_id`)}
+        AND current_match_user."tenantId" = ${Prisma.raw(`${matchAlias}.tenant_id`)}
+        AND current_match_user.status = 'ACTIVE')
     AND ${countsAtWidthSql(matchAlias, width)})`
 }
 

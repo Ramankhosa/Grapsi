@@ -5,7 +5,7 @@ const waiting: Array<() => void> = []
 function drain() { while (active < 2 && waiting.length) waiting.shift()!() }
 
 export function catalogueFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  if (!/^\/api\/recommendations\/(?:manual-search(?:\?|$)|directory\/|funders(?:\?|$))/.test(url)) return fetch(url, options)
+  if (!/^\/api\/(?:recommendations\/(?:manual-search(?:\?|$)|directory\/|funders(?:\?|$))|discovery\/(?:calls|people)(?:\?|$))/.test(url)) return fetch(url, options)
   return new Promise((resolve, reject) => {
     waiting.push(() => {
       if (options.signal?.aborted) { reject(new DOMException('Request cancelled', 'AbortError')); return }

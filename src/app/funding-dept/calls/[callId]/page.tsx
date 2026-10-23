@@ -110,7 +110,7 @@ interface Dossier {
   queueState: string
   people: Person[]
   peopleError: string | null
-  peopleBasis: 'census' | 'live'
+  peopleBasis: 'census' | 'pending'
   matchWidth: MatchWidth
   matchBandLabels: Record<string, string>
   assignments: Assignment[]
@@ -191,12 +191,14 @@ export default function CallDossierPage({ params }: { params: { callId: string }
   // Null until the server reports the office's own setting; the control then
   // drives both the counts above and the list below from one number.
   const [matchWidth, setMatchWidth] = useState<MatchWidth | null>(null)
+  const latestLoad = useRef(0)
   // Opened without ?school= (from Incoming calls): start on the first school the
   // call actually reaches, not the viewer's first covered school.
   const autoPicked = useRef(false)
 
   const load = useCallback(
     async (unitId: string) => {
+      const requestId = ++latestLoad.current
       setLoading(true)
       try {
         const search = new URLSearchParams()
@@ -205,6 +207,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
         const query = search.toString() ? `?${search.toString()}` : ''
         const response = await authFetch(`/api/funding-dept/calls/${params.callId}/dossier${query}`)
         const payload = await response.json()
+        if (requestId !== latestLoad.current) return
         if (!response.ok) {
           setError(payload.error || 'Could not load this call.')
           return
@@ -215,9 +218,9 @@ export default function CallDossierPage({ params }: { params: { callId: string }
         if (!matchWidth && payload.matchWidth) setMatchWidth(payload.matchWidth)
         setError(null)
       } catch {
-        setError('Could not load this call.')
+        if (requestId === latestLoad.current) setError('Could not load this call.')
       } finally {
-        setLoading(false)
+        if (requestId === latestLoad.current) setLoading(false)
       }
     },
     [authFetch, params.callId, matchWidth]
@@ -295,7 +298,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
     }
   }
 
-  if (authLoading || meLoading || (loading && !data)) {
+  if (authLoading || meLoading || loading) {
     return (
       <main className="nk-ground nk-wash">
         <div className="mx-auto max-w-6xl px-4 py-16">
@@ -477,8 +480,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               Matched faculty in {data.school.name}
               {data.people.length > 0 && (
                 <span className="nk-sub ml-2 text-sm font-normal tabular-nums">
-                  {data.people.filter((person) => person.matchTier === 'strong' || person.matchTier === 'moderate').length}{' '}
-                  strong or moderate of {data.people.length} ranked
+                  {data.people.length} matched
                 </span>
               )}
             </h2>
@@ -547,10 +549,9 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               </div>
             )
           })()}
-          {data.peopleBasis === 'live' && (
+          {data.peopleBasis === 'pending' && (
             <p className="nk-sub mt-2 text-xs">
-              Scored on the spot — this call has not been through the overnight matching run yet, so
-              the counts above may lag this list for a few minutes.
+              Matching is pending. Refresh this page shortly to see the researchers included in this school’s count.
             </p>
           )}
           <div className="nk-panel mt-3">
@@ -558,7 +559,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               <p className="nk-sub p-4">{data.peopleError}</p>
             ) : data.people.length === 0 ? (
               <p className="nk-sub p-4">
-                Nobody in this school matched this call.{' '}
+                {data.peopleBasis === 'pending' ? 'Matching has not completed for this call.' : 'Nobody in this school meets the selected match width for this call.'}{' '}
                 <Link
                   href={`/researcher-matching?callId=${encodeURIComponent(data.call.id)}`}
                   className="underline"

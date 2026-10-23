@@ -17,3 +17,12 @@ it('keeps in-flight reservations accounted for when a view unmounts and drops qu
  controller.abort();cancelled.abort();expect(fetcher.mock.calls[0][1]?.signal).toBeUndefined();expect(fetcher).toHaveBeenCalledTimes(2)
  releases[0](new Response('{}'));releases[1](new Response('{}'));await Promise.all([first,second]);expect((await pending).name).toBe('AbortError');expect(fetcher).toHaveBeenCalledTimes(2);await Promise.resolve()
 })
+it('shares the same request queue between the new discovery hub and the funding directory',async()=>{
+ const releases:Array<(r:Response)=>void>=[]
+ vi.stubGlobal('fetch',vi.fn(()=>new Promise<Response>(resolve=>releases.push(resolve))))
+ const fetcher=vi.mocked(fetch)
+ const requests=['/api/discovery/calls','/api/discovery/people','/api/recommendations/manual-search'].map(url=>catalogueFetch(url))
+ expect(fetcher).toHaveBeenCalledTimes(2)
+ releases[0](new Response('{}'));await requests[0];await Promise.resolve();expect(fetcher).toHaveBeenCalledTimes(3)
+ releases[1](new Response('{}'));releases[2](new Response('{}'));await Promise.all(requests);await Promise.resolve()
+})

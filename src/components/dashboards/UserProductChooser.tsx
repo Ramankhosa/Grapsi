@@ -57,6 +57,15 @@ const productGroups: ProductGroup[] = [
     caption: 'Find the calls worth your time',
     options: [
       {
+        title: 'Research Discovery',
+        description: 'Find calls and people by research area, explore a person’s expertise, or match people to a call.',
+        href: '/discovery',
+        icon: Compass,
+        tag: 'Connected search',
+        moduleKey: 'FUNDING_DIRECTORY',
+        minTier: 'Starter'
+      },
+      {
         // First in Discover on purpose: it is the only card that needs nothing
         // typed. The finder and the chatbot both ask a researcher to describe
         // work the system has already embedded.

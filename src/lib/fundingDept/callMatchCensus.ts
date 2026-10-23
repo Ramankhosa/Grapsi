@@ -26,7 +26,7 @@ import { randomUUID } from 'node:crypto'
 
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
+import { researcherSearchService, RESEARCHER_SEARCH_SCORING_VERSION, type RerankScoreCache } from '@/lib/services/researcherSearchService'
 import { callAreaRowsSql } from '@/lib/researchAreas/queries'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
 
@@ -35,7 +35,7 @@ import { getTenantTimeZone } from '@/lib/tenant/locale'
 import {
   DEFAULT_MATCH_WIDTH, MATCH_WIDTHS, MATCH_WIDTH_COPY, MATCH_WIDTH_CUTOFFS, bandForScore, type MatchWidth,
 } from './matchBands'
-import { UNCOUNTED_MATCH_VERSIONS } from './reportDefinitions'
+import { currentQualifyingMatchSql, UNCOUNTED_MATCH_VERSIONS } from './reportDefinitions'
 
 /**
  * Written to `source_version`. Reports count only this version, so switching it
@@ -64,7 +64,7 @@ export type CallMatchState = {
  */
 export async function callFingerprint(tenantId: string, callId: string) {
   const rows = await prisma.$queryRaw<Array<{ fingerprint: string }>>(Prisma.sql`
-    SELECT md5(concat_ws('|', ${CALL_MATCH_CENSUS_VERSION},
+    SELECT md5(concat_ws('|', ${CALL_MATCH_CENSUS_VERSION}, ${RESEARCHER_SEARCH_SCORING_VERSION},
       (SELECT concat_ws(':', id, "updatedAt", xmin::text) FROM funding_calls WHERE id = ${callId}),
       (SELECT string_agg(concat_ws(':', a.taxonomy_area_id, a.taxonomy_level2_name, a.taxonomy_level1_name), ',' ORDER BY a.taxonomy_area_id)
          FROM ${callAreaRowsSql()} a WHERE a.funding_call_id=${callId}),
@@ -260,7 +260,7 @@ export async function storedCallMatches(
   tenantId: string,
   callId: string,
   schoolIds: string[],
-  limit = 50,
+  limit: number | null = 50,
   width: MatchWidth = DEFAULT_MATCH_WIDTH
 ): Promise<StoredMatch[]> {
   if (!schoolIds.length) return []
@@ -272,9 +272,9 @@ export async function storedCallMatches(
       LEFT JOIN researcher_profiles p ON p.user_id = m.user_id
      WHERE m.tenant_id = ${tenantId} AND m.funding_call_id = ${callId}
        AND m.school_id = ANY(${textArray(schoolIds)})
-       AND m.is_current AND m.source_version = ${CALL_MATCH_CENSUS_VERSION}
+       AND ${currentQualifyingMatchSql('m', width)}
      ORDER BY m.match_score DESC NULLS LAST, name
-     LIMIT ${limit}`)
+     ${limit === null ? Prisma.empty : Prisma.sql`LIMIT ${limit}`}`)
   return rows.map((row) => ({
     userId: row.user_id,
     name: row.name,

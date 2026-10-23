@@ -567,6 +567,14 @@
     ],
     "guard": "withCatalogueProtection"
   },
+  "src/app/api/discovery/calls/route.ts": {
+    "methods": ["GET", "POST"],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/discovery/people/route.ts": {
+    "methods": ["GET", "POST"],
+    "guard": "withCatalogueProtection"
+  },
   "src/app/api/researcher-matching/route.ts": {
     "methods": [
       "GET",

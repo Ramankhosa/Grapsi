@@ -311,6 +311,7 @@ export default function Header() {
           label: 'Everyday',
           items: [
             { href: '/dashboard', icon: '\u{1F3E0}', title: 'Dashboard', description: 'Your home screen and what is waiting on you' },
+            { href: '/discovery', icon: '\u{1F9ED}', title: 'Research Discovery', description: 'Calls, research areas and people in one search workspace' },
             { href: '/guide', icon: '\u{1F5FA}\uFE0F', title: 'Where everything is', description: 'A directory of every screen and who it is for' },
             { href: '/profile/funding-access', icon: '\u{1F512}', title: 'Funding access', description: 'Manage signed-in sessions and viewing allowances' },
             { href: '/funding/my-areas', icon: '\u{1F3AF}', title: 'Funding in My Areas', description: 'Open calls matching your profile and papers, no query needed' },
