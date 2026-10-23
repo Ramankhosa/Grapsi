@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EMPTY_PROFILE,
@@ -97,6 +97,7 @@ describe('relevance tiering', () => {
 
 describe('relevance predicate', () => {
   const sqlOf = (fragment: { strings: readonly string[] }) => fragment.strings.join('?');
+  afterEach(() => vi.unstubAllEnvs());
 
   it('is a no-op for an unmapped school', () => {
     // Filtering on an empty profile would hide the whole catalog — worse than
@@ -113,7 +114,8 @@ describe('relevance predicate', () => {
     expect(sql).toContain('NOT EXISTS');
   });
 
-  it('can exclude the broad tier and unclassified calls', () => {
+  it.each(['false', 'true'])('can exclude broad and unclassified routing with canonical areas %s', (enabled) => {
+    vi.stubEnv('CANONICAL_RESEARCH_AREAS_ENABLED', enabled);
     const sql = sqlOf(
       relevantCallWhereSql(profile(), 'fc', {
         includeBroad: false,
@@ -122,8 +124,10 @@ describe('relevance predicate', () => {
     );
 
     expect(sql).toContain('taxonomy_area_id');
-    expect(sql).not.toContain('taxonomy_level1_code');
-    expect(sql).not.toContain('NOT EXISTS');
+    // Canonical readers project group columns and use NOT EXISTS to suppress
+    // superseded classifications. Neither enables these outer routing clauses.
+    expect(sql).not.toMatch(/m\.taxonomy_level1_code\s*=\s*ANY/);
+    expect(sql).not.toMatch(/WHERE m\.funding_call_id = fc\.id\s*\)/);
   });
 
   it('includes a keyword clause only when the school has keywords', () => {
