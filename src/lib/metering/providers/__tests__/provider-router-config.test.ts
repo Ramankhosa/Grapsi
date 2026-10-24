@@ -35,7 +35,7 @@ describe('LLMProviderRouter OpenAI config defaults', () => {
   })
 
   it('sends Anthropic SDK requests to a single /v1/messages path', async () => {
-    const config = buildProviderConfigsFromEnv({ ANTHROPIC_API_KEY: 'test-key' }).anthropic
+    const config = buildProviderConfigsFromEnv({ NODE_ENV: 'test', ANTHROPIC_API_KEY: 'test-key' }).anthropic
     const requests: string[] = []
     const client = new Anthropic({
       apiKey: config.apiKey,

@@ -23,6 +23,9 @@ describe('paid provider attempt accounting', () => {
     const request = vi.mocked(llmGateway.executeLLMOperation).mock.calls[0][1]
     expect(request.metadata?.executionPolicy).toMatchObject({ maxProviderAttempts: 1, noDefaultRouting: true })
     expect(request.metadata?.disableModelFallbacks).toBe(true)
+    const fallbackRequest = vi.mocked(llmGateway.executeLLMOperation).mock.calls[1][1]
+    expect(fallbackRequest.prompt).toContain(JSON.stringify(input('billing').jsonSchema.schema))
+    expect(fallbackRequest.prompt).toContain('without Markdown fences')
   })
   it('keeps usage for a billable empty response and records the successful fallback separately', async () => {
     vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ success: false, error: { message: 'Empty billable response', details: { billableUsage: { inputTokens: 12, outputTokens: 2 } } } } as any).mockResolvedValueOnce(success)

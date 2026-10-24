@@ -140,7 +140,9 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
   const limit = maxPaidAttempts()
   if (previous >= limit) throw new PaidAttemptsExhaustedError(input.operationKey, previous)
 
-  const fullPrompt = `${input.systemPrompt.trim()}\n\n${input.prompt.trim()}`
+  // Some independent fallback providers do not consume response_format. Carry
+  // the schema in the prompt too so they receive the same output contract.
+  const fullPrompt = `${input.systemPrompt.trim()}\n\nReturn only a JSON value matching this schema, without Markdown fences or commentary:\n${JSON.stringify(input.jsonSchema.schema)}\n\n${input.prompt.trim()}`
   // UTF-8 bytes conservatively bound text token counts, including the schema
   // and a protocol envelope. The cheap packing estimator is not a spend cap.
   const inputTokens = Buffer.byteLength(fullPrompt + JSON.stringify(input.jsonSchema), 'utf8') + 1024 + (input.documentTokenAllowance ?? 0)
