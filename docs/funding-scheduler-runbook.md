@@ -1,6 +1,6 @@
 # Funding scheduler runbook
 
-Eight endpoints are cron-protected and do nothing until something calls
+Nine endpoints are cron-protected and do nothing until something calls
 them on a schedule. `scripts/funding-scheduler.js` is that something — a
 dependency-free Node process that fires them against the local web app.
 
@@ -11,7 +11,8 @@ dependency-free Node process that fires them against the local web app.
 | `POST /api/funding/alerts/digest` | daily at `FUNDING_DIGEST_HOUR`:35 (`{"frequency":"daily"}`), Mondays also `{"frequency":"weekly"}` | Bundles queued alerts into one email per user |
 | `POST /api/funding-dept/reports/weekly` | Mondays at `FUNDING_DIGEST_HOUR`:35 | Weekly digest to each department member and the head |
 | `POST /api/platform/users/expire-event-access` | daily at `FUNDING_DIGEST_HOUR`:50 | Suspends EVENT users past their access window and revokes their refresh tokens |
-| `POST /api/funding/monitor/sweep` | daily at `FUNDING_MONITOR_HOUR`:10 (default 06:10) | Checks every due monitored funder page; queues genuinely new calls for review |
+| `POST /api/funding/monitor/sweep` | hourly (:10) | Source Watch planner: queues every due watch point for the worker (v2), or runs the legacy one-page sweep. Each source is still checked at most once per calendar day |
+| `POST /api/funding/monitor/liveness` | every 15 minutes | Raises one alert per hour while the Source Watch worker has stopped beating; sends queued Source Watch alerts |
 | `POST /api/proposals/reviews/sweep` | every 10 minutes | Resumes proposal AI reviews whose worker went away (a deploy mid-run, a killed process). Claims by `heartbeat_at`, so a healthy long run is never stolen |
 | `POST /api/proposals/sweep` | hourly (:40) | The proposal desk's five watches: cut-off D3/D1 nudges to the applicant; the review service level (a draft unreviewed or unsent past `PROPOSAL_REVIEW_SLA_DAYS`); applications the agency has gone quiet on past `PROPOSAL_AGENCY_STALE_DAYS`; follow-up ticklers an officer set a date on; and post-award obligations falling due (D30/D14/D7/D1, then once when overdue) |
 
@@ -115,17 +116,17 @@ Optional env:
 
 - `FUNDING_SCHEDULER_BASE_URL` — default `http://127.0.0.1:3010`
 - `FUNDING_DIGEST_HOUR` — local hour for digests/weekly report, default 3
-- `FUNDING_MONITOR_HOUR` — local hour for the source-monitor sweep, default 6
+- (`FUNDING_MONITOR_HOUR` is no longer read: the Source Watch planner runs
+  hourly and spreads each source's due time across the day.)
 
 ### Cost note: DeepSeek peak hours
 
 DeepSeek bills peak rates between **01:00–04:00 and 06:00–10:00 UTC**; everything
-outside those windows is half price. Any sweep that runs LLM extraction — the
-source-monitor sweep in particular — is cheaper scheduled outside them. On an
-IST host (UTC+5:30) the defaults already land off-peak (digest 03:35 IST =
-22:05 UTC, monitor 06:10 IST = 00:40 UTC), but a long sweep started at 00:40 UTC
-can spill into the 01:00 peak window. If the monitor sweep is doing heavy
-extraction, set `FUNDING_MONITOR_HOUR=11` (05:30 UTC) or later.
+outside those windows is half price. Any sweep that runs LLM extraction is
+cheaper scheduled outside them. On an IST host (UTC+5:30) the digest default
+already lands off-peak (03:35 IST = 22:05 UTC). Source Watch v2 makes no paid
+calls in its foundation phase; its later paid stages run behind per-day budget
+reservations rather than a time-of-day setting.
 - `GRAPSI_ENV_FILE` — explicit env file path (otherwise `.env.production`, then `.env`, beside the repo root)
 
 ## Manual fire (testing)
@@ -142,16 +143,69 @@ Without the header, the endpoints fall back to requiring a platform funding
 operator session — a missing/typoed secret shows up as 401/403 in the
 scheduler logs.
 
-## Source monitoring (Moni)
+## Source monitoring (Source Watch)
 
-`POST /api/funding/monitor/sweep` is the whole of Moni's scheduling. Checking is
-**once a day by design** — funding calls do not appear hourly, and a daily
-rhythm is far gentler on the funders' servers. Per source, operators can also
-choose every 3 days or weekly; daily is the floor.
+Two engines, one switch: `MONITOR_ENGINE=legacy` (default) runs the original
+one-page diff checker below; `MONITOR_ENGINE=v2` hands checking to the queue
+worker. The sweep, Check now, the preview and triage all read the switch, so
+the two never work at once — the legacy checker and its unmetered triage throw
+under v2.
 
-Due-ness is counted in **calendar days**, not elapsed time. A source checked at
-2pm yesterday is due at this morning's sweep; an elapsed-time test would call it
-16 hours old, skip it, and drift a day later on every run.
+### v2 engine (foundation phase)
+
+- **Worker:** PM2 `grapsi-monitor-worker` (`ecosystem.config.js`;
+  `npm run worker:source-monitor`). It claims tasks from `monitor_tasks`, writes
+  a heartbeat every 30 s whether busy or idle, and extends each task's lease
+  while it runs; a reclaimed lease aborts the work and nothing it did commits.
+- **Planner:** the hourly sweep enqueues every due watch point
+  (`check:<source>:<generation>`). If no worker has beaten for 15 minutes it
+  drains plain-fetch checks itself within ~4 minutes, so monitoring degrades
+  instead of stopping.
+- **Liveness:** the scheduler's 15-minute job raises one `WORKER_OFFLINE` alert
+  per hour while the worker is down. `GET /api/funding/monitor/liveness` is
+  unauthenticated and answers 503 in that state — point an external uptime check
+  at it, since it must not depend on the scheduler or the worker.
+- **Network:** every fetch goes through `safeFetch` — public addresses only
+  (DNS-pinned), every redirect re-validated, streamed size caps, per-host pacing
+  shared across processes, Retry-After honoured, strict TLS. robots.txt follows
+  RFC 9309: a 5xx or unreachable file **defers** instead of permitting, and a
+  robots.txt that fails TLS is reported as `TLS_ERROR` (fix the chain with
+  `NODE_EXTRA_CA_CERTS`, or record an explicit, expiring TLS exception on the
+  site). Many gov.in hosts ship incomplete certificate chains; expect this.
+- **Browser tier:** `MONITOR_BROWSER_ENABLED=true` on the worker renders
+  JavaScript-built listings (Playwright Chromium, sandbox on). Install with
+  `npx playwright install --with-deps chromium`. Run the worker — and therefore
+  Chromium — as its own OS user whose egress rules deny private ranges,
+  loopback and 169.254.169.254: Chromium resolves names itself, so that OS rule
+  is the mandatory boundary; the request filtering in `browser.ts` is defence
+  in depth. A render that never settles is reported `RENDER_INCOMPLETE` with the
+  off-scope hosts it tried to reach.
+- **Honest results:** a check is COMPLETE only when it read the whole listing.
+  Page budgets carry a cursor to the next check; a listing that suddenly shows
+  nothing (`NEEDS_BROWSER`, `NO_ITEMS`) or a selector that stopped matching is
+  PARTIAL and marks nothing missing. The Evidence tab shows every check run.
+- **Time in raw SQL:** Prisma stores DateTime as UTC wall-clock; raw SQL must
+  use `NOW_UTC` / `utc()` from `src/lib/monitor/sqlTime.ts`, never bare `now()`,
+  or a server whose zone is Asia/Calcutta shifts every comparison by 5h30m.
+
+**Cutover:** apply the migration, start `grapsi-monitor-worker`, confirm a
+heartbeat on the Health tab, then set `MONITOR_ENGINE=v2` on the web app and
+restart it. **Rollback:** stop the worker first, then set the switch back.
+
+**Tests:** `npm run test:monitor:db` creates/migrates the disposable
+`grapsi_monitor_test` database (it refuses any other name), then
+`npm run test:monitor:integration` runs the database and browser suites.
+
+### Legacy engine
+
+`POST /api/funding/monitor/sweep` runs Moni's one-page check for each due
+source. Checking is **once a day by design** — funding calls do not appear
+hourly, and a daily rhythm is far gentler on the funders' servers. Per source,
+operators can also choose every 3 days or weekly; daily is the floor. The sweep
+now fires hourly, but due-ness is counted in **calendar days**, so each source
+is still checked once a day: a source checked at 2pm yesterday is due at this
+morning's run, where an elapsed-time test would call it 16 hours old and drift
+a day later on every run.
 
 Two paths deliberately bypass the sweep, so the tool stays responsive: **Check
 now** on a source, and the first check of a newly added source (which is what

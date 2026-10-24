@@ -14,7 +14,8 @@
  *   /api/funding/alerts/digest          daily + Monday   queued alert digests
  *   /api/funding-dept/reports/weekly    Monday   weekly snapshot, then member + head digests
  *   /api/platform/users/expire-event-access  daily   suspend expired workshop users
- *   /api/funding/monitor/sweep          daily    re-check watched funder pages
+ *   /api/funding/monitor/sweep          hourly   queue due funder watch points (Source Watch)
+ *   /api/funding/monitor/liveness       15 min   alert when the Source Watch worker is down
  *
  * Keep this list in step with src/lib/jobs/registry.ts, which is what the
  * operations console renders and what the health check measures staleness
@@ -72,10 +73,6 @@ loadDotEnv()
 const BASE_URL = (process.env.FUNDING_SCHEDULER_BASE_URL || 'http://127.0.0.1:3010').replace(/\/$/, '')
 const SECRET = process.env.FUNDING_ALERT_CRON_SECRET || ''
 const DIGEST_HOUR = Math.min(Math.max(Number(process.env.FUNDING_DIGEST_HOUR) || 3, 0), 23)
-// Local hour for the once-daily source-monitor sweep. Separated from the
-// digest hour so the watch can run before the working day while digests stay
-// where operators expect them.
-const MONITOR_HOUR = Math.min(Math.max(Number(process.env.FUNDING_MONITOR_HOUR) || 6, 0), 23)
 
 if (!SECRET) {
   console.error(
@@ -164,17 +161,23 @@ function tick() {
     void post('/api/platform/users/expire-event-access')
   }
 
-  // The daily watch over monitored funder pages. Deliberately once a day and
-  // early: calls found overnight are queued before anyone starts work, and a
-  // daily rhythm is far gentler on the funders' servers than polling.
-  if (now.getHours() === MONITOR_HOUR && minute >= 10 && due('monitor-sweep', daySlot)) {
+  // Source Watch planner. Hourly because each watch point's due time is spread
+  // across the day; every source is still checked at most once per calendar
+  // day (the planner and the legacy sweep both count due-ness in days).
+  if (minute >= 10 && due('monitor-sweep', hourSlot)) {
     void post('/api/funding/monitor/sweep')
+  }
+
+  // Liveness: noticing a dead Source Watch worker cannot wait for a daily job.
+  const quarterSlot = `${hourSlot}-${Math.floor(minute / 15)}`
+  if (due('monitor-liveness', quarterSlot)) {
+    void post('/api/funding/monitor/liveness')
   }
 }
 
 console.log(
   `[funding-scheduler] started — target ${BASE_URL}, digests at ${String(DIGEST_HOUR).padStart(2, '0')}:35, ` +
-    `source-monitor sweep at ${String(MONITOR_HOUR).padStart(2, '0')}:10 local time`
+    'source-watch planner hourly at :10, liveness every 15 minutes'
 )
 tick()
 setInterval(tick, 60 * 1000)

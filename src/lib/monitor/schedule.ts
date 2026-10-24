@@ -1,0 +1,36 @@
+import { createHash } from 'node:crypto'
+
+/**
+ * When a watch point is next due.
+ *
+ * Calendar days, counted in India Standard Time (the platform's operating
+ * zone), so a daily source stays daily instead of drifting later with every
+ * run. Each source gets a deterministic offset inside the day so a large
+ * watch list spreads across hours instead of hitting every funder at 00:00.
+ */
+
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+/** Due times spread over the first six hours of the IST day. */
+export const JITTER_WINDOW_MS = 6 * 60 * 60 * 1000
+
+/** The UTC instant of 00:00 IST on the IST calendar day containing `date`. */
+export function startOfIstDay(date: Date): Date {
+  const shifted = date.getTime() + IST_OFFSET_MS
+  return new Date(shifted - (((shifted % DAY_MS) + DAY_MS) % DAY_MS) - IST_OFFSET_MS)
+}
+
+/** Stable per-key offset in [0, windowMs). */
+export function jitterMs(key: string, windowMs = JITTER_WINDOW_MS): number {
+  const digest = createHash('sha256').update(key).digest()
+  return digest.readUInt32BE(0) % Math.max(1, windowMs)
+}
+
+/** Daily is the floor; weekly the slowest cadence a listing gets. */
+export function cadenceDays(frequencyMinutes: number): number {
+  return Math.min(7, Math.max(1, Math.round(Math.max(1440, frequencyMinutes) / 1440)))
+}
+
+export function nextCheckAt(now: Date, everyDays: number, key: string): Date {
+  return new Date(startOfIstDay(now).getTime() + Math.max(1, everyDays) * DAY_MS + jitterMs(key))
+}

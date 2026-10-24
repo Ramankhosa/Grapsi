@@ -112,12 +112,21 @@ export const JOB_REGISTRY: JobDefinition[] = [
     // route already writes run history under this name, and renaming it would
     // orphan that history for no reader-visible gain.
     jobKey: 'funding.monitor.sweep',
-    label: 'Source watch sweep',
+    label: 'Source watch planner',
     description:
-      'Re-checks monitored funder pages and queues what changed for review. Politeness-paced, and picks up where it left off when it runs out of time.',
-    cadence: 'Daily at monitor hour :10',
+      'Queues every due funder watch point as a check for the Source Watch worker (v2), or runs the legacy one-page sweep. If the worker is down it drains plain-fetch checks itself so monitoring degrades instead of stopping.',
+    cadence: 'Hourly at :10',
     endpoint: '/api/funding/monitor/sweep',
-    expectedIntervalMinutes: DAY,
+    expectedIntervalMinutes: HOUR,
+  },
+  {
+    jobKey: 'funding.monitor.liveness',
+    label: 'Source watch liveness',
+    description:
+      'Raises one alert per hour while the Source Watch worker has stopped beating, and sends any queued Source Watch alerts.',
+    cadence: 'Every 15 minutes',
+    endpoint: '/api/funding/monitor/liveness',
+    expectedIntervalMinutes: 15,
   },
 ]
 

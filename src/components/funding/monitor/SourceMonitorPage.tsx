@@ -6,12 +6,25 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 
 import MonitorAddSource from './MonitorAddSource'
+import MonitorEvidence from './MonitorEvidence'
+import MonitorHealth from './MonitorHealth'
 import MonitorOperators from './MonitorOperators'
 import MonitorQueue from './MonitorQueue'
 import MonitorSources from './MonitorSources'
-import type { MonitorChange, MonitorSource } from './types'
+import type { MonitorChange, MonitorEngine, MonitorSource } from './types'
 
-type Tab = 'queue' | 'sources' | 'add' | 'operators'
+type Tab = 'queue' | 'sources' | 'evidence' | 'health' | 'add' | 'operators'
+const TABS: Tab[] = ['queue', 'sources', 'evidence', 'health', 'add', 'operators']
+
+function initialTab(): Tab {
+  if (typeof window === 'undefined') return 'queue'
+  const requested = new URLSearchParams(window.location.search).get('tab') as Tab | null
+  return requested && TABS.includes(requested) ? requested : 'queue'
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 const QUEUE_STATES = [
   { key: 'NEW', label: 'Open' },
@@ -37,7 +50,8 @@ export default function SourceMonitorPage() {
   // same thing server-side, so this only decides whether the tab is offered.
   const canManageOperators = Boolean(user?.roles?.includes('SUPER_ADMIN'))
 
-  const [tab, setTab] = useState<Tab>('queue')
+  const [tab, setTab] = useState<Tab>(initialTab)
+  const [engine, setEngine] = useState<MonitorEngine>('legacy')
   const [queueState, setQueueState] = useState('NEW')
   const [changes, setChanges] = useState<MonitorChange[]>([])
   const [sources, setSources] = useState<MonitorSource[]>([])
@@ -83,6 +97,12 @@ export default function SourceMonitorPage() {
       const sourcesData = await sourcesResponse.json()
       setChanges(changesData.changes ?? [])
       setSources(sourcesData.sources ?? [])
+      // Which engine runs decides what "Check now" does and how the queue is labelled.
+      const healthResponse = await authedFetch('/api/funding/monitor/liveness')
+      if (healthResponse.ok || healthResponse.status === 503) {
+        const liveness = await healthResponse.json()
+        setEngine(liveness.engine === 'v2' ? 'v2' : 'legacy')
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load monitoring data.')
     } finally {
@@ -130,6 +150,33 @@ export default function SourceMonitorPage() {
       method: 'POST',
     })
     const data = await response.json()
+
+    if (data.status === 'queued' && data.taskId) {
+      // v2: the worker runs the check. Follow its task for up to a minute.
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await sleep(2000)
+        const poll = await authedFetch(`/api/funding/monitor/tasks/${data.taskId}`)
+        if (!poll.ok) break
+        const { task, checkRun } = await poll.json()
+        if (task.status === 'DONE') {
+          await load()
+          if (!checkRun) return 'Check finished.'
+          if (checkRun.status === 'NOT_MODIFIED') return 'Not modified since the last check.'
+          const scope = checkRun.complete ? 'complete' : 'incomplete — the rest continues next check'
+          return `Checked ${checkRun.pages_visited} page(s): ${checkRun.items_observed} items, ${checkRun.new_resources} new (${scope}).`
+        }
+        if (task.status === 'DEAD' || task.status === 'FAILED_PERMANENT' || task.status === 'CANCELED') {
+          await load()
+          return `Check failed: ${task.last_error ?? task.terminal_reason ?? task.status}`
+        }
+        if (task.status === 'QUEUED' && task.last_error) {
+          return `Check deferred: ${task.last_error}`
+        }
+      }
+      await load()
+      return 'Check queued — the worker will run it shortly. See Evidence for the result.'
+    }
+
     await load()
     if (data.status === 'baseline') return 'Baseline saved — future checks compare against it.'
     if (data.status === 'unchanged') return 'No change since the last check.'
@@ -203,9 +250,9 @@ export default function SourceMonitorPage() {
             Funding source watch
           </h1>
           <p className="cb-hint mt-1 max-w-2xl">
-            Moni checks each funder page once a day, tells a genuinely new call apart from a
-            reworded banner, and queues what it finds. Confirming a find hands it to funding
-            intake, which turns it into a draft call in the catalog.
+            {engine === 'v2'
+              ? 'Source Watch checks each funder’s listings, feeds and sitemaps on a schedule, records every item it sees with the words around it, and says plainly when a check was incomplete — “nothing new” and “not fully checked” are different answers.'
+              : 'Moni checks each funder page once a day, tells a genuinely new call apart from a reworded banner, and queues what it finds. Confirming a find hands it to funding intake, which turns it into a draft call in the catalog.'}
           </p>
         </div>
         <button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()} disabled={busy}>
@@ -229,7 +276,7 @@ export default function SourceMonitorPage() {
           className={`cb-tab ${tab === 'queue' ? 'cb-tab-active' : ''}`}
           onClick={() => setTab('queue')}
         >
-          Review queue
+          {engine === 'v2' ? 'Legacy finds' : 'Review queue'}
           {openCount ? (
             <span className="rounded-full bg-cobalt-600 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white">
               {openCount}
@@ -241,6 +288,18 @@ export default function SourceMonitorPage() {
           onClick={() => setTab('sources')}
         >
           Sources <span className="cb-badge">{sources.length}</span>
+        </button>
+        <button
+          className={`cb-tab ${tab === 'evidence' ? 'cb-tab-active' : ''}`}
+          onClick={() => setTab('evidence')}
+        >
+          Evidence
+        </button>
+        <button
+          className={`cb-tab ${tab === 'health' ? 'cb-tab-active' : ''}`}
+          onClick={() => setTab('health')}
+        >
+          Health
         </button>
         {canOperate && (
           <button
@@ -286,6 +345,10 @@ export default function SourceMonitorPage() {
           onDelete={deleteSource}
         />
       )}
+
+      {tab === 'evidence' && <MonitorEvidence authedFetch={authedFetch} />}
+
+      {tab === 'health' && <MonitorHealth authedFetch={authedFetch} canOperate={canOperate} />}
 
       {tab === 'operators' && canManageOperators && (
         <MonitorOperators authedFetch={authedFetch} />

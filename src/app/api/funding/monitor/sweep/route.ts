@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { isDue, runCheck } from '@/lib/monitor/checker'
+import { isV2Engine } from '@/lib/monitor/engine'
+import { WORKER_STALE_MS, drainInline, freshestWorkerAgeMs, planDueChecks } from '@/lib/monitor/planner'
 import { prisma } from '@/lib/prisma'
 
 export const runtime = 'nodejs'
@@ -21,13 +23,13 @@ function sleep(ms: number) {
 /**
  * POST /api/funding/monitor/sweep
  *
- * The daily watch. Cron calls this once a day (see the deploy note); a funding
- * operator can also run it by hand from the Jobs panel. Checking is daily by
- * design — funding calls do not appear hourly, and a daily rhythm is far
- * gentler on the funders' servers.
+ * v2 engine: the planner. It enqueues every due watch point as a check task
+ * and returns at once; the worker does the fetching. If no worker has beaten
+ * for 15 minutes, it drains plain-fetch checks itself within the old 240 s
+ * budget — through the same claims and host reservations — so monitoring
+ * degrades instead of stopping.
  *
- * Sources never checked before are swept first so a fresh bulk import gets its
- * baseline on the next run rather than a day later.
+ * Legacy engine: the original daily one-page sweep, unchanged.
  */
 export async function POST(request: NextRequest) {
   const cron = isCronRequest(request)
@@ -41,6 +43,14 @@ export async function POST(request: NextRequest) {
   return withJobRun(
     { jobKey: 'funding.monitor.sweep', trigger: cron ? 'schedule' : 'manual', triggeredBy },
     async () => {
+      if (isV2Engine()) {
+        const planned = await planDueChecks()
+        const ageMs = await freshestWorkerAgeMs()
+        const workerStale = ageMs === null || ageMs >= WORKER_STALE_MS
+        const fallback = workerStale ? await drainInline({ budgetMs: SWEEP_BUDGET_MS, owner: `sweep-fallback:${process.pid}` }) : null
+        return NextResponse.json({ engine: 'v2', ...planned, workerStale, fallbackExecuted: fallback?.executed ?? 0 })
+      }
+
       const startedAt = Date.now()
       const now = new Date()
 
@@ -52,6 +62,7 @@ export async function POST(request: NextRequest) {
       const due = sources.filter((source) => isDue(source, now))
 
       const counts = {
+        engine: 'legacy',
         sources: sources.length,
         due: due.length,
         checked: 0,

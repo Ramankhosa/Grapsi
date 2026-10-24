@@ -1250,6 +1250,10 @@ model FundingCall {
   expiration_date             DateTime?
   is_active                   Boolean?                          @default(true)
   version                     Int?                              @default(1)
+  /// Compare-and-set token. A trigger (20261024100000_source_watch_foundation)
+  /// increments it on EVERY update, so no write path can skip or forge it;
+  /// reviewed writes pass the value they read and update `where revision = ?`.
+  revision                    Int                               @default(0)
   previous_version_id         String?
   metadata                    Json?
   intake_job_id               String?
@@ -1396,6 +1400,8 @@ model FundingCall {
   opportunity_matches         FundingOpportunityMatch[]
   follow_ups                  AssignmentFollowUp[]
   proposals                   GrantProposal[]
+  monitor_url_keys            FundingCallUrlKey[]
+  monitor_opportunities       MonitorOpportunity[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -1457,6 +1463,8 @@ model Funder {
   children       Funder[]               @relation("FunderParent")
   calls          FundingCall[]          @relation("FundingCallFunder")
   source_records ExternalSourceRecord[]
+  monitor_sites  MonitorSiteFunder[]
+  monitor_finds  MonitorOpportunity[]
 
   @@index([normalized_name])
   @@index([country_code])
@@ -2231,6 +2239,7 @@ model FundingIntakeJob {
   batch                  FundingIntakeBatch?      @relation(fields: [batch_id], references: [id], onDelete: SetNull)
   linked_funding_call    FundingCall?             @relation("FundingCallIntakeJobs", fields: [linked_funding_call_id], references: [id], onDelete: SetNull)
   sources                FundingIntakeJobSource[]
+  monitor_url_keys       FundingCallUrlKey[]
 
   @@index([batch_id])
   @@index([submitted_by_user_id])
@@ -2246,6 +2255,9 @@ model FundingIntakeBatch {
   id                   String                   @id @default(cuid())
   submitted_by_user_id String
   label                String?
+  /// Caller-supplied idempotency key (Source Watch handoffs). A repeated
+  /// createBatch with the same key returns this batch instead of a second one.
+  handoff_key          String?                  @unique
   status               FundingIntakeBatchStatus @default(processing)
   total_jobs           Int                      @default(0)
   created_at           DateTime                 @default(now())
@@ -9193,14 +9205,48 @@ model MonitoredSource {
   created_at         DateTime @default(now())
   created_by_user_id String?
 
-  tenant      Tenant?               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  owner       User?                 @relation("MonitoredSourceOwner", fields: [owner_user_id], references: [id], onDelete: SetNull)
-  snapshots   MonitoredSnapshot[]
-  changes     MonitoredChange[]
-  ignoreRules MonitoredIgnoreRule[]
+  // ---- Source Watch v2 (Oct 2026): a source is one watch point of a site ----
+  site_id                String?
+  /// PAGE (listing) | FEED | SITEMAP | API
+  kind                   String    @default("PAGE")
+  /// AUTO | FETCH | BROWSER. Decided per watch point, never per host: AUTO
+  /// promotes to BROWSER when a plain fetch shows no items the render does.
+  fetch_mode             String    @default("AUTO")
+  /// Selector the browser waits for before reading a rendered page.
+  readiness_selector     String?
+  /// HIGH | NORMAL | LOW — ordering and fairness, not cadence.
+  priority               String    @default("NORMAL")
+  /// MANUAL | CATALOG_SEED | DISCOVERED | BACKFILL
+  origin                 String    @default("MANUAL")
+  /// Scheduled-occurrence counter. A check's operation key is
+  /// `check:<source>:<generation>`, so two unchanged checks never collide.
+  check_generation       Int       @default(0)
+  next_check_at          DateTime?
+  /// Conditional-GET validators for the first listing page.
+  etag                   String?
+  last_modified          String?
+  /// Pagination / sitemap-index position carried between checks, so a page
+  /// budget defers the rest of a listing rather than dropping it.
+  cursor                 Json?
+  exclude_keywords       String    @default("")
+  /// Only a complete pass may mark an observation missing.
+  last_complete_check_at DateTime?
+  discovery_score        Float?
+  discovery_evidence     Json?
+
+  tenant       Tenant?               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  owner        User?                 @relation("MonitoredSourceOwner", fields: [owner_user_id], references: [id], onDelete: SetNull)
+  site         MonitorSite?          @relation(fields: [site_id], references: [id], onDelete: SetNull)
+  snapshots    MonitoredSnapshot[]
+  changes      MonitoredChange[]
+  ignoreRules  MonitoredIgnoreRule[]
+  observations MonitorObservation[]
+  check_runs   MonitorCheckRun[]
 
   @@index([status, last_checked_at], map: "idx_monitored_sources_due")
   @@index([tenant_id], map: "idx_monitored_sources_tenant")
+  @@index([status, next_check_at], map: "idx_monitored_sources_next_check")
+  @@index([site_id], map: "idx_monitored_sources_site")
   @@map("monitored_sources")
 }
 
@@ -9257,16 +9303,682 @@ model MonitoredChange {
 /// Learned noise filter: lines matching these patterns are stripped before
 /// hashing, so visitor counters and "last updated" stamps stop waking anyone.
 model MonitoredIgnoreRule {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   source_id          String
   pattern            String
-  created_at         DateTime @default(now())
+  /// LINE (strip matching text lines) | URL_PREFIX (skip links under a path).
+  scope              String    @default("LINE")
+  /// URLs the reviewer saw the rule would affect when they saved it.
+  example_urls       String[]  @default([])
+  /// Rules are reviewer-authored and expire; model output never writes one.
+  expires_at         DateTime?
+  is_active          Boolean   @default(true)
+  created_at         DateTime  @default(now())
   created_by_user_id String?
 
   source MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
 
   @@index([source_id], map: "idx_monitored_ignore_rules_source")
   @@map("monitored_ignore_rules")
+}
+
+/// A host Source Watch may crawl: the unit of scope and robots policy. A host
+/// is not a funder — shared portals carry many funders and one funder can use
+/// several hosts — so the funder link lives in MonitorSiteFunder, and network
+/// pacing is charged to destination hosts in MonitorHostPacing.
+model MonitorSite {
+  id                         String    @id @default(cuid())
+  host                       String    @unique
+  /// SUGGESTED | ACTIVE | PAUSED | BLOCKED. Nothing is fetched unless ACTIVE.
+  status                     String    @default("ACTIVE")
+  /// MANUAL | CATALOG_SEED | BACKFILL
+  origin                     String    @default("MANUAL")
+  display_name               String?
+  /// HIGH | NORMAL | LOW
+  priority                   String    @default("NORMAL")
+  /// Admin-approved hosts this site's crawl may follow (subdomains, portals).
+  related_hosts              String[]  @default([])
+  /// Hosts allowed for attachments only (CDNs, file stores); never seeded.
+  attachment_hosts           String[]  @default([])
+  /// Lexicon languages for relevance scoring (en, hi, …).
+  language_profile           String[]  @default(["en"])
+  /// Per-site SPA fragment rules (regex sources) whose fragments are kept.
+  fragment_rules             String[]  @default([])
+  /// Extra per-site session parameters stripped from URLs.
+  session_params             String[]  @default([])
+  min_delay_ms               Int       @default(3000)
+  /// { reason, approved_by, expires_at } — host-specific and expiring. Never
+  /// set automatically; while present, fetches are flagged in evidence.
+  tls_exception              Json?
+  /// Per-site daily paid-work budget override, in micro-USD.
+  daily_budget_micros        BigInt?
+  storage_quota_bytes        BigInt?
+  consecutive_fetch_failures Int       @default(0)
+  last_fetch_error           String?
+  last_fetch_error_at        DateTime?
+  created_at                 DateTime  @default(now())
+  updated_at                 DateTime  @updatedAt
+  created_by_user_id         String?
+
+  sources       MonitoredSource[]
+  funders       MonitorSiteFunder[]
+  resources     MonitorResource[]
+  opportunities MonitorOpportunity[]
+  frontier      MonitorCrawlFrontier[]
+  verified      MonitorVerifiedAnnouncement[]
+
+  @@index([status])
+  @@map("monitor_sites")
+}
+
+/// Evidence-backed site ↔ funder association. Suggestions stay suggestions
+/// until an admin confirms them.
+model MonitorSiteFunder {
+  id                 String    @id @default(cuid())
+  site_id            String
+  funder_id          String
+  /// SUGGESTED | CONFIRMED | REJECTED
+  status             String    @default("SUGGESTED")
+  confidence         Float?
+  evidence           Json?
+  decided_by_user_id String?
+  decided_at         DateTime?
+  created_at         DateTime  @default(now())
+
+  site   MonitorSite @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  funder Funder      @relation(fields: [funder_id], references: [id], onDelete: Cascade)
+
+  @@unique([site_id, funder_id])
+  @@index([funder_id])
+  @@map("monitor_site_funders")
+}
+
+/// Runtime pacing per DESTINATION host — attachment and related hosts
+/// included — shared by the worker and the sweep fallback, so two processes
+/// can never double the request rate to one server.
+model MonitorHostPacing {
+  host            String    @id
+  next_allowed_at DateTime  @default(now())
+  /// Retry-After / 429 / robots crawl-delay cooldown; no request before it.
+  cooldown_until  DateTime?
+  cooldown_reason String?
+  updated_at      DateTime  @updatedAt
+
+  @@map("monitor_host_pacing")
+}
+
+/// robots.txt state per origin (scheme + host + port) and user agent, per
+/// RFC 9309: ALLOW_ALL (4xx), RULES (2xx), DEFER (5xx / unreachable / 429).
+model MonitorRobots {
+  id             String    @id @default(cuid())
+  origin         String
+  user_agent     String
+  state          String
+  http_status    Int?
+  body           String?
+  crawl_delay_ms Int?
+  fetched_at     DateTime  @default(now())
+  expires_at     DateTime
+  /// When rules were last fetched successfully: the fallback copy while the
+  /// file is unreachable.
+  last_good_at   DateTime?
+  last_good_body String?
+  /// Why the last fetch failed (e.g. TLS_ERROR) — a permanent cause is
+  /// reported as itself instead of as an endless "robots unreachable".
+  error_code     String?
+  error_message  String?
+
+  @@unique([origin, user_agent])
+  @@map("monitor_robots")
+}
+
+/// One check of one watch point. `complete` is what licenses absence: a
+/// partial run (page budget, truncation, error) never marks anything missing.
+model MonitorCheckRun {
+  id               String    @id @default(cuid())
+  source_id        String
+  site_id          String?
+  check_generation Int
+  task_id          String?
+  /// RUNNING | COMPLETE | PARTIAL | NOT_MODIFIED | FAILED | DEFERRED | CANCELED
+  status           String    @default("RUNNING")
+  complete         Boolean   @default(false)
+  truncated        Boolean   @default(false)
+  pages_visited    Int       @default(0)
+  items_observed   Int       @default(0)
+  new_resources    Int       @default(0)
+  fetch_mode_used  String?
+  http_status      Int?
+  error_class      String?
+  error_message    String?
+  started_at       DateTime  @default(now())
+  finished_at      DateTime?
+
+  source MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  @@unique([source_id, check_generation])
+  @@index([source_id, started_at])
+  @@index([started_at])
+  @@map("monitor_check_runs")
+}
+
+/// Identity of one thing a site publishes: a page, a document, or a text
+/// block with no link of its own. Identity is the dedup key, never content.
+model MonitorResource {
+  id                     String    @id @default(cuid())
+  site_id                String
+  /// PAGE | DOCUMENT | TEXT_BLOCK
+  kind                   String    @default("PAGE")
+  /// LISTING | CALL_PAGE | DOCUMENT | SCHEME_LANDING | TEXT_BLOCK | UNKNOWN.
+  /// A role outlives a call's status: an expired call's page stays a scheme
+  /// landing page, which is how a reused URL's next round gets noticed.
+  role                   String    @default("UNKNOWN")
+  raw_url                String?
+  final_url              String?
+  canonical_url          String?
+  dedup_key              String
+  /// TEXT_BLOCK identity (source + heading-path anchor). Not a URL fragment.
+  synthetic_key          String?
+  title                  String?
+  mime_type              String?
+  current_version_id     String?
+  /// Freshness is a recent successful validation (a 304 counts), not the
+  /// absence of an observed change.
+  last_validated_at      DateTime?
+  /// OK | NOT_MODIFIED | CHANGED | UNREACHABLE | TRUNCATED
+  last_validation_status String?
+  etag                   String?
+  last_modified          String?
+  /// NONE | ACTIVE | SCHEME_LANDING | LONG_TERM
+  revisit_policy         String    @default("NONE")
+  next_revisit_at        DateTime?
+  revisit_generation     Int       @default(0)
+  first_seen_at          DateTime  @default(now())
+  last_observed_at       DateTime  @default(now())
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  site          MonitorSite                  @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  versions      MonitorResourceVersion[]
+  aliases       MonitorResourceAlias[]
+  observations  MonitorObservation[]
+  opportunities MonitorOpportunity[]
+  evidence      MonitorOpportunityEvidence[]
+
+  @@unique([site_id, dedup_key])
+  @@index([revisit_policy, next_revisit_at])
+  @@index([site_id, first_seen_at])
+  @@map("monitor_resources")
+}
+
+/// Audited alternate keys for a resource (observed redirects, tracking
+/// variants, confirmed canonicals). rel=canonical alone is a hint, not this.
+model MonitorResourceAlias {
+  id                 String   @id @default(cuid())
+  resource_id        String
+  site_id            String
+  dedup_key          String
+  /// REDIRECT | TRACKING_VARIANT | CONFIRMED_CANONICAL
+  reason             String
+  raw_url            String?
+  created_at         DateTime @default(now())
+  created_by_user_id String?
+
+  resource MonitorResource @relation(fields: [resource_id], references: [id], onDelete: Cascade)
+
+  @@unique([site_id, dedup_key])
+  @@index([resource_id])
+  @@map("monitor_resource_aliases")
+}
+
+/// One content version of a resource. raw_hash is the bytes; meaningful_hash
+/// is the normalised content, so a visitor counter or a reorder is not a new
+/// meaning. Pinned versions survive pruning while a review references them.
+model MonitorResourceVersion {
+  id                 String    @id @default(cuid())
+  resource_id        String
+  raw_hash           String
+  meaningful_hash    String
+  fetched_at         DateTime  @default(now())
+  http_status        Int?
+  final_url          String?
+  mime_type          String?
+  byte_length        Int       @default(0)
+  truncated          Boolean   @default(false)
+  /// Bounded normalised text (listing text, parsed document text).
+  text               String?
+  /// Stored bytes for documents, relative to the monitor storage root.
+  file_path          String?
+  page_count         Int?
+  /// [{ page, status OK | NEEDS_OCR | PARSE_FAILED | SKIPPED_LIMIT, chars }]
+  page_statuses      Json?
+  parser_version     String?
+  tls_exception_used Boolean   @default(false)
+  pin_refcount       Int       @default(0)
+  retain_until       DateTime?
+  created_at         DateTime  @default(now())
+
+  resource MonitorResource              @relation(fields: [resource_id], references: [id], onDelete: Cascade)
+  evidence MonitorOpportunityEvidence[]
+
+  @@unique([resource_id, raw_hash])
+  @@index([resource_id, fetched_at])
+  @@map("monitor_resource_versions")
+}
+
+/// One watch point's sighting of one resource. A resource seen from two
+/// watch points has two observations and still one identity.
+model MonitorObservation {
+  id                    String    @id @default(cuid())
+  source_id             String
+  resource_id           String
+  site_id               String
+  anchor_text           String?
+  context_text          String?
+  context_hash          String
+  /// Raw date strings near the link, uninterpreted.
+  date_hints            String[]  @default([])
+  position              Int?
+  first_seen_at         DateTime  @default(now())
+  last_seen_at          DateTime  @default(now())
+  last_check_generation Int       @default(0)
+  /// Set only when a COMPLETE pass did not see it; cleared when seen again.
+  missing_since         DateTime?
+
+  source   MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+  resource MonitorResource @relation(fields: [resource_id], references: [id], onDelete: Cascade)
+
+  @@unique([source_id, resource_id])
+  @@index([resource_id])
+  @@index([site_id, first_seen_at])
+  @@map("monitor_observations")
+}
+
+/// The reviewable unit: one round of one scheme, assembled from evidence.
+/// Processing and review are separate state machines on purpose.
+/// A partial unique index (raw SQL in 20261024100000_source_watch_foundation,
+/// invisible to Prisma — keep it out of future diffs) allows only one EXACT
+/// open claim per (scheme_key, round_key).
+model MonitorOpportunity {
+  id                        String    @id @default(cuid())
+  site_id                   String
+  primary_resource_id       String?
+  scheme_key                String?
+  round_key                 String?
+  /// EXACT | PROBABLE | AMBIGUOUS | NONE
+  match_confidence          String?
+  /// NEW | UPDATE_OF | NEW_ROUND_OF | AMBIGUOUS
+  match_type                String?
+  title                     String?
+  funder_id                 String?
+  /// OPEN | ROLLING | FUTURE | EXPIRED | UNKNOWN | WITHDRAWN | CANCELLED | POSTPONED | REOPENED
+  lifecycle                 String    @default("UNKNOWN")
+  /// OBSERVED | SCORED | NEEDS_EVIDENCE | AWAITING_BUDGET | TRIAGED | EXTRACTING | DRAFTED | DONE
+  processing_state          String    @default("OBSERVED")
+  /// NONE | PENDING | SNOOZED | PUBLISHED | REJECTED | MERGED | UPDATE_PROPOSED
+  review_state              String    @default("NONE")
+  /// Compare-and-set token for every review action.
+  review_revision           Int       @default(0)
+  snoozed_until             DateTime?
+  /// STRONG_POSITIVE | UNCERTAIN | STRONG_NEGATIVE
+  relevance_outcome         String?
+  relevance_score           Float?
+  triage_verdict            String?
+  triage_confidence         Float?
+  triage_reason             String?
+  opportunity_type          String?
+  /// { policy, prompt, schema, model, routing } that produced the decision.
+  decision_versions         Json?
+  funding_call_id           String?
+  field_evidence            Json?
+  conflicts                 Json?
+  evidence_manifest_version Int       @default(0)
+  drafted_from_version_ids  String[]  @default([])
+  stale_evidence            Boolean   @default(false)
+  bootstrap                 Boolean   @default(false)
+  decided_by_user_id        String?
+  decided_at                DateTime?
+  reject_reason             String?
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @updatedAt
+
+  site             MonitorSite                  @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  primary_resource MonitorResource?             @relation(fields: [primary_resource_id], references: [id], onDelete: SetNull)
+  funder           Funder?                      @relation(fields: [funder_id], references: [id], onDelete: SetNull)
+  funding_call     FundingCall?                 @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
+  evidence         MonitorOpportunityEvidence[]
+  handoffs         MonitorHandoff[]
+
+  @@index([review_state, updated_at])
+  @@index([processing_state])
+  @@index([site_id])
+  @@index([funding_call_id])
+  @@map("monitor_opportunities")
+}
+
+model MonitorOpportunityEvidence {
+  id             String   @id @default(cuid())
+  opportunity_id String
+  resource_id    String
+  version_id     String
+  /// LISTING | CALL_NOTICE | GUIDELINES | ANNEXURE | CORRIGENDUM
+  role           String
+  /// [{ segment, page, quote }]
+  anchors        Json?
+  created_at     DateTime @default(now())
+
+  opportunity MonitorOpportunity     @relation(fields: [opportunity_id], references: [id], onDelete: Cascade)
+  resource    MonitorResource        @relation(fields: [resource_id], references: [id], onDelete: Cascade)
+  version     MonitorResourceVersion @relation(fields: [version_id], references: [id], onDelete: Cascade)
+
+  @@unique([opportunity_id, version_id, role])
+  @@map("monitor_opportunity_evidence")
+}
+
+/// The one record that carries an opportunity into intake. handoff_key is
+/// unique here and on FundingIntakeBatch, so a crash between "batch created"
+/// and "handoff linked" can never produce a second draft.
+model MonitorHandoff {
+  id              String   @id @default(cuid())
+  opportunity_id  String
+  handoff_key     String   @unique
+  review_revision Int
+  /// DRAFT | UPDATE
+  action          String
+  /// PENDING | LINKED | FAILED | CANCELED
+  state           String   @default("PENDING")
+  intake_batch_id String?
+  intake_job_id   String?
+  funding_call_id String?
+  error           String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  opportunity MonitorOpportunity @relation(fields: [opportunity_id], references: [id], onDelete: Cascade)
+
+  @@index([opportunity_id])
+  @@map("monitor_handoffs")
+}
+
+/// URL lookup keys for catalog calls, intake jobs and pending handoffs,
+/// written in the same transaction as the write that creates the link.
+/// owner_key is 'call:<id>' | 'job:<id>' | 'handoff:<id>'.
+model FundingCallUrlKey {
+  id              String   @id @default(cuid())
+  dedup_key       String
+  owner_key       String
+  funding_call_id String?
+  intake_job_id   String?
+  handoff_id      String?
+  /// SOURCE_URL | OFFICIAL_URL | INTAKE_SOURCE | HANDOFF
+  source          String
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  funding_call FundingCall?      @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  intake_job   FundingIntakeJob? @relation(fields: [intake_job_id], references: [id], onDelete: Cascade)
+
+  @@unique([dedup_key, owner_key])
+  @@index([dedup_key])
+  @@index([funding_call_id])
+  @@map("funding_call_url_keys")
+}
+
+/// Reviewer-labelled samples of negative decisions, for filter recall.
+model MonitorAuditSample {
+  id                 String    @id @default(cuid())
+  opportunity_id     String?
+  resource_id        String?
+  /// FILTER | TRIAGE | SELECTION
+  stage              String
+  sampled_outcome    String
+  sampling_weight    Float     @default(1)
+  /// RELEVANT | IRRELEVANT | UNSURE
+  label              String?
+  labeled_by_user_id String?
+  labeled_at         DateTime?
+  created_at         DateTime  @default(now())
+
+  @@index([stage, created_at])
+  @@map("monitor_audit_samples")
+}
+
+/// Independent, manually verified official announcements for a held-out
+/// cohort: the only honest denominator for end-to-end discovery recall.
+model MonitorVerifiedAnnouncement {
+  id                     String    @id @default(cuid())
+  site_id                String
+  cohort                 String
+  title                  String
+  url                    String
+  announced_on           DateTime? @db.Date
+  verified_by_user_id    String?
+  verified_at            DateTime  @default(now())
+  matched_opportunity_id String?
+  notes                  String?
+
+  site MonitorSite @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@index([cohort])
+  @@map("monitor_verified_announcements")
+}
+
+/// Durable queue and outbox. operation_key is defined per kind (see
+/// src/lib/monitor/queue.ts); a lease generation fences every effect.
+model MonitorTask {
+  id               String    @id @default(cuid())
+  kind             String
+  operation_key    String    @unique
+  payload          Json
+  payload_version  Int       @default(1)
+  /// QUEUED | RUNNING | DONE | FAILED_PERMANENT | DEAD | DEFERRED_BUDGET | PAUSED_PROVIDER | CANCELED
+  status           String    @default("QUEUED")
+  /// Lower runs first.
+  priority         Int       @default(100)
+  site_id          String?
+  source_id        String?
+  resource_id      String?
+  opportunity_id   String?
+  attempts         Int       @default(0)
+  max_attempts     Int       @default(5)
+  available_at     DateTime  @default(now())
+  lease_generation Int       @default(0)
+  lease_owner      String?
+  lease_until      DateTime?
+  heartbeat_at     DateTime?
+  started_at       DateTime?
+  finished_at      DateTime?
+  terminal_reason  String?
+  last_error       String?
+  result           Json?
+  replay_of        String?
+  replay_reason    String?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  @@index([status, available_at, priority], map: "idx_monitor_tasks_claim")
+  @@index([site_id, status])
+  @@index([kind, status])
+  @@map("monitor_tasks")
+}
+
+/// Completed operation keys outlive their task rows, so cleanup can never
+/// let a pruned key run its effect a second time.
+model MonitorOperationTombstone {
+  operation_key String   @id
+  kind          String
+  task_id       String?
+  completed_at  DateTime @default(now())
+
+  @@index([completed_at])
+  @@map("monitor_operation_tombstones")
+}
+
+/// Persisted discovery frontier: limits defer work, they never drop it.
+model MonitorCrawlFrontier {
+  id              String    @id @default(cuid())
+  site_id         String
+  dedup_key       String
+  url             String
+  depth           Int       @default(0)
+  score           Float     @default(0)
+  discovered_from String?
+  /// PENDING | VISITED | SKIPPED_LIMIT | TRAP
+  state           String    @default("PENDING")
+  next_visit_at   DateTime?
+  visited_at      DateTime?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  site MonitorSite @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@unique([site_id, dedup_key])
+  @@index([site_id, state, next_visit_at])
+  @@map("monitor_crawl_frontier")
+}
+
+/// Daily paid-work budget per scope (PLATFORM | SITE:<id> | BOOTSTRAP), in
+/// micro-USD. Reservations are atomic; settlement reconciles actual cost.
+model MonitorBudgetLedger {
+  id              String   @id @default(cuid())
+  day             DateTime @db.Date
+  scope           String
+  limit_micros    BigInt
+  reserved_micros BigInt   @default(0)
+  settled_micros  BigInt   @default(0)
+  updated_at      DateTime @updatedAt
+
+  @@unique([day, scope])
+  @@map("monitor_budget_ledger")
+}
+
+/// One paid provider attempt. Every attempt is its own row with its own
+/// reservation; a billable failure keeps its usage.
+model MonitorLlmAttempt {
+  id                  String    @id @default(cuid())
+  operation_key       String
+  attempt_no          Int
+  stage               String
+  model               String?
+  provider            String?
+  provider_account    String?
+  request_id          String?
+  price_snapshot      Json?
+  reserved_max_micros BigInt
+  ledger_day          DateTime  @db.Date
+  ledger_scopes       String[]  @default([])
+  /// RESERVED | DISPATCHED | SUCCEEDED | FAILED_BILLABLE | FAILED_UNBILLED | UNCERTAIN | RELEASED
+  status              String    @default("RESERVED")
+  usage               Json?
+  actual_cost_micros  BigInt?
+  settled_at          DateTime?
+  task_id             String?
+  lease_generation    Int?
+  error_class         String?
+  error_message       String?
+  dispatched_at       DateTime?
+  created_at          DateTime  @default(now())
+
+  @@unique([operation_key, attempt_no])
+  @@index([status, created_at])
+  @@index([ledger_day])
+  @@map("monitor_llm_attempts")
+}
+
+/// Stage results keyed by the fingerprint of the complete effective input.
+model MonitorStageCache {
+  id                     String    @id @default(cuid())
+  cache_key              String    @unique
+  stage                  String
+  result                 Json
+  model_used             String?
+  routing_policy_version String?
+  cost_micros            BigInt?
+  hit_count              Int       @default(0)
+  last_hit_at            DateTime?
+  created_at             DateTime  @default(now())
+
+  @@index([stage, created_at])
+  @@map("monitor_stage_cache")
+}
+
+/// Circuit breaker per provider account. A billing or auth failure opens it
+/// and pauses paid work without counting against any site.
+model MonitorProviderHealth {
+  id                   String    @id @default(cuid())
+  provider_account     String    @unique
+  /// CLOSED | OPEN | HALF_OPEN
+  state                String    @default("CLOSED")
+  /// BILLING | AUTH | RATE | TRANSIENT
+  reason               String?
+  opened_at            DateTime?
+  next_probe_at        DateTime?
+  consecutive_failures Int       @default(0)
+  last_error           Json?
+  updated_at           DateTime  @updatedAt
+
+  @@map("monitor_provider_health")
+}
+
+/// Written on a timer, independent of task activity, so an idle worker still
+/// looks alive and a dead one is noticed within minutes.
+model MonitorWorkerHeartbeat {
+  worker_id       String   @id
+  hostname        String?
+  pid             Int?
+  version         String?
+  /// IDLE | BUSY | STOPPING
+  state           String   @default("IDLE")
+  current_task_id String?
+  started_at      DateTime @default(now())
+  last_beat_at    DateTime @default(now())
+
+  @@index([last_beat_at])
+  @@map("monitor_worker_heartbeats")
+}
+
+/// Notification outbox. event_key is the idempotency key for one event.
+model MonitorEvent {
+  id            String    @id @default(cuid())
+  kind          String
+  event_key     String    @unique
+  payload       Json
+  dispatched_at DateTime?
+  created_at    DateTime  @default(now())
+
+  deliveries MonitorNotificationDelivery[]
+
+  @@index([dispatched_at])
+  @@map("monitor_events")
+}
+
+/// One recipient × channel of an event. SENDING is written before dispatch
+/// and never retried after a crash: delivery is at-most-once by design.
+model MonitorNotificationDelivery {
+  id                String    @id @default(cuid())
+  event_id          String
+  recipient_user_id String
+  /// IN_APP | EMAIL
+  channel           String
+  /// PENDING | SENDING | SENT | FAILED | SKIPPED
+  state             String    @default("PENDING")
+  error             String?
+  created_at        DateTime  @default(now())
+  sent_at           DateTime?
+
+  event MonitorEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_id, recipient_user_id, channel])
+  @@map("monitor_notification_deliveries")
+}
+
+/// Polling cursors for incremental maintenance jobs, as (updated_at, id).
+model MonitorSyncCursor {
+  name       String   @id
+  cursor     Json
+  updated_at DateTime @updatedAt
+
+  @@map("monitor_sync_cursors")
 }
 
 model JobRun {

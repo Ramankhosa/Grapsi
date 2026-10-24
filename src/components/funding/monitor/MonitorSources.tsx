@@ -4,7 +4,7 @@ import { AlertTriangle, Pause, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import type { MonitorSource } from './types'
-import { frequencyLabel, timeAgo } from './types'
+import { frequencyLabel, timeAgo, timeUntil } from './types'
 
 export default function MonitorSources({
   sources,
@@ -149,12 +149,15 @@ export default function MonitorSources({
                 </td>
                 <td className="px-4 py-3 text-ink-soft">{source.owner?.name ?? '—'}</td>
                 <td className="px-4 py-3">
-                  <span className={source.mode === 'FEED' ? 'cb-badge-cobalt' : 'cb-badge'}>
-                    {source.mode}
+                  <span className={source.mode === 'FEED' || source.kind === 'FEED' ? 'cb-badge-cobalt' : 'cb-badge'}>
+                    {source.kind ? `${source.kind} · ${source.fetch_mode ?? source.mode}` : source.mode}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-ink-soft">
                   {frequencyLabel(source.frequency_minutes)}
+                  {source.next_check_at !== undefined && (
+                    <div className="text-[11px] text-muted">next {timeUntil(source.next_check_at)}</div>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-ink-soft">
                   {timeAgo(source.last_checked_at)}

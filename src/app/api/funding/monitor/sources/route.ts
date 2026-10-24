@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { MIN_FREQUENCY_MINUTES } from '@/lib/monitor/checker'
+import { ensureSiteForUrl } from '@/lib/monitor/sites'
 import { normalizeUrl } from '@/lib/monitor/urls'
 import { prisma } from '@/lib/prisma'
 
@@ -61,10 +62,15 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Every watch point belongs to the site for its host; adding one by hand
+  // activates that site. Due immediately, so the first check baselines it.
+  const site = await ensureSiteForUrl(url, auth.operator.userId)
   const source = await prisma.monitoredSource.create({
     data: {
       name: parsed.data.name,
       url,
+      site_id: site.id,
+      next_check_at: new Date(),
       selector: parsed.data.selector || null,
       frequency_minutes: parsed.data.frequencyMinutes,
       keywords: parsed.data.keywords,

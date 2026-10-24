@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { MIN_FREQUENCY_MINUTES } from '@/lib/monitor/checker'
+import { ensureSiteForUrl } from '@/lib/monitor/sites'
 import { normalizeUrl } from '@/lib/monitor/urls'
 import { prisma } from '@/lib/prisma'
 
@@ -59,10 +60,13 @@ export async function POST(request: NextRequest) {
       continue
     }
 
+    const site = await ensureSiteForUrl(url, auth.operator.userId)
     await prisma.monitoredSource.create({
       data: {
         name: host,
         url,
+        site_id: site.id,
+        next_check_at: new Date(),
         frequency_minutes: parsed.data.frequencyMinutes,
         tags: parsed.data.tags,
         owner_user_id: auth.operator.userId,

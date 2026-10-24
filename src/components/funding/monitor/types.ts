@@ -32,6 +32,110 @@ export type MonitorSource = {
   last_error: string | null
   owner: { id: string; name: string | null; email: string } | null
   _count?: { changes: number }
+  // v2 engine fields (present once the foundation migration ran)
+  site_id?: string | null
+  kind?: string
+  fetch_mode?: string
+  next_check_at?: string | null
+  last_complete_check_at?: string | null
+}
+
+export type MonitorEngine = 'legacy' | 'v2'
+
+export type HealthSnapshot = {
+  engine: MonitorEngine
+  browserEnabled: boolean
+  worker: {
+    alive: boolean
+    lastBeatAt: string | null
+    ageSeconds: number | null
+    instances: { workerId: string; state: string; lastBeatAt: string; ageSeconds: number; currentTaskId: string | null }[]
+  }
+  queue: Record<string, Record<string, number>>
+  oldestRunnable: { kind: string; ageSeconds: number } | null
+  deadLetters: {
+    id: string
+    kind: string
+    status: string
+    last_error: string | null
+    terminal_reason: string | null
+    updated_at: string
+    source_id: string | null
+    attempts: number
+  }[]
+  checksLast24h: Record<string, number>
+  sites: Record<string, number>
+  providers: { account: string; state: string; reason: string | null; openedAt: string | null; nextProbeAt: string | null }[]
+  budgetToday: { scope: string; limitMicros: string; reservedMicros: string; settledMicros: string }[]
+  jobRuns: { job_key: string; status: string; started_at: string; finished_at: string | null; error_message: string | null }[]
+}
+
+export type SiteSummary = {
+  id: string
+  host: string
+  status: string
+  origin: string
+  consecutive_fetch_failures: number
+  last_fetch_error: string | null
+  sources: {
+    id: string
+    name: string
+    url: string
+    kind: string
+    status: string
+    fetch_mode: string
+    next_check_at: string | null
+    last_checked_at: string | null
+    last_complete_check_at: string | null
+    last_error: string | null
+    check_generation: number
+  }[]
+  _count: { resources: number }
+}
+
+export type CheckRunRow = {
+  id: string
+  source_id: string
+  check_generation: number
+  status: string
+  complete: boolean
+  truncated: boolean
+  pages_visited: number
+  items_observed: number
+  new_resources: number
+  fetch_mode_used: string | null
+  error_class: string | null
+  error_message: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export type ResourceRow = {
+  id: string
+  kind: string
+  role: string
+  canonical_url: string | null
+  title: string | null
+  first_seen_at: string
+  last_observed_at: string
+  last_validated_at: string | null
+  last_validation_status: string | null
+  observations: {
+    source_id: string
+    anchor_text: string | null
+    context_text: string | null
+    date_hints: string[]
+    first_seen_at: string
+    last_seen_at: string
+    missing_since: string | null
+  }[]
+}
+
+export type SiteEvidence = {
+  site: { id: string; host: string; status: string; sources: { id: string; name: string; url: string; kind: string }[] }
+  checkRuns: CheckRunRow[]
+  resources: ResourceRow[]
+  resourceCounts: Record<string, number>
 }
 
 export type MonitorChange = {
@@ -88,6 +192,26 @@ export function timeAgo(value: string | Date | null | undefined): string {
   const days = Math.floor(hours / 24)
   if (days < 30) return `${days}d ago`
   return date.toISOString().slice(0, 10)
+}
+
+export function timeUntil(value: string | Date | null | undefined): string {
+  if (!value) return 'not scheduled'
+  const date = typeof value === 'string' ? new Date(value) : value
+  const seconds = Math.floor((date.getTime() - Date.now()) / 1000)
+  if (seconds <= 0) return 'due now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `in ${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `in ${hours}h`
+  return `in ${Math.floor(hours / 24)}d`
+}
+
+export function ageLabel(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return 'never'
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
+  return `${Math.floor(seconds / 86400)}d`
 }
 
 export function frequencyLabel(minutes: number): string {

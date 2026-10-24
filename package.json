@@ -41,6 +41,9 @@
     "verify:funding-grant-launch": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts",
     "verify:idea-funding-match": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-idea-funding-match.ts",
     "verify:grant-pipeline": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-streamlined-grant-pipeline.ts",
+    "test:monitor:db": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/monitor-test-db.ts",
+    "test:monitor:integration": "vitest run --config vitest.monitor-integration.config.ts",
+    "worker:source-monitor": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/source-monitor-worker.ts",
     "worker:public-project-crawler": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-crawler-worker.ts",
     "worker:public-project-embeddings": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts",
     "worker:public-project-embeddings:low-impact": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --limit=5 --batch-cooldown-ms=10000 --poll-ms=30000",
@@ -130,6 +133,7 @@
     "pdfjs-dist": "^5.4.624",
     "pdfkit": "^0.17.2",
     "plantuml-encoder": "^1.4.0",
+    "playwright": "1.63.0",
     "react": "^18",
     "react-dom": "^18",
     "react-hot-toast": "^2.6.0",
@@ -142,6 +146,7 @@
     "server-only": "^0.0.1",
     "tailwind-merge": "^3.3.1",
     "twitter-api-v2": "^1.28.0",
+    "undici": "7.29.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {

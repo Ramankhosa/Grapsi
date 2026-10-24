@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 
+import { assertLegacyEngine } from './engine'
+
 export type ExtractedOpportunity = {
   title: string
   funder?: string
@@ -51,6 +53,9 @@ export async function triageChange(input: {
   added: string
   removed: string
 }): Promise<TriageResult | null> {
+  // Unmetered direct-SDK call: allowed only on the legacy engine, and removed
+  // outright when v2 triage (metered, budgeted, cached) lands.
+  assertLegacyEngine('Legacy direct-SDK triage')
   const apiKey = process.env.MONITOR_TRIAGE_API_KEY || process.env.ANTHROPIC_API_KEY
   if (!apiKey) return null
 

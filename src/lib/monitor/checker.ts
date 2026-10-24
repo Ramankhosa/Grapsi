@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 
 import { computeDiff, addedLines, removedLines } from './differ'
+import { assertLegacyEngine } from './engine'
 import { fetchUrl, discoverFeed, isAllowedByRobots } from './fetcher'
 import { sendChangeAlert } from './notify'
 import { extractText, applyIgnoreRules, hashText } from './normalize'
@@ -24,6 +25,8 @@ export type CheckResult =
  * alert. Safe to call from a cron sweep or from the "Check now" button.
  */
 export async function runCheck(sourceId: string): Promise<CheckResult> {
+  // The v2 worker owns checking when it is on; the two engines never both run.
+  assertLegacyEngine('The legacy source checker')
   const source = await prisma.monitoredSource.findUnique({
     where: { id: sourceId },
     include: { ignoreRules: true },
@@ -91,11 +94,6 @@ export async function runCheck(sourceId: string): Promise<CheckResult> {
       return { status: 'unchanged' }
     }
 
-    await prisma.monitoredSnapshot.create({
-      data: { source_id: source.id, content_hash: contentHash, text },
-    })
-    await pruneSnapshots(source.id)
-
     const diff = computeDiff(latest.text, text)
     const triage = await triageChange({
       sourceName: source.name,
@@ -109,24 +107,33 @@ export async function runCheck(sourceId: string): Promise<CheckResult> {
     // that judgement is what keeps the queue worth opening.
     const isCosmetic = triage !== null && triage.verdict === 'COSMETIC' && triage.confidence >= 0.8
 
-    const change = await prisma.monitoredChange.create({
-      data: {
-        source_id: source.id,
-        diff: diff as unknown as object,
-        verdict: triage?.verdict ?? 'UNKNOWN',
-        confidence: triage?.confidence ?? null,
-        extracted: triage
-          ? ({ summary: triage.summary, opportunities: triage.opportunities } as object)
-          : undefined,
-        state: isCosmetic ? 'DISMISSED' : 'NEW',
-        resolved_at: isCosmetic ? new Date() : null,
-      },
+    // Snapshot and change commit together. Writing the snapshot first (as this
+    // used to) meant a failure before the change was recorded made the next
+    // fetch look unchanged, and the find was lost.
+    const change = await prisma.$transaction(async (tx) => {
+      await tx.monitoredSnapshot.create({
+        data: { source_id: source.id, content_hash: contentHash, text },
+      })
+      const created = await tx.monitoredChange.create({
+        data: {
+          source_id: source.id,
+          diff: diff as unknown as object,
+          verdict: triage?.verdict ?? 'UNKNOWN',
+          confidence: triage?.confidence ?? null,
+          extracted: triage
+            ? ({ summary: triage.summary, opportunities: triage.opportunities } as object)
+            : undefined,
+          state: isCosmetic ? 'DISMISSED' : 'NEW',
+          resolved_at: isCosmetic ? new Date() : null,
+        },
+      })
+      await tx.monitoredSource.update({
+        where: { id: source.id },
+        data: { ...clearError, last_changed_at: new Date() },
+      })
+      return created
     })
-
-    await prisma.monitoredSource.update({
-      where: { id: source.id },
-      data: { ...clearError, last_changed_at: new Date() },
-    })
+    await pruneSnapshots(source.id)
 
     if (!isCosmetic) {
       await sendChangeAlert({

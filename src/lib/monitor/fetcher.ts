@@ -1,67 +1,41 @@
 import * as cheerio from "cheerio";
-import robotsParser from "robots-parser";
 
-export const USER_AGENT = "MoniBot/0.1 (funding-opportunity monitor)";
+import { decodeBody, defaultRobotsPolicy, defaultSafeFetch, sourceWatchUserAgent } from "./safeFetch";
+
+/**
+ * Legacy-engine fetch helpers, now thin wrappers over safeFetch: every
+ * request — the checker's, the preview's, feed discovery's — gets the same
+ * address checks, redirect validation, streamed size cap, pacing and
+ * RFC 9309 robots handling as the v2 engine. (The original helper fetched any
+ * URL it was given, private addresses included, and read whole bodies before
+ * truncating them.)
+ */
+
+export const USER_AGENT = sourceWatchUserAgent();
 
 const MAX_BYTES = 2_500_000;
-const FETCH_TIMEOUT_MS = 30_000;
 
 export async function fetchUrl(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "text/html,application/xhtml+xml,application/xml,application/rss+xml,*/*",
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    const text = await res.text();
-    if (text.length > MAX_BYTES) return text.slice(0, MAX_BYTES);
-    return text;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await defaultSafeFetch()(url, { maxBytes: MAX_BYTES });
+  return decodeBody(result);
 }
 
 // --- robots.txt -------------------------------------------------------------
 
-type RobotsEntry = { checker: ReturnType<typeof robotsParser> | null; fetchedAt: number };
-const robotsCache = new Map<string, RobotsEntry>();
-const ROBOTS_TTL_MS = 6 * 60 * 60 * 1000;
-
+/**
+ * RFC 9309 semantics: a robots file that cannot be read because the server
+ * failed (5xx, unreachable) is NOT permission — the check answers false and
+ * the caller defers. A 4xx robots file means "no rules", as before.
+ */
 export async function isAllowedByRobots(url: string): Promise<boolean> {
-  let origin: string;
+  let parsed: URL;
   try {
-    origin = new URL(url).origin;
+    parsed = new URL(url);
   } catch {
     return false;
   }
-  const cached = robotsCache.get(origin);
-  if (!cached || Date.now() - cached.fetchedAt > ROBOTS_TTL_MS) {
-    let checker: ReturnType<typeof robotsParser> | null = null;
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
-      const res = await fetch(`${origin}/robots.txt`, {
-        signal: controller.signal,
-        headers: { "User-Agent": USER_AGENT },
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        checker = robotsParser(`${origin}/robots.txt`, await res.text());
-      }
-    } catch {
-      // no robots.txt reachable -> treat as allowed
-    }
-    robotsCache.set(origin, { checker, fetchedAt: Date.now() });
-  }
-  const entry = robotsCache.get(origin)!;
-  if (!entry.checker) return true;
-  return entry.checker.isAllowed(url, USER_AGENT) !== false;
+  const decision = await defaultRobotsPolicy().check(parsed);
+  return decision.allowed;
 }
 
 // --- feed discovery ---------------------------------------------------------
