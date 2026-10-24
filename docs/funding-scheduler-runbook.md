@@ -216,13 +216,25 @@ picked up on the next run rather than risking a timeout mid-response. If that
 number is persistently non-zero, the watch list has outgrown one window — split
 sources across cadences (every 3 days / weekly) or raise `maxDuration`.
 
-Triage is optional: with `ANTHROPIC_API_KEY` (or `MONITOR_TRIAGE_API_KEY`) set,
-a changed page is read by `MONITOR_TRIAGE_MODEL` (default `claude-haiku-4-5`)
-which decides new-opportunity vs. cosmetic and extracts title, funder, deadline,
-amount and link. Without a key, changes still queue, labelled "Needs review".
-It only runs on pages that actually changed, so the spend stays negligible.
-Note this call deliberately bypasses the metering provider stack: the watch list
-is platform infrastructure, not a tenant's billable action.
+Legacy triage no longer makes direct, unmetered model calls. Legacy mode keeps
+fetch/diff review only. The v2 pipeline uses the platform billing identity and
+explicit stage configuration, reservations, per-attempt receipts and independent
+provider fallback. Run `scripts/monitor-configure.ts` for targeted setup; the
+full model seed also changes other modules and should not be used for rollout.
+
+The v2 worker needs `MONITOR_ENGINE=v2`, `MONITOR_PIPELINE_ENABLED=true` and
+`MONITOR_PAID_WORK_ENABLED=true`; extraction additionally requires
+`MONITOR_EXTRACTION_ENABLED=true`. OCR and semantic retrieval have separate
+enable flags. `MONITOR_NOTIFICATIONS_ENABLED=true` enables health messages and
+the daily discovery digest. All paid work is subject to daily platform, site
+and bootstrap budgets. A budget limit defers work without pausing a funder site.
+
+Run the worker under its own OS user with private-network egress blocked and a
+verified Chromium sandbox before enabling `MONITOR_BROWSER_ENABLED=true`.
+Use `FUNDING_SCHEDULER_ONLY_SOURCE_WATCH=true` when deploying this module alone,
+so starting the scheduler does not activate unrelated notification jobs.
+Automatic drafting requires measured rollout gates and an explicit cohort;
+leave it off during initial monitoring. Source Watch can never auto-publish.
 
 Confirming a find calls `fundingIntakeService.createJob`, so the page enters the
 normal funding intake pipeline and lands as a DRAFT call. The handoff is
