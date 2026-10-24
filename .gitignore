@@ -106,3 +106,6 @@ storage/enrichment-reports/
 storage/release-bundles/
 storage/source-watch/
 .next.verify-source-watch/
+
+# Local worker build packages and verification artifacts
+/outputs/local-worker/

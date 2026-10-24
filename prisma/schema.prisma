@@ -9500,6 +9500,8 @@ model MonitorResource {
 
   site          MonitorSite                  @relation(fields: [site_id], references: [id], onDelete: Cascade)
   versions      MonitorResourceVersion[]
+  local_analysis_jobs    MonitorLocalAnalysisJob[]
+  local_analysis_results MonitorLocalAnalysisResult[]
   aliases       MonitorResourceAlias[]
   observations  MonitorObservation[]
   opportunities MonitorOpportunity[]
@@ -9560,6 +9562,8 @@ model MonitorResourceVersion {
 
   resource MonitorResource              @relation(fields: [resource_id], references: [id], onDelete: Cascade)
   evidence MonitorOpportunityEvidence[]
+  local_analysis_jobs    MonitorLocalAnalysisJob[]
+  local_analysis_results MonitorLocalAnalysisResult[]
 
   @@unique([resource_id, raw_hash])
   @@index([resource_id, fetched_at])
@@ -10106,4 +10110,63 @@ model CatalogueAreaCrosswalk {
   area CatalogueArea @relation(fields:[imported_area_id],references:[id],onDelete:Restrict,onUpdate:NoAction)
   @@id([native_area_id,imported_area_id])
   @@map("catalogue_area_crosswalk")
+}
+
+/// Optional laptop analysis; independent of the live crawler's per-site queue.
+model MonitorLocalWorker {
+  id String @id
+  display_name String @db.VarChar(120)
+  app_version String @db.VarChar(40)
+  model_sha256 String @db.VarChar(64)
+  state String @default("IDLE") @db.VarChar(30)
+  last_seen_at DateTime @default(now()) @db.Timestamptz(6)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  jobs MonitorLocalAnalysisJob[]
+  results MonitorLocalAnalysisResult[]
+  @@map("monitor_local_workers")
+}
+
+model MonitorLocalAnalysisJob {
+  id String @id
+  resource_id String
+  version_id String
+  policy_hash String @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  payload Json
+  state String @default("QUEUED") @db.VarChar(24)
+  attempts Int @default(0)
+  owner String?
+  lease_token String?
+  lease_until DateTime? @db.Timestamptz(6)
+  available_at DateTime @default(now()) @db.Timestamptz(6)
+  last_error String? @db.VarChar(300)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  resource MonitorResource @relation(fields:[resource_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
+  version MonitorResourceVersion @relation(fields:[version_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
+  worker MonitorLocalWorker? @relation(fields:[owner],references:[id],onDelete:NoAction,onUpdate:NoAction)
+  result MonitorLocalAnalysisResult?
+  @@unique([version_id,policy_hash],map:"monitor_local_analysis_jobs_version_id_policy_hash_key")
+  @@index([state,available_at,created_at],map:"monitor_local_jobs_claim")
+  @@map("monitor_local_analysis_jobs")
+}
+
+model MonitorLocalAnalysisResult {
+  job_id String @id
+  resource_id String
+  version_id String
+  worker_id String
+  input_hash String @db.VarChar(64)
+  policy_hash String @db.VarChar(64)
+  model_sha256 String @db.VarChar(64)
+  decision String @db.VarChar(16)
+  elapsed_ms Int
+  mode String @default("SHADOW") @db.VarChar(16)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  job MonitorLocalAnalysisJob @relation(fields:[job_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
+  resource MonitorResource @relation(fields:[resource_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
+  version MonitorResourceVersion @relation(fields:[version_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
+  worker MonitorLocalWorker @relation(fields:[worker_id],references:[id],onDelete:NoAction,onUpdate:NoAction)
+  @@index([resource_id,created_at(sort:Desc)],map:"monitor_local_results_resource")
+  @@map("monitor_local_analysis_results")
 }
