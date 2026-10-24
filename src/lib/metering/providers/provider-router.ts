@@ -201,7 +201,8 @@ export function buildProviderConfigsFromEnv(env: NodeJS.ProcessEnv = process.env
     anthropic: {
       apiKey: env.ANTHROPIC_API_KEY,
       model: 'claude-3-5-sonnet-20241022',
-      baseURL: 'https://api.anthropic.com/v1',
+      // The Anthropic SDK adds /v1/messages itself.
+      baseURL: 'https://api.anthropic.com',
       timeout: parseOptionalPositiveIntEnv(env.ANTHROPIC_TIMEOUT_MS),
       maxRetries: parseOptionalPositiveIntEnv(env.ANTHROPIC_MAX_RETRIES)
     },
