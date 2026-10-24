@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { ledgerDay } from './budget'
 
 import { browserTierEnabled, monitorEngine } from './engine'
 import { WORKER_STALE_MS } from './planner'
@@ -10,7 +11,7 @@ import { WORKER_STALE_MS } from './planner'
  */
 export async function monitorHealthSnapshot(now = new Date()) {
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const today = ledgerDay(now)
 
   const [workers, queueGroups, oldestQueued, deadLetters, checkGroups, siteGroups, providers, budget, jobRuns] = await Promise.all([
     prisma.monitorWorkerHeartbeat.findMany({ orderBy: { last_beat_at: 'desc' }, take: 10 }),
@@ -49,6 +50,13 @@ export async function monitorHealthSnapshot(now = new Date()) {
 
   return {
     engine: monitorEngine(),
+    pipelineEnabled: process.env.MONITOR_PIPELINE_ENABLED === 'true',
+    paidWorkEnabled: process.env.MONITOR_PAID_WORK_ENABLED === 'true',
+    extractionEnabled: process.env.MONITOR_EXTRACTION_ENABLED === 'true',
+    autoDraftEnabled: process.env.MONITOR_AUTO_DRAFT_ENABLED === 'true',
+    notificationsEnabled: process.env.MONITOR_NOTIFICATIONS_ENABLED === 'true',
+    semanticMatchingEnabled: process.env.MONITOR_SEMANTIC_MATCHING_ENABLED === 'true',
+    ocrEnabled: process.env.MONITOR_OCR_ENABLED === 'true',
     browserEnabled: process.env.MONITOR_BROWSER_ENABLED === 'true',
     browserInThisProcess: browserTierEnabled(),
     worker: {

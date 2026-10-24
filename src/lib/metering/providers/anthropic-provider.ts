@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
+import { sdkRetryOptions } from './executionPolicy'
 
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
@@ -162,6 +163,9 @@ export class AnthropicProvider implements LLMProvider {
         for (const part of request.content.parts) {
           if (part.type === 'text') {
             contentParts.push({ type: 'text', text: part.text })
+          } else if (part.type === 'file') {
+            if (part.file.mimeType !== 'application/pdf' || !part.file.data || part.file.url) throw new Error('Anthropic document input requires a local base64 PDF');
+            contentParts.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: part.file.data } });
           } else if (part.type === 'image') {
             // Claude expects base64 images
             contentParts.push({
@@ -197,7 +201,7 @@ export class AnthropicProvider implements LLMProvider {
       }
 
       if (request.stream?.onToken && typeof this.client.messages?.stream === 'function') {
-        const stream = this.client.messages.stream(createParams)
+        const stream = this.client.messages.stream(createParams, sdkRetryOptions(request))
         let outputText = ''
         let usage: Record<string, unknown> | undefined
         let stopReason: unknown
@@ -263,7 +267,7 @@ export class AnthropicProvider implements LLMProvider {
         }
       }
 
-      const response = await this.client.messages.create(createParams)
+      const response = await this.client.messages.create(createParams, sdkRetryOptions(request))
 
       const outputText = response.content
         .filter((block: any) => block.type === 'text')

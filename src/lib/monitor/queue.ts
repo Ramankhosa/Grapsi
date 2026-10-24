@@ -193,7 +193,7 @@ async function claimOnce(options: { owner: string; kinds?: TaskKind[]; leaseMs?:
       FROM "monitor_tasks" t
       LEFT JOIN "monitor_sites" s ON s."id" = t."site_id"
       WHERE (
-          (t."status" = 'QUEUED' AND t."available_at" <= ${NOW_UTC})
+          (t."status" IN ('QUEUED', 'DEFERRED_BUDGET', 'PAUSED_PROVIDER') AND t."available_at" <= ${NOW_UTC})
           OR (t."status" = 'RUNNING' AND t."lease_until" < ${NOW_UTC})
         )
         AND (${kinds}::text[] IS NULL OR t."kind" = ANY(${kinds}::text[]))
@@ -270,6 +270,7 @@ export async function heartbeat(lease: Lease, leaseMs = DEFAULT_LEASE_MS): Promi
     UPDATE "monitor_tasks"
     SET "lease_until" = ${NOW_UTC} + ${msInterval(leaseMs)}, "heartbeat_at" = ${NOW_UTC}, "updated_at" = ${NOW_UTC}
     WHERE "id" = ${lease.taskId} AND "lease_generation" = ${lease.generation} AND "status" = 'RUNNING'
+      AND "lease_until" > ${NOW_UTC}
   `
   return updated > 0
 }

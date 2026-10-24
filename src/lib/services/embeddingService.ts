@@ -11,6 +11,12 @@ interface EmbeddingResponse {
   modelName?: string;
   outputDimensionality?: number;
   provider?: EmbeddingProvider;
+  inputTokens?: number;
+  providerError?: { providerStatus?: number; providerCode?: string; providerMessage?: string };
+}
+function embeddingErrorDetails(error: unknown) {
+  const e = error as { message?: string; code?: string; response?: { status?: number; data?: { error?: { message?: string; code?: string } } } }
+  return { providerStatus: e.response?.status, providerCode: e.response?.data?.error?.code ?? e.code, providerMessage: e.response?.data?.error?.message ?? e.message }
 }
 
 export interface EmbeddingUsageContext {
@@ -337,14 +343,15 @@ export class EmbeddingService {
         });
       }
       
-      return { embedding, modelName, outputDimensionality, provider: this.provider };
+      return { embedding, modelName, outputDimensionality, provider: this.provider, inputTokens: response.data?.usage?.total_tokens ?? response.data?.metadata?.tokenCount };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.registerFailure(message);
       console.error('Error generating embedding:', error);
       return { 
         embedding: [], 
-        error: message
+        error: message,
+        providerError: embeddingErrorDetails(error)
       };
     }
   }
@@ -433,7 +440,7 @@ export class EmbeddingService {
         });
       }
 
-      return { embedding, modelName, outputDimensionality, provider: 'voyage' };
+      return { embedding, modelName, outputDimensionality, provider: 'voyage', inputTokens: response.data?.usage?.total_tokens };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.registerFailure(message);
@@ -442,6 +449,7 @@ export class EmbeddingService {
         embedding: [],
         error: message,
         provider: 'voyage',
+        providerError: embeddingErrorDetails(error),
       };
     }
   }

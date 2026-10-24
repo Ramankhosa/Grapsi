@@ -123,6 +123,12 @@ function tick() {
   const hourSlot = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}`
   const daySlot = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`
   const minute = now.getMinutes()
+  // Deploy Source Watch without activating unrelated reminder/report jobs.
+  if (process.env.FUNDING_SCHEDULER_ONLY_SOURCE_WATCH === 'true') {
+    if (due('monitor', hourSlot)) void post('/api/funding/monitor/sweep')
+    if (due('monitor-liveness', `${hourSlot}-${Math.floor(minute / 15)}`)) void post('/api/funding/monitor/liveness')
+    return
+  }
 
   // Hourly, offset a few minutes past the hour so top-of-hour restarts miss nothing.
   if (minute >= 5 && due('reminders', hourSlot)) {

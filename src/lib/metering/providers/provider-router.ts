@@ -6,6 +6,7 @@ import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider } from './llm-provider'
 import { createLLMProvider, getProviderFromModelCode, type ProviderConfig, type ProviderType } from './llm-provider'
 import { logLLMCost, ensurePricingLoaded, isPricingLoaded } from '../cost-calculator'
+import { executionPolicyOf } from './executionPolicy'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 const parseOptionalPositiveIntEnv = (value: string | undefined): number | undefined => {
@@ -574,6 +575,11 @@ export class LLMProviderRouter {
     const provider = this.getProviderForModel(modelCode)
     
     if (!provider) {
+      if (executionPolicyOf(request)?.noDefaultRouting && !(fallbackModelCodes && fallbackModelCodes.length > 0)) {
+        // The caller pinned this one model and accounts for every attempt:
+        // silently routing elsewhere would be an unreserved paid call.
+        throw Object.assign(new Error(`No provider available for model ${modelCode}`), { code: 'PROVIDER_UNAVAILABLE' })
+      }
       console.warn(`[ProviderRouter] No provider available for model ${modelCode}, trying fallbacks...`)
       return this.tryFallbackModels(request, limits, fallbackModelCodes)
     }

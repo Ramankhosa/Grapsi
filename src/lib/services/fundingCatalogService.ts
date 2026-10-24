@@ -9,6 +9,7 @@ import type { FundingDraftValues, IntakeOperator } from '../fundingIntake/types'
 import { normalizeDraftInput } from '../fundingIntake/utils';
 import type { EmbeddingServiceHealth } from './embeddingService';
 import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
+import { assertReviewWrite, MonitorConflictError, type ExpectedReview } from '../monitor/writeGuard';
 
 type CatalogMetadata = Record<string, any>;
 
@@ -707,6 +708,8 @@ export class FundingCatalogService {
     const metadata = asMetadata(call.metadata);
     const draftValues = buildDraftValuesFromCall(call);
     const publishReadiness = buildPublishReadiness(draftValues);
+    const sourceWatchOpportunityId = (call.metadata as { source_watch_opportunity_id?: string } | null)?.source_watch_opportunity_id;
+    const sourceWatchOpportunity = sourceWatchOpportunityId ? await prisma.monitorOpportunity.findUnique({ where: { id: sourceWatchOpportunityId } }) : null;
 
     return {
       call: {
@@ -720,13 +723,15 @@ export class FundingCatalogService {
       draftValues,
       publishReadiness,
       sourceProvenance: intakeJob,
+      expectedReview: sourceWatchOpportunity ? { opportunityId: sourceWatchOpportunity.id, callRevision: call.revision, reviewRevision: sourceWatchOpportunity.review_revision, evidenceManifestVersion: sourceWatchOpportunity.evidence_manifest_version } : undefined,
     };
   }
 
   async updateFundingCall(
     fundingCallId: string,
     input: Partial<FundingDraftValues>,
-    operator: IntakeOperator
+    operator: IntakeOperator,
+    expected?: ExpectedReview
   ) {
     const current = await prisma.fundingCall.findUnique({
       where: { id: fundingCallId },
@@ -736,6 +741,7 @@ export class FundingCatalogService {
       throw new Error('Funding call not found');
     }
 
+    await assertReviewWrite(prisma, current, expected);
     const currentDraftValues = buildDraftValuesFromCall(current);
     const nextDraftValues = normalizeDraftInput({
       ...currentDraftValues,
@@ -755,6 +761,7 @@ export class FundingCatalogService {
     const storedEmbeddingJobsEnabled = await areStoredEmbeddingJobsEnabled();
     if (
       storedEmbeddingJobsEnabled &&
+      (current.metadata as CatalogMetadata)?.origin !== 'source_watch' &&
       current.catalog_status === 'PUBLISHED' &&
       Boolean(current.is_active) &&
       searchableFieldsChanged
@@ -796,6 +803,7 @@ export class FundingCatalogService {
     const updateData = buildCallWriteData(current, nextDraftValues, {
       last_catalog_update_by: operator.email,
       last_catalog_update_at: now,
+      ...(expected && current.catalog_status === 'PUBLISHED' && searchableFieldsChanged ? { embedding_status: 'pending_budgeted_refresh' } : {}),
       ...(embeddingResult
         ? {
             embedding_status: 'generated',
@@ -810,20 +818,51 @@ export class FundingCatalogService {
     });
 
     await prisma.$transaction(async (tx) => {
-      await tx.fundingCall.update({
-        where: { id: fundingCallId },
+      await assertReviewWrite(tx, current, expected);
+      const changed = await tx.fundingCall.updateMany({
+        where: { id: fundingCallId, revision: expected?.callRevision ?? current.revision },
         data: curatorProvenance ? { ...updateData, field_provenance: curatorProvenance as any } : updateData,
       });
+      if (changed.count !== 1) throw new MonitorConflictError();
 
       if (embeddingResult) {
         await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
+      }
+      if (expected && current.catalog_status === 'PUBLISHED' && searchableFieldsChanged) {
+        const { queueCallEmbedding } = await import('../monitor/embed');
+        await queueCallEmbedding(tx, fundingCallId);
       }
     });
 
     return this.getFundingCallDetails(fundingCallId);
   }
 
-  async publishFundingCall(fundingCallId: string, operator: IntakeOperator) {
+  async applyReviewedUpdate(fundingCallId: string, selectedFields: Partial<FundingDraftValues>, operator: IntakeOperator, expected: ExpectedReview) {
+    const { DRAFT_KEY_COLUMNS, stampFields } = await import('../fundingCatalogImport/provenance');
+    return prisma.$transaction(async tx => {
+      const current = await tx.fundingCall.findUniqueOrThrow({ where: { id: fundingCallId } });
+      if (['ARCHIVED', 'REJECTED'].includes(current.catalog_status ?? '')) throw new MonitorConflictError('This call needs a curator decision before an update');
+      await assertReviewWrite(tx, current, expected, true);
+      const keys = Object.keys(selectedFields).filter(key => key in DRAFT_KEY_COLUMNS);
+      if (!keys.length || keys.length !== Object.keys(selectedFields).length) throw new Error('Select supported fields to update');
+      const next = normalizeDraftInput({ ...buildDraftValuesFromCall(current), ...selectedFields });
+      const full = buildCallWriteData(current, next, {});
+      const columns = [...new Set(keys.flatMap(key => DRAFT_KEY_COLUMNS[key]))];
+      const data: Record<string, unknown> = {};
+      for (const column of columns) if (column in full) data[column] = (full as Record<string, unknown>)[column];
+      data.field_provenance = stampFields(current.field_provenance, columns, { source: 'source_watch', by: operator.email });
+      const embeddingChanged = JSON.stringify(fundingCallEmbeddingInput(current)) !== JSON.stringify(fundingCallEmbeddingInput({ ...current, ...data } as typeof current));
+      data.metadata = { ...((current.metadata as CatalogMetadata) ?? {}), source_watch_update: { opportunityId: expected.opportunityId, evidenceManifestVersion: expected.evidenceManifestVersion, by: operator.email, at: new Date().toISOString() }, ...(embeddingChanged ? { embedding_status: 'pending_budgeted_refresh' } : {}) };
+      const changed = await tx.fundingCall.updateMany({ where: { id: fundingCallId, revision: expected.callRevision }, data: data as Prisma.FundingCallUpdateManyMutationInput });
+      if (!changed.count) throw new MonitorConflictError();
+      await tx.monitorOpportunity.update({ where: { id: expected.opportunityId }, data: { review_state: 'PUBLISHED', review_revision: { increment: 1 }, decided_by_user_id: operator.userId, decided_at: new Date() } });
+      const { queueCallEmbedding } = await import('../monitor/embed');
+      if (embeddingChanged) await queueCallEmbedding(tx, fundingCallId);
+      return { ok: true };
+    });
+  }
+
+  async publishFundingCall(fundingCallId: string, operator: IntakeOperator, expected?: ExpectedReview) {
     const current = await prisma.fundingCall.findUnique({
       where: { id: fundingCallId },
     });
@@ -844,6 +883,7 @@ export class FundingCatalogService {
     }
 
     const draftValues = buildDraftValuesFromCall(current);
+    await assertReviewWrite(prisma, current, expected, true);
     const readiness = buildPublishReadiness(draftValues);
     if (!readiness.ready) {
       return {
@@ -854,7 +894,7 @@ export class FundingCatalogService {
     }
 
     let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>> | null = null;
-    if (await areStoredEmbeddingJobsEnabled()) {
+    if ((current.metadata as CatalogMetadata)?.origin !== 'source_watch' && await areStoredEmbeddingJobsEnabled()) {
       try {
         embeddingResult = await generateEmbedding(draftValues);
       } catch (error) {
@@ -893,9 +933,9 @@ export class FundingCatalogService {
               embedding_error: null,
             }
           : {
-              embedding_status: 'not_generated',
+              embedding_status: expected ? 'pending_budgeted_refresh' : 'not_generated',
               embedding_updated_at: now,
-              embedding_error: 'Stored embedding jobs are disabled',
+              embedding_error: expected ? null : 'Stored embedding jobs are disabled',
             }),
         last_catalog_update_by: operator.email,
         last_catalog_update_at: now,
@@ -910,15 +950,21 @@ export class FundingCatalogService {
     );
 
     await prisma.$transaction(async (tx) => {
-      await tx.fundingCall.update({
-        where: { id: fundingCallId },
+      await assertReviewWrite(tx, current, expected, true);
+      const changed = await tx.fundingCall.updateMany({
+        where: { id: fundingCallId, revision: expected?.callRevision ?? current.revision },
         data: updateData,
       });
+      if (changed.count !== 1) throw new MonitorConflictError();
 
       if (embeddingResult) {
         await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
       }
+      if (expected) await tx.monitorOpportunity.update({ where: { id: expected.opportunityId }, data: { review_state: 'PUBLISHED', review_revision: { increment: 1 }, decided_by_user_id: operator.userId, decided_at: new Date() } });
+      if (expected) { const { queueCallEmbedding } = await import('../monitor/embed'); await queueCallEmbedding(tx, fundingCallId); }
     });
+
+    if (expected) return { ok: true, fundingCallId };
 
     // Classify into the discipline catalog, then tell the officer covering each
     // school it matches. The two are chained rather than fired in parallel
@@ -929,6 +975,7 @@ export class FundingCatalogService {
     // classification we could not make must never fail a publish. Imported
     // lazily for the same reason as the alert service below.
     void (async () => {
+      if ((current.metadata as CatalogMetadata)?.origin === 'source_watch') return;
       try {
         const { classifyFundingCall } = await import('@/lib/funding/disciplineClassifier');
         await classifyFundingCall(fundingCallId);

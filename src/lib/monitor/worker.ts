@@ -4,7 +4,7 @@ import os from 'node:os'
 import { prisma } from '@/lib/prisma'
 
 import { createBrowserRenderer, type Renderer } from './browser'
-import { browserTierEnabled } from './engine'
+import { browserTierEnabled, isV2Engine, EngineDisabledError } from './engine'
 import { dispatchPendingEvents } from './events'
 import { EXECUTABLE_KINDS, executeTask } from './execute'
 import { DEFAULT_LEASE_MS, claimNextTask, heartbeat, type Lease } from './queue'
@@ -41,6 +41,7 @@ function sleep(ms: number) {
 }
 
 export async function runSourceMonitorWorker(options: WorkerOptions = {}): Promise<{ executed: number }> {
+  if (!options.fetch && !isV2Engine()) throw new EngineDisabledError('Source Watch worker')
   const workerId = options.workerId ?? `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`
   const concurrency = Math.max(1, options.concurrency ?? Number(process.env.MONITOR_WORKER_CONCURRENCY ?? 4))
   const pollMs = Math.max(1000, options.pollMs ?? 10_000)
@@ -112,7 +113,8 @@ export async function runSourceMonitorWorker(options: WorkerOptions = {}): Promi
     while (!stopping) {
       let lease: Lease | null = null
       try {
-        lease = await claimNextTask({ owner: `${workerId}#${index}`, kinds: EXECUTABLE_KINDS })
+        const kinds = !options.fetch && process.env.MONITOR_PIPELINE_ENABLED !== 'true' ? EXECUTABLE_KINDS.filter(k => ['CHECK_SOURCE', 'REFRESH_URL_INDEX', 'HOUSEKEEPING', 'DISCOVER_SITE'].includes(k)) : EXECUTABLE_KINDS
+        lease = await claimNextTask({ owner: `${workerId}#${index}`, kinds })
       } catch (error) {
         console.error('[monitor-worker] claim failed:', error instanceof Error ? error.message : error)
       }

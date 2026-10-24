@@ -53,6 +53,7 @@ import type {
   IntakeJobSummary,
   IntakeOperator,
   IntakeSubmitInput,
+  SourceWatchIntakeContext,
 } from './types';
 import {
   assertSafePublicHttpsUrl,
@@ -322,9 +323,9 @@ function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreat
     : {};
   return {
     autoCreateDraft: batch.auto_create_draft !== false,
-    extractAll: batch.extract_all !== false,
+    extractAll: metadata.origin === 'source_watch' ? false : batch.extract_all !== false,
     // Publishing is opt-in, unlike draft creation: older batches never carry it.
-    autoPublish: batch.auto_publish === true,
+    autoPublish: metadata.origin !== 'source_watch' && batch.auto_publish === true,
   };
 }
 
@@ -358,11 +359,16 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
       throw new Error(`${sourceKey}: sourceText must contain meaningful content`);
     }
     const normalizedText = normalizeMultilineText(source.sourceText);
+    const originUrl = source.originUrl || null;
+    if (originUrl) {
+      const { assertFetchableUrl } = await import('../monitor/netGuard');
+      assertFetchableUrl(new URL(originUrl));
+    }
     return {
       source_key: sourceKey,
       sequence_no: sequenceNo,
       input_type: source.inputType,
-      source_url: null,
+      source_url: originUrl,
       source_text_hash: hashText(normalizedText),
       source_file_path: null,
       raw_text: source.sourceText,
@@ -446,6 +452,7 @@ function sourceToIntakeSource(input: IntakeSubmitInput): BatchIntakeSourceInput 
 }
 
 function makeJobLikeFromSource(job: any, source: any) {
+  const policy = readFetchMetadata(job.fetch_metadata_json);
   return {
     ...job,
     input_type: source.input_type,
@@ -454,7 +461,7 @@ function makeJobLikeFromSource(job: any, source: any) {
     source_text_hash: source.source_text_hash || null,
     raw_text: source.raw_text || null,
     normalized_text: source.normalized_text || null,
-    fetch_metadata_json: source.fetch_metadata_json || null,
+    fetch_metadata_json: policy.origin === 'source_watch' ? { ...readFetchMetadata(source.fetch_metadata_json), origin: 'source_watch', source_watch: policy.source_watch, batch_intake: policy.batch_intake } : source.fetch_metadata_json || null,
   };
 }
 
@@ -1020,6 +1027,8 @@ async function persistDraft(
   operator: IntakeOperator,
   latestExtraction: any
 ) {
+  const origin = readFetchMetadata(job.fetch_metadata_json);
+  const sourceWatch = origin.origin === 'source_watch' ? origin.source_watch : null;
   const extractionOfficialUrls = latestExtraction
     ? buildDraftValuesFromExtraction(latestExtraction.extracted_json as any, {
         sourceUrl: job.source_url || null,
@@ -1040,6 +1049,7 @@ async function persistDraft(
     visibility: isTenantPrivateDraft ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
     tenantId: isTenantPrivateDraft ? operator.tenantId || null : null,
     title: deterministicDraftValues.scheme_title || deterministicDraftValues.agency_name || job.source_url || 'Untitled funding call',
+    ...(sourceWatch ? { funder_id: sourceWatch.funderId || null } : {}),
     agencyName: deterministicDraftValues.agency_name || null,
     sourceUrl: job.source_url || null,
     summary: deterministicDraftValues.description || null,
@@ -1096,6 +1106,7 @@ async function persistDraft(
     origin_school_source: job.origin_school_source || null,
     metadata: {
       source_module: 'funding_intake',
+      ...(sourceWatch ? { origin: 'source_watch', source_watch_opportunity_id: sourceWatch.opportunityId } : {}),
       intake_job_id: job.id,
       saved_by: operator.email,
       saved_at: new Date().toISOString(),
@@ -1127,7 +1138,20 @@ async function persistDraft(
     },
   };
 
-  const call = job.linked_funding_call_id
+  const call = sourceWatch ? await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "funding_intake_jobs" WHERE "id" = ${job.id} FOR UPDATE`;
+    const currentJob = await tx.fundingIntakeJob.findUniqueOrThrow({ where: { id: job.id } });
+    if (currentJob.linked_funding_call_id) return { id: currentJob.linked_funding_call_id };
+    const created = await tx.fundingCall.create({ data: sharedData, select: { id: true } });
+    await tx.fundingIntakeJob.update({ where: { id: job.id }, data: { linked_funding_call_id: created.id } });
+    const { identifyUrl } = await import('../monitor/urlIdentity');
+    for (const url of deterministicDraftValues.official_urls) {
+      const key = identifyUrl(url)?.dedupKey;
+      if (key) await tx.fundingCallUrlKey.upsert({ where: { dedup_key_owner_key: { dedup_key: key, owner_key: `call:${created.id}` } },
+        create: { dedup_key: key, owner_key: `call:${created.id}`, funding_call_id: created.id, source: 'SOURCE_URL' }, update: {} });
+    }
+    return created;
+  }) : job.linked_funding_call_id
     ? await prisma.fundingCall.update({
         where: { id: job.linked_funding_call_id },
         data: sharedData,
@@ -1142,8 +1166,10 @@ async function persistDraft(
   // routable to the right schools before anyone publishes it — the funding
   // department works drafts too. Fire-and-forget: intake must not fail or wait
   // on classification. Publishing re-runs this, which is a no-op if it worked.
-  const { classifyFundingCallQuietly } = await import('@/lib/funding/disciplineClassifier');
-  classifyFundingCallQuietly(call.id);
+  if (!sourceWatch) {
+    const { classifyFundingCallQuietly } = await import('@/lib/funding/disciplineClassifier');
+    classifyFundingCallQuietly(call.id);
+  }
 
   return call;
 }
@@ -1324,7 +1350,12 @@ class FundingIntakeService {
     return job;
   }
 
-  async createBatch(operator: IntakeOperator, input: BatchIntakeCreateInput) {
+  async createBatch(operator: IntakeOperator, input: BatchIntakeCreateInput, sourceWatch?: SourceWatchIntakeContext) {
+    if (sourceWatch) {
+      const existing = await prisma.fundingIntakeBatch.findUnique({ where: { handoff_key: sourceWatch.handoffKey } });
+      if (existing) return existing;
+      if (input.jobs.length !== 1 || input.jobs.some(j => j.sources.some(s => s.inputType !== 'text'))) throw new Error('Source Watch intake accepts one pre-fetched text bundle only');
+    }
     if (!Array.isArray(input.jobs) || input.jobs.length === 0) {
       throw new Error('Batch must include at least one funding call');
     }
@@ -1402,13 +1433,24 @@ class FundingIntakeService {
       });
     }
 
+    if (sourceWatch) for (const preparedJob of preparedJobs) for (const source of preparedJob.sources) {
+      source.fetch_metadata_json = { ...readFetchMetadata(source.fetch_metadata_json), origin: 'source_watch', source_watch: sourceWatch,
+        batch_intake: { auto_create_draft: true, extract_all: false, auto_publish: false } };
+    }
+
     const batch = await prisma.$transaction(async (tx) => {
+      if (sourceWatch) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${sourceWatch.handoffKey}, 0))`;
+        const existing = await tx.fundingIntakeBatch.findUnique({ where: { handoff_key: sourceWatch.handoffKey } });
+        if (existing) return existing;
+      }
       const createdBatch = await tx.fundingIntakeBatch.create({
         data: {
           submitted_by_user_id: operator.userId,
           label: input.label?.trim() || null,
           total_jobs: preparedJobs.length,
           status: 'processing',
+          handoff_key: sourceWatch?.handoffKey || null,
         },
       });
 
@@ -1417,11 +1459,12 @@ class FundingIntakeService {
         const sourceMetadata = readFetchMetadata(detailSource.fetch_metadata_json as any);
         const jobMetadata = {
           ...sourceMetadata,
+          ...(sourceWatch ? { origin: 'source_watch', source_watch: sourceWatch } : {}),
           batch_intake: {
             batch_id: createdBatch.id,
             auto_create_draft: preparedJob.input.autoCreateDraft !== false,
-            extract_all: preparedJob.input.extractAll !== false,
-            auto_publish: preparedJob.input.autoPublish === true,
+            extract_all: !sourceWatch && preparedJob.input.extractAll !== false,
+            auto_publish: !sourceWatch && preparedJob.input.autoPublish === true,
           },
         };
 
@@ -2436,6 +2479,7 @@ class FundingIntakeService {
       templateSource?: any | null;
     }
   ) {
+    if (readFetchMetadata(job.fetch_metadata_json).origin === 'source_watch') throw new Error('Source Watch document processing must use its reserved evidence pipeline');
     if (job.input_type === 'json') {
       return this.applyJsonArtifactsForFundingCall(job, fundingCallId, operator);
     }
@@ -2590,6 +2634,9 @@ class FundingIntakeService {
     const details = await this.getJobDetails(jobId);
     if (!details) {
       throw new Error('Funding intake job not found');
+    }
+    if (readFetchMetadata(details.job.fetch_metadata_json).origin === 'source_watch') {
+      throw new Error('Edit this Source Watch draft in the funding catalog editor, then publish from Discoveries. The editor checks for newer source evidence and concurrent edits.');
     }
 
     if (!['needs_review', 'draft_created', 'failed'].includes(details.job.status)) {
@@ -3060,6 +3107,13 @@ class FundingIntakeService {
         role: deriveOperatorRoleFromUser(submitterForLlm),
         tenantId: submitterForLlm?.tenantId || null,
       };
+      if (readFetchMetadata(job.fetch_metadata_json).origin === 'source_watch') {
+        const { resolveMonitorActor } = await import('../monitor/actor');
+        const actor = await resolveMonitorActor();
+        if (job.submitted_by_user_id !== actor.userId) throw new Error('Source Watch job has an invalid service actor');
+        operator.role = 'CURATOR';
+        operator.tenantId = actor.tenantId;
+      }
       const llmContext = {
         tenantId: submitterForLlm?.tenantId || null,
         userId: submitterForLlm?.id || job.submitted_by_user_id,
@@ -3132,7 +3186,10 @@ class FundingIntakeService {
         throw new Error('No source content available for extraction');
       }
 
-      const extractionResult = detailsSource.input_type === 'json'
+      const sourceWatchContext = readFetchMetadata(job.fetch_metadata_json);
+      const extractionResult = sourceWatchContext.origin === 'source_watch'
+        ? { payload: sourceWatchContext.source_watch.payload, extractorModel: 'source-watch-budgeted', extractorVersion: 'source-watch-1', promptVersion: 'source-watch-1', validationErrors: [] }
+        : detailsSource.input_type === 'json'
         ? (() => {
             const parsed = parseFundingJsonUpload(detailsSource.raw_text || detailsSource.normalized_text);
             const prepared = prepareFundingJsonIntake(parsed);

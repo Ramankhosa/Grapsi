@@ -6,6 +6,8 @@ import { defaultSafeFetch } from './safeFetch'
 import { cadenceDays, nextCheckAt, startOfIstDay } from './schedule'
 import { ensureSiteForUrl } from './sites'
 import { utc } from './sqlTime'
+import { recoverAttempts } from './budget'
+import { reconcileHandoffs } from './handoff'
 
 /**
  * Turning due watch points into queued checks.
@@ -87,6 +89,23 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
     maxAttempts: 3,
   })
   counts.urlIndexQueued = index.created
+  if (process.env.MONITOR_PIPELINE_ENABLED === 'true') {
+    await recoverAttempts(now)
+    await reconcileHandoffs()
+    await prisma.monitorOpportunity.updateMany({ where: { review_state: 'SNOOZED', snoozed_until: { lte: now } }, data: { review_state: 'PENDING', snoozed_until: null, review_revision: { increment: 1 } } })
+    const siteCursor = (await prisma.monitorSyncCursor.findUnique({ where: { name: 'discovery-planner' } }))?.cursor as { after?: string } | undefined
+    const sites = await prisma.monitorSite.findMany({ where: { status: 'ACTIVE', ...(siteCursor?.after ? { id: { gt: siteCursor.after } } : {}) }, take: 500, orderBy: { id: 'asc' } })
+    // One bounded exploration occurrence per site/week. Daily listing checks
+    // remain independent, even on quiet sites.
+    const week = Math.floor(now.getTime() / (7 * 86400_000))
+    for (const site of sites) await enqueueTask(prisma, { kind: 'DISCOVER_SITE', operationKey: `discover-week:${site.id}:${week}`, siteId: site.id, payload: { siteId: site.id }, priority: 230 })
+    await prisma.monitorSyncCursor.upsert({ where: { name: 'discovery-planner' }, create: { name: 'discovery-planner', cursor: { after: sites.length === 500 ? sites[499].id : '' } }, update: { cursor: { after: sites.length === 500 ? sites[499].id : '' } } })
+    const resources = await prisma.monitorResource.findMany({ where: { site: { status: 'ACTIVE' }, revisit_policy: { not: 'NONE' }, next_revisit_at: { lte: now } }, take: 200, orderBy: { next_revisit_at: 'asc' } })
+    for (const resource of resources) await prisma.$transaction(async tx => {
+      const changed = await tx.monitorResource.updateMany({ where: { id: resource.id, revisit_generation: resource.revisit_generation }, data: { revisit_generation: { increment: 1 }, next_revisit_at: new Date(now.getTime() + 3 * 86400_000) } })
+      if (changed.count) await enqueueTask(tx, { kind: 'REVISIT', operationKey: operationKeys.revisit(resource.id, resource.revisit_generation + 1), siteId: resource.site_id, resourceId: resource.id, payload: { resourceId: resource.id } })
+    })
+  }
 
   // Retention, once per IST day.
   const istDay = new Date(startOfIstDay(now).getTime() + 6 * 3_600_000).toISOString().slice(0, 10)

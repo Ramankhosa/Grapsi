@@ -6,9 +6,21 @@ import { runHousekeeping } from './housekeeping'
 import { LeaseLostError, cancelTask, deferTask, failTask, type Lease, type TaskKind } from './queue'
 import type { SafeFetch } from './safeFetch'
 import { refreshUrlIndex } from './urlKeys'
+import { triageCandidates } from './candidates'
+import { revisitResource } from './content'
+import { BudgetExceededError, MemberAttemptLimitError } from './budget'
+import { MonitorConfigError } from './actor'
+import { ProviderPausedError } from './providers'
+import { extractOpportunity } from './extract'
+import { handoffOpportunity } from './handoff'
+import { discoverSite } from './discovery'
+import { PaidAttemptsExhaustedError, PaidStageFailedError } from './paidCall'
+import { embedCall } from './embed'
+import { notifyPublication } from './publicationNotify'
+import { MonitorCapacityError } from './capacity'
 
 /** Kinds this phase can execute. Others stay queued for the phase that adds them. */
-export const EXECUTABLE_KINDS: TaskKind[] = ['CHECK_SOURCE', 'REFRESH_URL_INDEX', 'HOUSEKEEPING']
+export const EXECUTABLE_KINDS: TaskKind[] = ['CHECK_SOURCE', 'REFRESH_URL_INDEX', 'HOUSEKEEPING', 'TRIAGE', 'REVISIT', 'EXTRACT', 'HANDOFF', 'DISCOVER_SITE', 'EMBED', 'NOTIFY']
 
 export interface ExecuteDeps {
   fetch: SafeFetch
@@ -34,6 +46,27 @@ export async function executeTask(lease: Lease, deps: ExecuteDeps): Promise<void
       case 'HOUSEKEEPING':
         await runHousekeeping(lease)
         return
+      case 'TRIAGE':
+        await triageCandidates(lease, deps)
+        return
+      case 'REVISIT':
+        await revisitResource(lease, deps.fetch, deps.signal)
+        return
+      case 'EXTRACT':
+        await extractOpportunity(lease, deps)
+        return
+      case 'HANDOFF':
+        await handoffOpportunity(lease)
+        return
+      case 'DISCOVER_SITE':
+        await discoverSite(lease, deps.fetch, deps.signal)
+        return
+      case 'EMBED':
+        await embedCall(lease)
+        return
+      case 'NOTIFY':
+        await notifyPublication(lease)
+        return
       default:
         await cancelTask(lease, `No executor for ${lease.kind} in this phase`)
     }
@@ -51,6 +84,18 @@ export async function executeTask(lease: Lease, deps: ExecuteDeps): Promise<void
 async function settleFailure(lease: Lease, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error)
   const isCheck = lease.kind === 'CHECK_SOURCE'
+  if (error instanceof MonitorCapacityError) {
+    await deferTask(lease, new Date(Date.now() + 6 * 3600000), message, 'DEFERRED_BUDGET')
+    return
+  }
+  if (error instanceof BudgetExceededError) {
+    await deferTask(lease, error.retryAt, message, 'DEFERRED_BUDGET')
+    return
+  }
+  if (error instanceof ProviderPausedError || error instanceof MonitorConfigError) {
+    await deferTask(lease, error instanceof ProviderPausedError ? error.retryAt : new Date(Date.now() + 30 * 60_000), message, 'PAUSED_PROVIDER')
+    return
+  }
 
   const domain = isCheck
     ? async (tx: Parameters<NonNullable<Parameters<typeof failTask>[2]>>[0]) => {
@@ -75,6 +120,6 @@ async function settleFailure(lease: Lease, error: unknown): Promise<void> {
     await deferTask(lease, error.retryAt ?? new Date(Date.now() + 10 * 60 * 1000), message, 'QUEUED', domain)
     return
   }
-  const retryable = isMonitorFetchError(error) ? error.retryable : true
+  const retryable = error instanceof MemberAttemptLimitError || error instanceof PaidAttemptsExhaustedError ? false : error instanceof PaidStageFailedError ? error.retryable : isMonitorFetchError(error) ? error.retryable : true
   await failTask(lease, { message, retryable, retryAt: isMonitorFetchError(error) ? error.retryAt : undefined }, domain)
 }

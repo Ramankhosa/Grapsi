@@ -5,12 +5,14 @@ import type { MonitoredIgnoreRule, MonitoredSource, MonitorSite } from '@/lib/pr
 import type { Renderer } from './browser'
 import { MonitorFetchError, isMonitorFetchError } from './errors'
 import { extractFeedItems, parseSitemap, titleFromUrl } from './feeds'
-import { listingMeaningfulHash, meaningfulText, sha256 } from './hashing'
+import { fingerprint, listingMeaningfulHash, meaningfulText, sha256 } from './hashing'
 import { extractListing, extractScopeText, type ListingItem } from './items'
 import { completeTaskInTx, withFence, type Lease } from './queue'
 import { decodeBody, gunzipCapped, type SafeFetch } from './safeFetch'
 import { SITE_AUTO_PAUSE_FAILURES, siteScope, tlsExceptionHosts } from './sites'
 import { identifyUrl, type UrlIdentityOptions } from './urlIdentity'
+import { queueCandidates } from './candidates'
+import { assertContentCapacity, assertResourceCapacity } from './capacity'
 
 /**
  * One scheduled check of one watch point (v2).
@@ -276,6 +278,7 @@ async function persistPage(
   if (!listingIdentity) return { itemsObserved: 0, newResources: 0 }
 
   const items = page.items.filter((item) => !ctx.urlRules.some((prefix) => item.url.startsWith(prefix)))
+  await assertResourceCapacity(tx, site.id, [listingIdentity.dedupKey, ...items.map(item => item.dedupKey)])
 
   // The listing page itself.
   const listing = await tx.monitorResource.upsert({
@@ -300,7 +303,10 @@ async function persistPage(
   })
   const version =
     existingVersion ??
-    (await tx.monitorResourceVersion.create({
+    (await (async () => {
+      const bytes = Buffer.byteLength(page.scopeText.slice(0, CHECK_LIMITS.listingTextChars))
+      await assertContentCapacity(tx, site.id, bytes, site.storage_quota_bytes)
+      return tx.monitorResourceVersion.create({
       data: {
         resource_id: listing.id,
         raw_hash: page.rawHash,
@@ -308,12 +314,12 @@ async function persistPage(
         http_status: page.httpStatus,
         final_url: page.finalUrl,
         mime_type: page.mimeType || null,
-        byte_length: page.scopeText.length,
+        byte_length: bytes,
         truncated: page.truncated,
         text: page.scopeText.slice(0, CHECK_LIMITS.listingTextChars),
         tls_exception_used: page.tlsExceptionUsed,
       },
-    }))
+    }) })())
   const previousVersion = listing.current_version_id
     ? await tx.monitorResourceVersion.findUnique({ where: { id: listing.current_version_id }, select: { meaningful_hash: true } })
     : null
@@ -375,12 +381,17 @@ async function persistPage(
   const toCreate: Prisma.MonitorObservationCreateManyInput[] = []
   const unchangedIds: string[] = []
   const seenResource = new Set<string>()
+  const changedResources: string[] = []
   for (const item of items) {
     const resourceId = resourceByKey.get(item.dedupKey)
     if (!resourceId || seenResource.has(resourceId)) continue
     seenResource.add(resourceId)
     const contextHash = itemContextHash(item, ctx.lineRules)
     const prior = existingByResource.get(resourceId)
+    if (!prior || prior.context_hash !== contextHash) {
+      changedResources.push(resourceId)
+      await tx.monitorResource.update({ where: { id: resourceId }, data: { title: item.anchorText || titleFromUrl(item.url) || null } })
+    }
     if (!prior) {
       toCreate.push({
         source_id: source.id,
@@ -419,6 +430,12 @@ async function persistPage(
       where: { id: { in: unchangedIds } },
       data: { last_seen_at: now, last_check_generation: ctx.generation, missing_since: null },
     })
+  }
+  if (process.env.MONITOR_PIPELINE_ENABLED === 'true' && resourceIds.length) {
+    await queueCandidates(tx, site.id, resourceIds, ctx.generation === 1, fingerprint({
+      items: items.map(i => [i.dedupKey, itemContextHash(i, ctx.lineRules)]).sort(),
+      keywords: source.keywords, excludes: source.exclude_keywords, languages: site.language_profile,
+    }))
   }
   return { itemsObserved: seenResource.size, newResources: created.count }
 }

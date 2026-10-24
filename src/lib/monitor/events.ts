@@ -3,6 +3,7 @@ import { notifyQuietly } from '@/lib/notifications/notificationService'
 import { prisma } from '@/lib/prisma'
 
 import type { Db } from './queue'
+import { startOfIstDay } from './schedule'
 
 /**
  * Source Watch's notification outbox.
@@ -11,13 +12,13 @@ import type { Db } from './queue'
  * as whatever caused it. Dispatch fans it out to recipients × channels, one
  * delivery row each. A delivery is marked SENDING before it is sent and is
  * never retried from SENDING: delivery is at-most-once by choice — a crash
- * mid-send can drop that one message, but can never send it twice. There is no
- * digest behind it: the other channel (email or in-app) and the Health tab,
- * which shows the same state, are the only backstops. A recipient who has
+ * mid-send can drop that one message, but can never send it twice. Discoveries
+ * are aggregated once per completed IST day; health events remain immediate.
+ * The review queue retains every discovery. A recipient who has
  * turned a channel off in their notification preferences gets SKIPPED there.
  */
 
-export type MonitorEventKind = 'WORKER_OFFLINE' | 'SITE_PAUSED' | 'PROVIDER_OPEN'
+export type MonitorEventKind = 'WORKER_OFFLINE' | 'SITE_PAUSED' | 'PROVIDER_OPEN' | 'NEW_DISCOVERY' | 'NEW_DISCOVERY_DIGEST'
 
 export async function emitEvent(
   db: Db,
@@ -34,6 +35,10 @@ const SITE_URL = (process.env.SITE_URL || process.env.NEXTAUTH_URL || 'http://lo
 function render(kind: string, payload: Record<string, unknown>): { subject: string; body: string; link: string } {
   const link = '/funding/monitor?tab=health'
   switch (kind) {
+    case 'NEW_DISCOVERY_DIGEST':
+      return { subject: `${payload.count} funding discoveries to review`, body: `${payload.count} announcements were found on ${payload.day} (India time). Review the evidence and drafts in Source Watch.`, link: '/funding/monitor?tab=discoveries' }
+    case 'NEW_DISCOVERY':
+      return { subject: 'New funding discovery for review', body: String(payload.title ?? 'A funding announcement is ready for review'), link: '/funding/monitor?tab=discoveries' }
     case 'WORKER_OFFLINE':
       return {
         subject: 'Source Watch worker is offline',
@@ -75,8 +80,10 @@ async function alertRecipients(): Promise<Array<{ id: string; email: string; nam
 }
 
 export async function dispatchPendingEvents(limit = 25): Promise<{ events: number; sent: number; failed: number }> {
+  if (process.env.MONITOR_NOTIFICATIONS_ENABLED !== 'true') return { events: 0, sent: 0, failed: 0 }
+  await aggregateDiscoveryDigest()
   const events = await prisma.monitorEvent.findMany({
-    where: { dispatched_at: null },
+    where: { dispatched_at: null, kind: { not: 'NEW_DISCOVERY' } },
     orderBy: { created_at: 'asc' },
     take: limit,
   })
@@ -155,4 +162,23 @@ export async function dispatchPendingEvents(limit = 25): Promise<{ events: numbe
     await prisma.monitorEvent.update({ where: { id: event.id }, data: { dispatched_at: new Date() } })
   }
   return { events: events.length, sent, failed }
+}
+
+/** Collapse a completed IST day's finds in one transaction, including after downtime. */
+export async function aggregateDiscoveryDigest(now = new Date()): Promise<void> {
+  const cutoff = startOfIstDay(now)
+  await prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('monitor-discovery-digest'))`
+    const first = await tx.monitorEvent.findFirst({ where: { kind: 'NEW_DISCOVERY', dispatched_at: null, created_at: { lt: cutoff } }, orderBy: { created_at: 'asc' } })
+    if (!first) return
+    const from = startOfIstDay(first.created_at)
+    const until = cutoff
+    const where = { kind: 'NEW_DISCOVERY', dispatched_at: null, created_at: { gte: from, lt: until } }
+    const count = await tx.monitorEvent.count({ where })
+    const firstDay = new Date(from.getTime() + 19800000).toISOString().slice(0, 10)
+    const lastDay = new Date(until.getTime() - 1 + 19800000).toISOString().slice(0, 10)
+    const day = firstDay === lastDay ? firstDay : `${firstDay} to ${lastDay}`
+    await emitEvent(tx, { kind: 'NEW_DISCOVERY_DIGEST', eventKey: `discovery-digest:${lastDay}`, payload: { day, count } })
+    await tx.monitorEvent.updateMany({ where, data: { dispatched_at: now } })
+  })
 }

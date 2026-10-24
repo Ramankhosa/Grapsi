@@ -4,6 +4,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
+import { allowedProviderAttempts, withErrorDetails, sdkRetryOptions } from './executionPolicy'
 
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
@@ -285,13 +286,13 @@ export class GeminiProvider implements LLMProvider {
       }
 
       // Add retry logic for network issues
-      const maxRetries = 3
+      const maxRetries = allowedProviderAttempts(request, 3)
       let lastError: Error | null = null
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`Attempting Gemini API call (attempt ${attempt}/${maxRetries})`)
-          const result = await model.generateContent(contentToGenerate)
+          const result = await model.generateContent(contentToGenerate, sdkRetryOptions(request).timeout ? { timeout: sdkRetryOptions(request).timeout } : undefined)
           const response = result.response
 
           // If we get here, the call was successful
@@ -326,7 +327,12 @@ export class GeminiProvider implements LLMProvider {
             if (finishReason === 'MAX_TOKENS') {
               console.warn('💡 MAX_TOKENS reached - consider increasing token limit or reducing prompt size');
             }
-            throw new Error(`Gemini API returned empty response (finishReason: ${finishReason})`);
+            // The tokens were still billed: carry the usage so a caller that
+            // accounts per attempt records a billable failure, not a free one.
+            throw Object.assign(new Error(`Gemini API returned empty response (finishReason: ${finishReason})`), {
+              code: 'EMPTY_RESPONSE',
+              billableUsage: { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens },
+            });
           }
 
           return {
@@ -358,7 +364,7 @@ export class GeminiProvider implements LLMProvider {
       }
 
       // All retries failed
-      throw new Error(`Gemini API call failed after ${maxRetries} attempts. Last error: ${lastError?.message}`)
+      throw withErrorDetails(`Gemini API call failed after ${maxRetries} attempts. Last error: ${lastError?.message}`, lastError)
     } catch (error) {
       console.error('Gemini API error:', error)
 
@@ -371,7 +377,7 @@ export class GeminiProvider implements LLMProvider {
         }
       }
 
-      throw new Error(`Gemini API call failed: ${error instanceof Error ? error.message : String(error)}`)
+      throw withErrorDetails(`Gemini API call failed: ${error instanceof Error ? error.message : String(error)}`, error)
     }
   }
 
@@ -524,6 +530,7 @@ export class GeminiProvider implements LLMProvider {
         'x-goog-api-key': this.config.apiKey
       },
       body: JSON.stringify(body)
+      ,signal: sdkRetryOptions(request).timeout ? AbortSignal.timeout(sdkRetryOptions(request).timeout!) : undefined
     })
 
     if (!response.ok) {

@@ -3,7 +3,7 @@ import type { Browser, BrowserContext } from 'playwright'
 import { MonitorFetchError } from './errors'
 import { databaseHostPacer, type HostPacer } from './hostPacing'
 import { assertFetchableUrl, resolvePublicAddresses, systemResolver, type AddressResolver } from './netGuard'
-import { sourceWatchUserAgent } from './safeFetch'
+import { defaultSafeFetch, sourceWatchUserAgent, type SafeFetchResult } from './safeFetch'
 import { sameSiteHost } from './urlIdentity'
 
 /**
@@ -123,7 +123,9 @@ export async function createBrowserRenderer(
   async function render(url: string, options: RenderOptions): Promise<RenderResult> {
     const release = await semaphore.acquire()
     let context: BrowserContext | null = null
-    const onAbort = () => void context?.close().catch(() => undefined)
+    const renderController = new AbortController()
+    const onAbort = () => { renderController.abort(); void context?.close().catch(() => undefined) }
+    const deadline = setTimeout(onAbort, 45_000)
     try {
       if (options.signal?.aborted) throw new MonitorFetchError('ABORTED', 'Render aborted before it started')
       const target = new URL(url)
@@ -146,6 +148,8 @@ export async function createBrowserRenderer(
       let bytes = 0
       const resolved = new Map<string, boolean>()
       const blockedHosts = new Set<string>()
+      const downloadSlots = new Semaphore(1)
+      const redirected = new Map<string, SafeFetchResult>()
 
       await context.routeWebSocket(/.*/, (ws) => {
         blockedRequests += 1
@@ -190,9 +194,38 @@ export async function createBrowserRenderer(
           }
           if (deps.fixtureResponder) {
             const fixture = deps.fixtureResponder(requestUrl.href) ?? { status: 404, contentType: 'text/plain', body: 'no fixture' }
+            bytes += Buffer.byteLength(fixture.body)
             return await route.fulfill({ status: fixture.status, contentType: fixture.contentType, body: fixture.body })
           }
-          return await route.continue()
+          // Proxy browser reads through the same DNS-pinned, streaming-capped
+          // transport. Chromium must not download an unbounded chunked body
+          // before the requestfinished event can account for it.
+          if (!['GET', 'HEAD'].includes(request.method())) {
+            blockedRequests += 1
+            return await route.abort('blockedbyclient')
+          }
+          const releaseDownload = await downloadSlots.acquire()
+          try {
+          if (renderController.signal.aborted) return await route.abort('aborted')
+          const remaining = Math.max(0, MAX_BYTES - bytes)
+          if (remaining === 0) return await route.abort('blockedbyclient')
+          const cached = redirected.get(requestUrl.href)
+          redirected.delete(requestUrl.href)
+          const response = cached ?? await defaultSafeFetch()(requestUrl.href, { inScope: h => options.inScope(h) || deps_.some(d => sameSiteHost(d, h)), maxBytes: remaining, signal: renderController.signal, minDelayMs: options.minDelayMs })
+          if (!cached) bytes += response.byteLength
+          if (response.truncated) {
+            bytes = MAX_BYTES + 1
+            blockedRequests += 1
+            return await route.abort('blockedbyclient')
+          }
+          if (response.finalUrl !== requestUrl.href) {
+            redirected.set(response.finalUrl, response)
+            return await route.fulfill({ status: 302, headers: { location: response.finalUrl }, body: '' })
+          }
+          const headers = { ...response.headers }
+          delete headers['content-encoding']; delete headers['content-length']; delete headers['transfer-encoding']
+          return await route.fulfill({ status: response.status, headers, body: response.body })
+          } finally { releaseDownload() }
         } catch {
           blockedRequests += 1
           return route.abort('blockedbyclient').catch(() => undefined)
@@ -200,19 +233,7 @@ export async function createBrowserRenderer(
       })
 
       const page = await context.newPage()
-      // Count bytes actually received (not Content-Length, which can be absent
-      // or false). Once the budget is spent, every further request is refused
-      // by the route above and the render is reported truncated. A single
-      // response already in flight cannot be cut mid-stream from here; the OS
-      // egress boundary and the HTML size cap bound that case.
-      page.on('requestfinished', (request) => {
-        void request
-          .sizes()
-          .then((sizes) => {
-            bytes += Math.max(0, sizes.responseBodySize) + Math.max(0, sizes.responseHeadersSize)
-          })
-          .catch(() => undefined)
-      })
+      // Bytes are accounted by the bounded transport before fulfillment.
 
       await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS })
 
@@ -253,6 +274,8 @@ export async function createBrowserRenderer(
         url,
       })
     } finally {
+      clearTimeout(deadline)
+      renderController.abort()
       options.signal?.removeEventListener('abort', onAbort)
       await context?.close().catch(() => undefined)
       release()

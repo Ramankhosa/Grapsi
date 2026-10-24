@@ -1367,6 +1367,39 @@ async function main() {
       models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
+      // Source Watch relevance screening: short batched JSON decisions over
+      // funder-page items. Cheap model; the fallback is on a different
+      // provider account so a billing failure on one does not stop both.
+      code: 'FUNDING_SOURCE_TRIAGE',
+      displayName: 'Source Watch Screening',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 16,
+      description: 'Decide whether newly observed funder-page items are funding opportunities (batched, cached, budgeted).',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 4000 },
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' },
+      fallbacks: ['gemini-3.1-flash']
+    },
+    {
+      code: 'FUNDING_SOURCE_OCR',
+      displayName: 'Source Watch Selected Page OCR',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 18,
+      description: 'Transcribe only selected locally bounded PDF pages, with one reservation per attempt.',
+      tokenLimits: { maxTokensIn: 128000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-3.1-flash', PRO_PLAN: 'gemini-3.1-flash', ENTERPRISE_PLAN: 'gemini-3.1-flash' },
+      fallbacks: ['claude-haiku-4.5']
+    },
+    {
+      code: 'FUNDING_SOURCE_EXTRACT',
+      displayName: 'Source Watch Evidence Extraction',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 17,
+      description: 'Extract cited fields from fetched evidence without automatic publication.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 6000 },
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' },
+      fallbacks: ['gemini-3.1-flash']
+    },
+    {
       code: 'GRANT_PREP_CHAT',
       displayName: 'Grant Prep Chatbot',
       featureCode: 'GRANT_PREP',
@@ -1893,6 +1926,14 @@ async function main() {
           continue;
         }
 
+        // Only stages that declare `fallbacks` set them; every other stage keeps
+        // whatever an admin configured in /super-admin/llm-config.
+        const declaredFallbacks = (stageSeedByCode[stageCode] && stageSeedByCode[stageCode].fallbacks) || null;
+        const fallbackIds = declaredFallbacks
+          ? declaredFallbacks.map((code) => modelsByCode[code]).filter(Boolean)
+          : null;
+        const fallbackData = fallbackIds && fallbackIds.length > 0 ? { fallbackModelIds: JSON.stringify(fallbackIds) } : {};
+
         await prisma.planStageModelConfig.upsert({
           where: {
             planId_stageId: {
@@ -1904,7 +1945,8 @@ async function main() {
             modelId: modelId,
             maxTokensIn: limits ? limits.maxTokensIn : null,
             maxTokensOut: limits ? limits.maxTokensOut : null,
-            isActive: true
+            isActive: true,
+            ...fallbackData
           },
           create: {
             planId: plan.id,
@@ -1912,7 +1954,8 @@ async function main() {
             modelId: modelId,
             maxTokensIn: limits ? limits.maxTokensIn : null,
             maxTokensOut: limits ? limits.maxTokensOut : null,
-            isActive: true
+            isActive: true,
+            ...fallbackData
           }
         });
         configuredCount++;

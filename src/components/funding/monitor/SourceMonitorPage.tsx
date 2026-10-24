@@ -11,10 +11,13 @@ import MonitorHealth from './MonitorHealth'
 import MonitorOperators from './MonitorOperators'
 import MonitorQueue from './MonitorQueue'
 import MonitorSources from './MonitorSources'
+import MonitorDiscoveries from './MonitorDiscoveries'
+import MonitorSites from './MonitorSites'
+import MonitorQuality from './MonitorQuality'
 import type { MonitorChange, MonitorEngine, MonitorSource } from './types'
 
-type Tab = 'queue' | 'sources' | 'evidence' | 'health' | 'add' | 'operators'
-const TABS: Tab[] = ['queue', 'sources', 'evidence', 'health', 'add', 'operators']
+type Tab = 'queue' | 'sources' | 'evidence' | 'health' | 'add' | 'operators' | 'discoveries' | 'sites' | 'quality'
+const TABS: Tab[] = ['queue', 'sources', 'evidence', 'health', 'add', 'operators', 'discoveries', 'sites', 'quality']
 
 function initialTab(): Tab {
   if (typeof window === 'undefined') return 'queue'
@@ -49,6 +52,7 @@ export default function SourceMonitorPage() {
   // Granting access is a super-admin act — the team-role endpoints enforce the
   // same thing server-side, so this only decides whether the tab is offered.
   const canManageOperators = Boolean(user?.roles?.includes('SUPER_ADMIN'))
+  const canPublish = canManageOperators || Boolean(user?.platformPermissions?.includes('funding.publisher.write'))
 
   const [tab, setTab] = useState<Tab>(initialTab)
   const [engine, setEngine] = useState<MonitorEngine>('legacy')
@@ -272,6 +276,9 @@ export default function SourceMonitorPage() {
       )}
 
       <div className="cb-scroll-x flex items-center gap-1 overflow-x-auto">
+        <button className={`cb-tab ${tab === 'discoveries' ? 'cb-tab-active' : ''}`} onClick={() => setTab('discoveries')}>Discoveries</button>
+        <button className={`cb-tab ${tab === 'sites' ? 'cb-tab-active' : ''}`} onClick={() => setTab('sites')}>Sites</button>
+        <button className={`cb-tab ${tab === 'quality' ? 'cb-tab-active' : ''}`} onClick={() => setTab('quality')}>Quality</button>
         <button
           className={`cb-tab ${tab === 'queue' ? 'cb-tab-active' : ''}`}
           onClick={() => setTab('queue')}
@@ -347,6 +354,9 @@ export default function SourceMonitorPage() {
       )}
 
       {tab === 'evidence' && <MonitorEvidence authedFetch={authedFetch} />}
+      {tab === 'discoveries' && <MonitorDiscoveries authedFetch={authedFetch} canOperate={canOperate} canPublish={canPublish} />}
+      {tab === 'sites' && <MonitorSites authedFetch={authedFetch} canApprove={canManageOperators} />}
+      {tab === 'quality' && <MonitorQuality authedFetch={authedFetch} />}
 
       {tab === 'health' && <MonitorHealth authedFetch={authedFetch} canOperate={canOperate} />}
 

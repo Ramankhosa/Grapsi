@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
+import { sdkRetryOptions } from './executionPolicy'
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'high', 'max'])
 
@@ -190,7 +191,7 @@ export class ZhipuProvider implements LLMProvider {
         })
       }
 
-      const response = await this.client.chat.completions.create(createParams)
+      const response = await this.client.chat.completions.create(createParams, sdkRetryOptions(request))
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const usage = (response.usage || {}) as Record<string, any>

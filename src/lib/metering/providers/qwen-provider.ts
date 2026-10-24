@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
+import { sdkRetryOptions } from './executionPolicy'
 
 export class QwenProvider implements LLMProvider {
   name = 'qwen'
@@ -91,7 +92,7 @@ export class QwenProvider implements LLMProvider {
         })
       }
 
-      const response = await this.client.chat.completions.create(createParams)
+      const response = await this.client.chat.completions.create(createParams, sdkRetryOptions(request))
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const usage = (response.usage || {}) as Record<string, any>

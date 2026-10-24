@@ -7,6 +7,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
+import { sdkRetryOptions } from './executionPolicy'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
@@ -118,7 +119,7 @@ export class GroqProvider implements LLMProvider {
         })
       }
 
-      const response = await this.client.chat.completions.create(createParams)
+      const response = await this.client.chat.completions.create(createParams, sdkRetryOptions(request))
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const usage = (response.usage || {}) as Record<string, any>
