@@ -13,6 +13,17 @@ afterAll(async () => { vi.unstubAllEnvs(); await resetMonitorTables(); await db.
 const input = (key: string) => ({ stage: 'FUNDING_SOURCE_TRIAGE', operationKey: key, systemPrompt: 'Return JSON', prompt: 'Funding call', jsonSchema: { name: 'fixture', schema: { type: 'object' } }, maxOutputTokens: 250, scopes: ['PLATFORM'] })
 const success = { success: true, response: { output: '{"ok":true}', outputTokens: 8, modelClass: 'fixture', metadata: { inputTokens: 12, outputTokens: 8, thoughtTokens: 0 } } }
 describe('paid provider attempt accounting', () => {
+  it('accepts a single valid fenced JSON response without adding a provider attempt', async () => {
+    vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ ...success, response: { ...success.response, output: '```json\n{"ok":true}\n```' } })
+    expect((await runPaidStage(input('fenced'))).text).toBe('{"ok":true}')
+    expect(await db.monitorLlmAttempt.count()).toBe(1)
+    expect((await db.monitorLlmAttempt.findFirstOrThrow()).status).toBe('SUCCEEDED')
+  })
+  it('preserves prose around JSON for the stage validator to reject', async () => {
+    const output = 'Untrusted commentary\n```json\n{"ok":true}\n```'
+    vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ ...success, response: { ...success.response, output } })
+    expect((await runPaidStage(input('prose'))).text).toBe(output)
+  })
   it('opens a billing breaker and uses the independent fallback as a second reservation', async () => {
     vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ success: false, error: { message: 'Insufficient quota', details: { providerStatus: 402 } } } as any).mockResolvedValueOnce(success)
     expect((await runPaidStage(input('billing'))).model).toBe(models[1])

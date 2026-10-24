@@ -85,6 +85,15 @@ export interface PaidStageResult {
   attemptNo: number
 }
 
+/** Accept one fenced JSON value; leave prose and invalid output for stage validation. */
+function jsonResponseText(text: string): string {
+  const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  if (fenced) {
+    try { JSON.parse(fenced[1]); return fenced[1].trim() } catch { /* Stage validators reject malformed JSON. */ }
+  }
+  return text
+}
+
 export function estimateTokens(text: string): number {
   // ~4 chars per token for Latin text; Devanagari tokenises denser, so count
   // non-ASCII characters at one token each to stay conservative.
@@ -241,7 +250,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
       const actual = typeof meta.inputTokens === 'number' && typeof meta.outputTokens === 'number' ? actualCost(price, usage) : reservationFor(price, inputTokens, input.maxOutputTokens)
       await settleAttempt(attemptId, { status: 'SUCCEEDED', actualMicros: actual, usage })
       await recordProviderSuccess(account)
-      return { text: result.response.output, model, attemptId, actualMicros: actual, attemptNo: attemptNo - 1 }
+      return { text: jsonResponseText(result.response.output), model, attemptId, actualMicros: actual, attemptNo: attemptNo - 1 }
     }
 
     const details = (result.error?.details ?? {}) as Record<string, unknown>
