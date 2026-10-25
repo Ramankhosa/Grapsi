@@ -33,6 +33,15 @@ async function page(id='r1',text='Applications invited for research grant suppor
 }
 async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:'1.0.0',modelSha256:P.MODEL.sha256});return broker;}
 const completion=job=>({jobId:job.id,leaseToken:job.leaseToken,inputHash:job.inputHash,modelSha256:P.MODEL.sha256,policyHash:P.POLICY_HASH,decision:'CALL',elapsedMs:1500});
+test('proposed dates require literal unambiguous quotations and do not splice separate dates',()=>{
+ assert(P.groundedDate('2026-11-30','Applications close on 30 November 2026.'));
+ assert(!P.groundedDate('2026-11-10','Applications close 10/11/2026.'));
+ assert(!P.groundedDate('2026-11-30','Applications open on 10 November 2026 and close 30 December 2026.'));
+ assert(!P.groundedDate('2026-02-30','Applications close 2026-02-30.'));
+ const page={title:'Alpha Research Grant',text:'Applications close 30 November 2026.'};const details=P.validateDetails({candidates:[{title:page.title,titleQuote:page.title,closesOn:'2026-11-30',closesQuote:page.text}]},page);
+ assert.equal(details.candidates[0].closesOn,'2026-11-30');
+ const bad=P.validateDetails({candidates:[{title:page.title,titleQuote:page.title,closesOn:'2026-12-31',closesQuote:page.text}]},page);assert.equal(bad.candidates[0].closesOn,null);assert(bad.warnings.length);
+});
 test('legacy workers may reconnect to upload but cannot claim new title analysis',async()=>{
  const broker=new Broker(db);const hello=await broker.hello({protocol:1,workerId:crypto.randomUUID(),appVersion:'1.0.0',modelSha256:P.MODEL.sha256});assert.equal(hello.policyHash,P.LEGACY_POLICY_HASH);await assert.rejects(broker.claim(),{code:'UPGRADE_REQUIRED'});
 });

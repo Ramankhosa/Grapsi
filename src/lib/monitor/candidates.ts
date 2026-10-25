@@ -97,8 +97,8 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     if(await reuseUnchanged(early))continue
     const local=process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'?await localSuggestion(r.id):null
     if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
-      await withFence(lease,async tx=>{await queueLocalAnalysis(r.id,tx);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'SCORED',triage_reason:'Waiting for laptop first-pass analysis; no paid screening has run.'}})})
-      waitingForLocal++;continue
+      const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
+      if(queued)waitingForLocal++;continue
     }
     const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title
     early=await matchCatalog(r.canonical_url??'',proposed??'',funderId,prisma,null,current.final_url?[current.final_url]:[])

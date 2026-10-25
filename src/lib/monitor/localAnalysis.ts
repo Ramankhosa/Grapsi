@@ -6,7 +6,7 @@ const P = require('../../../tools/local-worker/policy.cjs') as {
   POLICY_HASH: string; MODEL: { sha256: string }; dateInIndia: () => string; sha256: (s: string) => string
   makePayload: (row: Record<string, unknown>) => Record<string, unknown>
 }
-export interface LocalDetails { schemaVersion: number; candidates: Array<{ title: string; titleQuote: string; invitationQuote: string | null }>; multipleCalls: boolean; needsMoreEvidence: boolean; warnings: string[] }
+export interface LocalDetails { schemaVersion: number; candidates: Array<{ title: string; titleQuote: string; invitationQuote: string | null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null }>; multipleCalls: boolean; needsMoreEvidence: boolean; warnings: string[] }
 export interface LocalSuggestion { decision: string; details: LocalDetails; assessedOn: string; resultId: string }
 export async function localSuggestion(resourceId: string, db: Db = prisma): Promise<LocalSuggestion | null> {
   const rows = await db.$queryRawUnsafe<Array<{ decision: string; details: LocalDetails; assessed_on: string; job_id: string; full_hash: string; text: string }>>(`SELECT a.decision,a.details,j.payload->>'asOfDate' AS assessed_on,a.job_id,j.payload->>'fullTextHash' AS full_hash,v.text
