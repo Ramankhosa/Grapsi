@@ -10,6 +10,9 @@ function command(bin,args,log,env=pgEnv){const fd=fs.openSync(path.join(run,log)
 function rehearseTests(clone){
  const testEnv={...process.env,MONITOR_TEST_DATABASE_URL:clone.href,PLAYWRIGHT_BROWSERS_PATH:'/var/lib/grapsi-source-watch/browsers'};
  for(const key of Object.keys(testEnv))if(key.startsWith('MONITOR_')&&key!=='MONITOR_TEST_DATABASE_URL')delete testEnv[key];
+ // Explicit false survives application dotenv loaders; deleting a switch can
+ // allow the copied production .env to reintroduce it later during imports.
+ for(const key of ['MONITOR_PIPELINE_ENABLED','MONITOR_PAID_WORK_ENABLED','MONITOR_EXTRACTION_ENABLED','MONITOR_OCR_ENABLED','MONITOR_AUTO_DRAFT_ENABLED','MONITOR_NOTIFICATIONS_ENABLED','MONITOR_SEMANTIC_MATCHING_ENABLED','MONITOR_LOCAL_SCREENING_REQUIRED'])testEnv[key]='false';
  for(const key of ['GOOGLE_AI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY','ZHIPU_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY'])delete testEnv[key];
  testEnv.MONITOR_STORAGE_ROOT=run+'/rehearsal-storage';
  // The restored catalogue URL-index task has its own bounded 90-second run;

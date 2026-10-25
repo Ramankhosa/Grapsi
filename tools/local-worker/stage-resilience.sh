@@ -30,6 +30,7 @@ done
 cd "$stage"
 echo INSTALLING_ISOLATED_DEPENDENCIES
 nice -n10 npm ci --ignore-scripts --no-audit --no-fund > "$run/install.log" 2>&1
+chmod u+x node_modules/@esbuild/linux-x64/bin/esbuild
 node node_modules/prisma/build/index.js generate > "$run/generate.log" 2>&1
 echo CHECKING_RELEASE
 NODE_OPTIONS=--max-old-space-size=4096 nice -n10 node node_modules/typescript/bin/tsc --noEmit --incremental false --pretty false > "$run/typecheck.log" 2>&1
