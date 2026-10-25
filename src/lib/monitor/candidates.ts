@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { MonitorCapacityError } from './capacity'
+import { MonitorCapacityError,assertResourceCapacity } from './capacity'
 import type { Prisma } from '@/lib/prisma-generated'
 import { readResource } from './content'
 import { fingerprint, meaningfulText } from './hashing'
@@ -13,7 +13,8 @@ import { autoDraftAllowed } from './metrics'
 import { isMonitorFetchError } from './errors'
 import { LeaseLostError } from './queue'
 import { localSuggestion, queueLocalAnalysis } from './localAnalysis'
-import { addFrontier } from './discovery'
+import { addFrontier,discoveryScope,watch } from './discovery'
+import { identifyUrl } from './urlIdentity'
 import { retainCoverageGap } from './coverage'
 import { lifecycleAt,normalQuote } from './evidence'
 
@@ -63,6 +64,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     let contentHash = ''
     let fullHash = ''
     let completeEvidence=false
+    let observedLinks:Array<{url:string;title:string}>=[]
     if (score.outcome !== 'STRONG_NEGATIVE' && r.canonical_url) {
       let fetched
       try { fetched = await readResource(r, r.site, lease, deps.fetch, deps.signal) }
@@ -73,6 +75,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
         continue
       }
       content = fetched.segments.map(s => s.text).join('\n')
+      observedLinks=fetched.links
       await withFence(lease,tx=>tx.monitorCoverageGap.updateMany({where:{site_id:r.site_id,url:r.canonical_url!,kind:'UNREADABLE',state:'OPEN'},data:{state:'RESOLVED',last_seen_at:new Date()}}))
       completeEvidence=content.length>=80&&fetched.segments.length>0&&fetched.segments.every(s=>s.complete)
       if(fetched.links.some(l=>/\.pdf(?:[?#]|$)|\.docx(?:[?#]|$)/i.test(l.url)))completeEvidence=false
@@ -101,6 +104,20 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       if(queued)waitingForLocal++;continue
     }
     const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title
+    if(local?.details.multipleCalls){
+      await withFence(lease,async tx=>{
+        if(r.canonical_url&&!/\.(pdf|docx?)([?#]|$)/i.test(r.canonical_url))await watch(tx,r.site,r.canonical_url,'PAGE')
+        const docs=observedLinks.filter(l=>/\.(pdf|docx?)([?#]|$)/i.test(l.url)&&l.url!==r.canonical_url).map(l=>({...l,identity:identifyUrl(l.url)})).filter(l=>l.identity)
+        const allowed=docs.filter(l=>discoveryScope(r.site)(l.identity!.host)).slice(0,10)
+        await assertResourceCapacity(tx,r.site_id,allowed.map(l=>l.identity!.dedupKey))
+        const documents=[]
+        for(const link of allowed){const document=await tx.monitorResource.upsert({where:{site_id_dedup_key:{site_id:r.site_id,dedup_key:link.identity!.dedupKey}},create:{site_id:r.site_id,dedup_key:link.identity!.dedupKey,canonical_url:link.identity!.canonical,raw_url:link.url,title:link.title,kind:'DOCUMENT'},update:{}});if(document.id!==r.id)documents.push(document.id)}
+        if(documents.length)await queueCandidates(tx,r.site_id,documents,lease.payload.bootstrap===true,`observed-listing:${r.id}:${fullHash}`)
+        for(const link of docs.filter(l=>!discoveryScope(r.site)(l.identity!.host)))await retainCoverageGap(tx,r.site_id,link.url,'HOST_APPROVAL','Observed call document requires related-host approval.')
+        for(const link of docs.filter(l=>discoveryScope(r.site)(l.identity!.host)).slice(10))await retainCoverageGap(tx,r.site_id,link.url,'UNVISITED_LIMIT','Further call documents remain on this listing; source checking will resume their discovery.')
+        await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'NEEDS_EVIDENCE',triage_verdict:'NEEDS_EVIDENCE',review_state:['REJECTED','PUBLISHED','MERGED','SNOOZED'].includes(opportunity.review_state)?opportunity.review_state:'PENDING',triage_reason:'Several calls are listed here. Observed official links are retained for separate analysis; no opportunity was manufactured from the proposed titles.'}})
+      });continue
+    }
     early=await matchCatalog(r.canonical_url??'',proposed??'',funderId,prisma,null,current.final_url?[current.final_url]:[])
     if(await reuseUnchanged(early))continue
     const key = fingerprint({ stage: TRIAGE_VERSION, schema: SCHEMA, routing: ROUTING_POLICY_VERSION, policy: RELEVANCE_VERSION, config, funders: r.site.funders.map(f => f.funder_id).sort(), url: r.canonical_url, title: r.title, context: observation?.context_hash, contentHash, fullHash, local:local?{decision:local.decision,details:local.details}:null })

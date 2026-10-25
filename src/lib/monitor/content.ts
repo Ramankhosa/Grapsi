@@ -14,6 +14,15 @@ import { revisitDays } from './revisit'
 import { assertContentCapacity, MonitorCapacityError } from './capacity'
 
 export interface ContentResult { segments: EvidenceSegment[]; links: Array<{ url: string; title: string }>; changed: boolean }
+function rememberedLinks(version:{text:string|null;page_statuses:unknown}):ContentResult['links']{
+  const stored=Array.isArray(version.page_statuses)?(version.page_statuses as Array<{links?:ContentResult['links']}>)[0]?.links??[]:[]
+  const links=new Map(stored.map(l=>[l.url,l]))
+  // Older versions retained observed anchor URLs in text while scope-filtering
+  // their link list. Recover them for approval without fetching new hosts.
+  const text=version.text??''
+  for(const match of [...text.matchAll(/\[(https?:\/\/[^\]\s]+)\]/g)].slice(0,500)){const id=identifyUrl(match[1]);if(id&&!links.has(id.canonical))links.set(id.canonical,{url:id.canonical,title:text.slice(Math.max(0,match.index!-200),match.index).split('\n').pop()?.trim()??''})}
+  return [...links.values()]
+}
 /** Fetch each selected resource once; parsing is local and has no OCR side effects. */
 export async function readResource(resource: MonitorResource, site: MonitorSite, lease: Lease, fetch: SafeFetch, signal?: AbortSignal): Promise<ContentResult> {
   if (!resource.canonical_url) throw new Error('Resource has no fetchable URL')
@@ -31,14 +40,12 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   }
   if (result.notModified && previous) {
     await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { last_validated_at: new Date(), last_validation_status: previous.truncated ? 'TRUNCATED' : 'NOT_MODIFIED' } }))
-    const stored = previous.page_statuses as Array<{ links?: ContentResult['links'] }> | null
-    return { segments: segmentsFromVersion(resource, previous), links: Array.isArray(stored) ? stored[0]?.links ?? [] : [], changed: false }
+    return { segments: segmentsFromVersion(resource, previous), links: rememberedLinks(previous), changed: false }
   }
   const rawHash = sha256(result.body)
   if (previous?.raw_hash === rawHash) {
     await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { last_validated_at: new Date(), last_validation_status: previous.truncated ? 'TRUNCATED' : 'OK' } }))
-    const stored = previous.page_statuses as Array<{ links?: ContentResult['links'] }> | null
-    return { segments: segmentsFromVersion(resource, previous), links: Array.isArray(stored) ? stored[0]?.links ?? [] : [], changed: false }
+    return { segments: segmentsFromVersion(resource, previous), links: rememberedLinks(previous), changed: false }
   }
   let pages: Array<{ page: number | null; text: string; status: string }> = []
   let links: ContentResult['links'] = []
@@ -63,7 +70,7 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
     const scope = main.length ? main : $('body')
     scope.find('a[href]').each((_, el) => {
       const id = identifyUrl($(el).attr('href') ?? '', result.finalUrl)
-      if (id && siteScope(site)(id.host)) links.push({ url: id.canonical, title: $(el).text().trim().slice(0, 250) })
+      if (id) links.push({ url: id.canonical, title: $(el).text().trim().slice(0, 250) })
       if (id) $(el).append(` [${id.canonical}]`)
     })
     // Preserve paragraph boundaries, including table rows.

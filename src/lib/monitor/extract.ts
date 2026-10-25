@@ -14,6 +14,8 @@ import { semanticCandidates } from './embed'
 import { EXTRACTION_SCHEMA, EXTRACTION_VERSION, extractionQuality, REQUIRED_FIELDS } from './extractionContract'
 import { claimSharedWork, releaseSharedWork } from './sharedWork'
 import { retainCoverageGap } from './coverage'
+import { fingerprint } from './hashing'
+import { siteScope } from './sites'
 const {applicationDate}=require('../../../tools/local-worker/policy.cjs') as {applicationDate:(key:string,value:unknown,quote:string)=>boolean}
 
 export const EXTRACT_VERSION = EXTRACTION_VERSION
@@ -101,6 +103,7 @@ export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch;
   const failures: string[] = []
   for (const attachment of selected) {
     const identity = identifyUrl(attachment.url)!
+    if(!siteScope(opportunity.site)(identity.host)){failures.push(`Related host approval required: ${attachment.url}`);await withFence(lease,tx=>retainCoverageGap(tx,opportunity.site_id,attachment.url,'HOST_APPROVAL','Observed supporting document requires related-host approval.'));continue}
     const resource = await withFence(lease, tx => tx.monitorResource.upsert({ where: { site_id_dedup_key: { site_id: opportunity.site_id, dedup_key: identity.dedupKey } },
       create: { site_id: opportunity.site_id, dedup_key: identity.dedupKey, canonical_url: identity.canonical, raw_url: attachment.url, title: attachment.title, kind: 'DOCUMENT', role: /corrig|amend|extension/i.test(attachment.title) ? 'CORRIGENDUM' : 'GUIDELINES', revisit_policy: 'ACTIVE', next_revisit_at: new Date(Date.now() + 3 * 86400_000) }, update: {} }))
     try { segments.push(...(await readResource(resource, opportunity.site, lease, deps.fetch, deps.signal)).segments) }
@@ -126,7 +129,7 @@ export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch;
   const previousText=previous?.normalized_text||previous?.raw_text||''
   const priorLines=new Set(previousText.split(/\n+/).map(normalQuote).filter(Boolean))
   const changedText=previous?primary.segments.flatMap(s=>s.text.split(/\n+/)).map(normalQuote).filter(line=>line&&!priorLines.has(line)).join('\n').slice(0,5000):null
-  const updateContext=previous?{catalogueCallId:previous.id,title:previous.title,previousOpening:previous.open_date?.toISOString().slice(0,10)??null,previousDeadline:previous.close_date?.toISOString().slice(0,10)??null,previousEvidence:fingerprint(previousText),changedSourceText:changedText}:null
+  const updateContext=previous&&normalQuote(previousText)!==normalQuote(primary.segments.map(s=>s.text).join('\n'))?{catalogueCallId:previous.id,title:previous.title,previousOpening:previous.open_date?.toISOString().slice(0,10)??null,previousDeadline:previous.close_date?.toISOString().slice(0,10)??null,previousEvidence:fingerprint(previousText),changedSourceText:changedText}:null
   // Hash the complete captured input, including evidence omitted from the prompt.
   const key = evidenceFingerprint(segments, { prompt: EXTRACT_VERSION, schema: EXTRACTION_SCHEMA, routing: ROUTING_POLICY_VERSION, funder: opportunity.funder_id,updateContext })
   let cached = await prisma.monitorStageCache.findUnique({ where: { cache_key: key } })

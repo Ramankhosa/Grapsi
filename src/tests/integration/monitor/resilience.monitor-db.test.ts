@@ -15,9 +15,29 @@ const facts='Alpha Foundation invites applications for this research grant. Univ
 const html=`<main><h1>${title}</h1><p>${facts}</p></main>`
 const fetch:SafeFetch=async url=>({requestedUrl:url,finalUrl:url,status:200,headers:{},body:Buffer.from(html),byteLength:html.length,truncated:false,contentKind:'html',contentType:'text/html',notModified:false,redirects:[],tlsExceptionUsed:false})
 async function fixture(){const site=await db.monitorSite.create({data:{host:'resilience.invalid',min_delay_ms:0}});const r=await db.monitorResource.create({data:{site_id:site.id,dedup_key:'https://resilience.invalid/call',canonical_url:'https://resilience.invalid/call',title}});return {site,r}}
-async function run(siteId:string,id:string,version:string,paid:ReturnType<typeof vi.fn>){await queueCandidates(db,siteId,[id],false,version);const lease=await claimNextTask({owner:'resilience-test',kinds:['TRIAGE']});await triageCandidates(lease!,{fetch,paid});return lease!}
+async function run(siteId:string,id:string,version:string,paid:ReturnType<typeof vi.fn>,pageFetch:SafeFetch=fetch){await queueCandidates(db,siteId,[id],false,version);const lease=await claimNextTask({owner:'resilience-test',kinds:['TRIAGE']});await triageCandidates(lease!,{fetch:pageFetch,paid});return lease!}
+async function localResult(job:any,details:Record<string,unknown>,decision='CALL'){const worker=await db.monitorLocalWorker.create({data:{id:crypto.randomUUID(),display_name:'fixture',app_version:'1.1.0',model_sha256:P.MODEL.sha256}});await db.monitorLocalAnalysisResult.create({data:{job_id:job.id,resource_id:job.resource_id,version_id:job.version_id,worker_id:worker.id,input_hash:job.input_hash,policy_hash:P.POLICY_HASH,model_sha256:P.MODEL.sha256,decision,elapsed_ms:1,details:{schemaVersion:2,candidates:[],multipleCalls:false,needsMoreEvidence:false,warnings:[],...details}}})}
 const paidFor=(id:string,verdict='NEW_OPPORTUNITY')=>vi.fn(async()=>({text:JSON.stringify({items:[{id,verdict,confidence:0.95,reason:'Fixture',type:'grant'}]}),model:'fixture',actualMicros:1n,attemptId:'fixture',attemptNo:1}))
 describe('conservative cost and recovery rules',()=>{
+ it('keeps a multi-call listing for evidence review and queues only observed approved call documents',async()=>{
+  const {site,r}=await fixture();process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true';const paid=paidFor(r.id)
+  const body='<main><h1>Research funding calls</h1><a href="https://resilience.invalid/alpha-call.pdf">Alpha research grant</a><a href="https://related.invalid/beta-call.pdf">Beta research grant</a></main>'
+  const listing:SafeFetch=async url=>({...await fetch(url,{}),body:Buffer.from(body),byteLength:body.length})
+  await run(site.id,r.id,'listing-first',paid,listing);await localResult(await db.monitorLocalAnalysisJob.findFirstOrThrow(),{multipleCalls:true})
+  await run(site.id,r.id,'listing-local',paid,listing)
+  expect(paid).not.toHaveBeenCalled();expect(await db.monitorOpportunity.count()).toBe(1);expect((await db.monitorOpportunity.findFirstOrThrow()).processing_state).toBe('NEEDS_EVIDENCE')
+  expect(await db.monitorResource.count({where:{canonical_url:'https://resilience.invalid/alpha-call.pdf'}})).toBe(1);expect(await db.monitorResource.count({where:{canonical_url:'https://related.invalid/beta-call.pdf'}})).toBe(0);expect(await db.monitorCoverageGap.count({where:{kind:'HOST_APPROVAL'}})).toBe(1)
+ })
+ it('does not hide an application date change on a last-updated line',async()=>{
+  const {site,r}=await fixture();process.env.MONITOR_EXTRACTION_ENABLED='true';await db.fundingCall.create({data:{title,source_url:r.canonical_url,normalized_text:title+'\n'+facts+'\nLast updated: deadline 30 November 2026',catalog_status:'PUBLISHED',visibility:'GLOBAL_PUBLISHED',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
+  const body=html.replace('</main>','<p>Last updated: deadline 31 December 2026</p></main>');const updated:SafeFetch=async url=>({...await fetch(url,{}),body:Buffer.from(body),byteLength:body.length});const paid=paidFor(r.id);await run(site.id,r.id,'updated-line',paid,updated)
+  expect(paid).not.toHaveBeenCalled();expect((await db.monitorOpportunity.findFirstOrThrow()).review_state).toBe('UPDATE_PROPOSED');expect(await db.monitorTask.count({where:{kind:'EXTRACT'}})).toBe(1)
+ })
+ it('avoids all paid work when a grounded title identifies unchanged evidence behind a generic heading',async()=>{
+  const {site,r}=await fixture();await db.monitorResource.update({where:{id:r.id},data:{title:'Application information'}});await db.fundingCall.create({data:{title,source_url:r.canonical_url,normalized_text:title+'\n'+facts,catalog_status:'PUBLISHED',visibility:'GLOBAL_PUBLISHED',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
+  process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true';const paid=paidFor(r.id);await run(site.id,r.id,'generic-first',paid);await localResult(await db.monitorLocalAnalysisJob.findFirstOrThrow(),{candidates:[{title,titleQuote:title,invitationQuote:null}]});await run(site.id,r.id,'generic-local',paid)
+  expect(paid).not.toHaveBeenCalled();expect((await db.monitorOpportunity.findFirstOrThrow()).processing_state).toBe('DONE');expect(await db.monitorTask.count({where:{kind:'EXTRACT'}})).toBe(0)
+ })
  it('retains observed funding dependencies until their related host is approved',async()=>{
   const {site}=await fixture();const {addFrontier}=await import('@/lib/monitor/discovery')
   const link={url:'https://related.invalid/grant-2026',title:'Apply for research funding'}

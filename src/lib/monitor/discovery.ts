@@ -45,7 +45,7 @@ export async function addFrontier(db: Db, site: MonitorSite, urls: Array<{ url: 
   const added = records.length ? (await db.monitorCrawlFrontier.createMany({ data: records, skipDuplicates: true })).count : 0
   return { added, limited: fresh.length > capacity }
 }
-async function watch(db: Db, site: MonitorSite, url: string, kind: 'PAGE' | 'FEED' | 'SITEMAP') {
+export async function watch(db: Db, site: MonitorSite, url: string, kind: 'PAGE' | 'FEED' | 'SITEMAP') {
   const existing = await db.monitoredSource.findFirst({ where: { site_id: site.id, url, kind } })
   if (existing) return
   await db.monitoredSource.create({ data: { site_id: site.id, name: `${site.display_name ?? site.host} ${kind.toLowerCase()}`, url, kind, fetch_mode: 'AUTO', frequency_minutes: 1440, next_check_at: new Date() } })
