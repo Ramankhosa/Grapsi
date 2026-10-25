@@ -38,7 +38,7 @@ import type { Lease } from './queue'
  * billable failure keeps the usage the provider reported.
  */
 
-export const ROUTING_POLICY_VERSION = 'sw-routing-1'
+export const ROUTING_POLICY_VERSION = 'sw-routing-2'
 const TASK_CODE = 'FUNDING_CALL_INGEST' as TaskCode
 const INPUT_SAFETY = 1.15
 /** Output allowance doubled for reasoning/thinking tokens billed as output. */
@@ -219,6 +219,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
             responseJsonSchema: input.jsonSchema.schema,
             responseSchema: input.jsonSchema.schema,
             responseMimeType: 'application/json',
+            ...(getProviderFromModelCode(model)==='gemini'&&model.startsWith('gemini-3')?{thinking_level:'low'}:{}),
           },
           metadata: {
             skipFeaturePolicy: true,
@@ -249,6 +250,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
         outputTokens: meta.outputTokens,
         thoughtTokens: meta.thoughtTokens,
         modelUsed: meta.modelUsed,
+        finishReason: meta.finishReason,
         outputText: result.response.output.slice(0,300000),
       }
       // Missing usage is not evidence of a free request. Keep a conservative
