@@ -60,6 +60,7 @@ namespace Grapsi.LocalWorker {
       var watch=Stopwatch.StartNew();
       var schema=Json.Map(assets.Config,"resultSchema");
       var body=new {model="grapsi-local-screen",messages=new[]{new{role="system",content=prompt},new{role="user",content=Json.Write(page)}},response_format=new {type="json_schema",json_schema=new {name="call_filter",strict=true,schema=schema}},temperature=0,max_tokens=1024,stream=false,seed=42,reasoning_effort="none"};
+      try {
       using(var content=new StringContent(Json.Write(body),Encoding.UTF8,"application/json"))
       using(var response=await client.PostAsync(endpoint+"/v1/chat/completions",content,token)) {
         // An oversized/unreadable page is retained for stronger review, not retried forever.
@@ -74,6 +75,7 @@ namespace Grapsi.LocalWorker {
         return new Dictionary<string,object>{{"decision",decision},{"details",result},{"elapsedMs",(int)watch.ElapsedMilliseconds}};
         }catch(ArgumentException){return new Dictionary<string,object>{{"decision","UNSURE"},{"elapsedMs",(int)watch.ElapsedMilliseconds}};}
       }
+      }catch(TaskCanceledException){token.ThrowIfCancellationRequested();return new Dictionary<string,object>{{"decision","UNSURE"},{"elapsedMs",(int)watch.ElapsedMilliseconds}};}
     }
     public void Stop() {
       if(client!=null){client.Dispose();client=null;}
