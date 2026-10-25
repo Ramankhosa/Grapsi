@@ -61,7 +61,7 @@ function applicationDate(key,value,quote){
  // Separate date labels prevent an opening date from borrowing a later deadline.
  const months='(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
  const dates=text.match(new RegExp('\\b20\\d{2}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[./-]\\d{1,2}[./-]20\\d{2}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?'+months+'[,]?\\s+20\\d{2}\\b|\\b'+months+'\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+20\\d{2}\\b','g'))??[];
- if(dates.length!==1)return false;
+ if(!dates.length||dates.some(date=>!groundedDate(value,date)))return false;
  if(/project (?:end|completion)|reporting|deliverable|ceremony|event date/.test(text)&&!/appl|proposal|submission|nomination/.test(text))return false;
  if(key==='opensOn'||key==='open_date')return !/until|deadline|clos|last date/.test(text)&&/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text);
  return /deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text);
