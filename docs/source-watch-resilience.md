@@ -6,7 +6,7 @@ Keep `MONITOR_AUTO_DRAFT_ENABLED=false`, notifications off and the existing $2 p
 
 ## Evidence and identity
 
-The v2 local contract includes CALL/RELATED/GENERAL/UNSURE, at most four proposed titles and exact quotations, invitation quotations, multiple-call and incomplete-evidence flags. Production removes unsupported titles and invitations once and retains warnings. Model headings never replace the source heading or establish identity/open status. Long pages use bounded sections around observed funding/application/deadline text. Omitted content is marked.
+The v2 local contract uses one lightweight pass for CALL/RELATED/GENERAL/UNSURE, at most two proposed titles, stated opening/closing dates and exact quotations, invitation quotations, multiple-call and incomplete-evidence flags. Production removes unsupported titles, ambiguous/unquoted dates and unsupported invitations once and retains warnings. Model headings and dates never replace accepted catalogue facts or establish identity/open status. Long pages use bounded sections around observed funding/application/deadline text. Omitted content is marked.
 
 Results bind source version, raw/text/input hashes, pinned model SHA, policy and assessment date. Old results and encrypted Windows outboxes remain readable; legacy clients may upload saved results, but only the new protocol can claim title jobs.
 
