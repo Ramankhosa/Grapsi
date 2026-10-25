@@ -12,7 +12,9 @@ function rehearseTests(clone){
  for(const key of Object.keys(testEnv))if(key.startsWith('MONITOR_')&&key!=='MONITOR_TEST_DATABASE_URL')delete testEnv[key];
  for(const key of ['GOOGLE_AI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY','ZHIPU_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY'])delete testEnv[key];
  testEnv.MONITOR_STORAGE_ROOT=run+'/rehearsal-storage';
- command('nice',['-n10',process.execPath,'node_modules/vitest/vitest.mjs','run','--config','vitest.monitor-integration.config.ts'],'rehearsal-tests.log',testEnv);
+ // The restored catalogue URL-index task has its own bounded 90-second run;
+ // an empty local fixture database does not exercise that production volume.
+ command('nice',['-n10',process.execPath,'node_modules/vitest/vitest.mjs','run','--config','vitest.monitor-integration.config.ts','--testTimeout=180000'],'rehearsal-tests.log',testEnv);
  fs.writeFileSync(run+'/BACKUP_REHEARSED',JSON.stringify({at:new Date().toISOString(),commit:cp.execFileSync('git',['rev-parse','HEAD'],{cwd:stage,encoding:'utf8'}).trim()}));console.log('RESTORE_MIGRATIONS_AND_TESTS_PASSED');
 }
 async function main(){try{
