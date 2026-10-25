@@ -38,6 +38,8 @@ test('proposed dates require literal unambiguous quotations and do not splice se
  assert(!P.groundedDate('2026-11-10','Applications close 10/11/2026.'));
  assert(!P.groundedDate('2026-11-30','Applications open on 10 November 2026 and close 30 December 2026.'));
  assert(!P.groundedDate('2026-02-30','Applications close 2026-02-30.'));
+ assert(!P.applicationDate('opensOn','2026-11-18','Proposals will be accepted until November 18th, 2026.'));
+ assert(P.applicationDate('opensOn','2026-11-01','Applications open on 1 November 2026.'));
  const page={title:'Alpha Research Grant',text:'Applications close 30 November 2026.'};const details=P.validateDetails({candidates:[{title:page.title,titleQuote:page.title,closesOn:'2026-11-30',closesQuote:page.text}]},page);
  assert.equal(details.candidates[0].closesOn,'2026-11-30');
  const bad=P.validateDetails({candidates:[{title:page.title,titleQuote:page.title,closesOn:'2026-12-31',closesQuote:page.text}]},page);assert.equal(bad.candidates[0].closesOn,null);assert(bad.warnings.length);

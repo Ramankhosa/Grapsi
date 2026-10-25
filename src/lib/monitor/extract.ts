@@ -14,7 +14,7 @@ import { semanticCandidates } from './embed'
 import { EXTRACTION_SCHEMA, EXTRACTION_VERSION, extractionQuality, REQUIRED_FIELDS } from './extractionContract'
 import { claimSharedWork, releaseSharedWork } from './sharedWork'
 import { retainCoverageGap } from './coverage'
-const {groundedDate}=require('../../../tools/local-worker/policy.cjs') as {groundedDate:(value:unknown,quote:string)=>boolean}
+const {applicationDate}=require('../../../tools/local-worker/policy.cjs') as {applicationDate:(key:string,value:unknown,quote:string)=>boolean}
 
 export const EXTRACT_VERSION = EXTRACTION_VERSION
 const FIELDS = [...LLM_EXTRACTABLE_FUNDING_FIELD_KEYS]
@@ -27,9 +27,7 @@ export function groundedValue(key: string, value: unknown, quotes: string): bool
   if(key==='is_rolling'&&value===true)return /rolling|year.round|throughout the year|any time|no fixed deadline|continuous basis|साल भर/.test(text)
   if (['agency_name', 'scheme_title'].includes(key)) return typeof value === 'string' && text.includes(normalQuote(value).toLowerCase())
   if (DATE_FIELDS.has(key) && typeof value === 'string') {
-    if(!groundedDate(value,quotes))return false
-    if(/project (?:end|completion)|reporting|deliverable|ceremony|event date/.test(text)&&!/appl|proposal|submission|nomination/.test(text))return false
-    return key==='close_date'?/deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text):/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text)
+    return applicationDate(key,value,quotes)
   }
   if (NUMBER_FIELDS.has(key) && typeof value === 'number') {
     const candidates = [...text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(crores?|lakhs?|millions?|billions?|thousands?|years?)?/g)].flatMap(m => {
