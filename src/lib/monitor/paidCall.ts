@@ -260,6 +260,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
     }
 
     const details = (result.error?.details ?? {}) as Record<string, unknown>
+    const providerError=Object.fromEntries(['providerStatus','providerCode','providerRequestId'].filter(k=>details[k]!==undefined).map(k=>[k,details[k]]))
     const errorClass = result.success && !result.response?.output?.trim() ? 'INVALID_OUTPUT' : classifyProviderFailure(details, result.error?.message)
     lastClass = errorClass
     lastMessage = String(details.providerMessage ?? result.error?.message ?? 'provider failed')
@@ -269,17 +270,18 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
       await settleAttempt(attemptId, {
         status: 'FAILED_BILLABLE',
         actualMicros: actualCost(price, billable),
-        usage: billable,
+        usage: {...billable,providerError},
         requestId: (details.providerRequestId as string) ?? null,
         errorClass,
         errorMessage: lastMessage,
       })
     } else if (errorClass === 'TIMEOUT' || errorClass === 'TRANSIENT' || errorClass === 'INVALID_OUTPUT') {
-      await markUncertain(attemptId, lastMessage)
+      await markUncertain(attemptId, lastMessage,{usage:{providerError},requestId:details.providerRequestId as string|undefined})
     } else {
       await settleAttempt(attemptId, {
         status: 'FAILED_UNBILLED',
         actualMicros: 0n,
+        usage: {providerError},
         requestId: (details.providerRequestId as string) ?? null,
         errorClass,
         errorMessage: lastMessage,

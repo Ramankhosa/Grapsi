@@ -25,6 +25,7 @@ describe('paid provider attempt accounting', () => {
     await expect(runPaidStage(input('rejected'))).rejects.toThrow()
     expect(vi.mocked(llmGateway.executeLLMOperation).mock.calls.length).toBe(calls)
     expect((await db.monitorBudgetLedger.findFirstOrThrow()).reserved_micros).toBe(0n)
+    expect((await db.monitorLlmAttempt.findFirstOrThrow({where:{attempt_no:1}})).usage).toMatchObject({providerError:{providerStatus:400,providerCode:'INVALID_ARGUMENT'}})
   })
   it('accepts a single valid fenced JSON response without adding a provider attempt', async () => {
     vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ ...success, response: { ...success.response, output: '```json\n{"ok":true}\n```' } })

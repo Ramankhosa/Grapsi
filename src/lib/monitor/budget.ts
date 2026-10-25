@@ -232,10 +232,10 @@ export async function settleAttempt(
 }
 
 /** The outcome is unknown (timeout after dispatch): keep the reservation. */
-export async function markUncertain(attemptId: string, errorMessage: string): Promise<void> {
+export async function markUncertain(attemptId: string, errorMessage: string, receipt?: {usage: Record<string,unknown>;requestId?:string}): Promise<void> {
   await prisma.monitorLlmAttempt.updateMany({
     where: { id: attemptId, settled_at: null },
-    data: { status: 'UNCERTAIN', error_class: 'UNCERTAIN', error_message: errorMessage.slice(0, 1000) },
+    data: { status: 'UNCERTAIN', error_class: 'UNCERTAIN', error_message: errorMessage.slice(0, 1000),usage:receipt?.usage as Prisma.InputJsonObject|undefined,request_id:receipt?.requestId },
   })
 }
 
