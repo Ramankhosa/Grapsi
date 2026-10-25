@@ -30,13 +30,15 @@ class Broker {
   async scan(){
     if(!this.enabled||Date.now()-this.lastScan<30000)return 0;
     this.lastScan=Date.now();
+    const rules=await this.rules();
+    const skipGuard=this.skipTable?"AND NOT EXISTS(SELECT 1 FROM monitor_skip_rules k WHERE k.site_id=r.site_id AND (k.expires_at IS NULL OR k.expires_at>now()) AND (k.dedup_key=r.dedup_key OR (k.match='FOLDER' AND (starts_with(r.dedup_key,rtrim(k.dedup_key,'/') || '/') OR starts_with(r.dedup_key,k.dedup_key || '?')))))":'';
     const rows=await this.db.$queryRawUnsafe(`SELECT r.id,r.site_id,r.current_version_id,r.title,r.canonical_url AS url,r.dedup_key,v.text,v.truncated,v.raw_hash,v.meaningful_hash,s.host
       FROM monitor_resources r JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=r.current_version_id AND v.resource_id=r.id
       WHERE s.status='ACTIVE' AND s.host=ANY($1::text[]) AND v.text IS NOT NULL AND r.canonical_url IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM monitor_local_analysis_jobs j WHERE j.version_id=v.id AND j.policy_hash=$2)
+      ${skipGuard}
       ORDER BY r.last_observed_at DESC LIMIT 150`,this.allowedHosts,P.POLICY_HASH);
     if(!rows.length)return 0;
-    const rules=await this.rules();
     let added=0;
     for(const row of rows){
       if(!P.publicUrl(row.url,row.host)||P.skipped(row.dedup_key,rules.filter(r=>r.site_id===row.site_id)))continue;
