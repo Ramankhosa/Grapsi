@@ -15,6 +15,7 @@ import { LeaseLostError } from './queue'
 import { localSuggestion, queueLocalAnalysis } from './localAnalysis'
 import { addFrontier } from './discovery'
 import { retainCoverageGap } from './coverage'
+import { lifecycleAt } from './evidence'
 
 export const TRIAGE_VERSION = 'triage-2'
 export type TriageVerdict = 'NOT_FUNDING' | 'NEW_OPPORTUNITY' | 'UPDATE_TO_EXISTING' | 'UNSURE' | 'NEEDS_EVIDENCE'
@@ -83,14 +84,17 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     const funderId=r.site.funders.length===1?r.site.funders[0].funder_id:null
     const current=await prisma.monitorResource.findUniqueOrThrow({where:{id:r.id},select:{final_url:true}})
     let early=await matchCatalog(r.canonical_url??'',r.title??'',funderId,prisma,null,current.final_url?[current.final_url]:[])
-    if(early.type==='UPDATE_OF'&&early.callId&&completeEvidence){
-      const call=await prisma.fundingCall.findUniqueOrThrow({where:{id:early.callId},select:{normalized_text:true,raw_text:true,catalog_status:true}})
+    const reuseUnchanged=async(match:typeof early)=>{
+      if(match.type!=='UPDATE_OF'||!match.callId||!completeEvidence)return false
+      const call=await prisma.fundingCall.findUniqueOrThrow({where:{id:match.callId},select:{normalized_text:true,raw_text:true,catalog_status:true,open_date:true,close_date:true,is_rolling:true}})
       const stored=call.normalized_text||call.raw_text
       if(call.catalog_status==='PUBLISHED'&&stored&&meaningfulText(stored)===meaningfulText(content)){
-        await withFence(lease,tx=>tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'DONE',review_state:['REJECTED','PUBLISHED','MERGED','SNOOZED'].includes(opportunity.review_state)?opportunity.review_state:'NONE',triage_verdict:'UPDATE_TO_EXISTING',triage_confidence:1,triage_reason:'Existing verified call and complete evidence are unchanged; no paid request needed.',match_type:'UPDATE_OF',match_confidence:'EXACT',funding_call_id:early.callId,decision_versions:{prompt:TRIAGE_VERSION,model:'deterministic-existing-1',fullHash}}}))
-        continue
+        await withFence(lease,tx=>tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'DONE',review_state:['REJECTED','PUBLISHED','MERGED','SNOOZED'].includes(opportunity.review_state)?opportunity.review_state:'NONE',triage_verdict:'UPDATE_TO_EXISTING',triage_confidence:1,triage_reason:'Existing verified call and complete evidence are unchanged; no paid request needed.',match_type:'UPDATE_OF',match_confidence:'EXACT',funding_call_id:match.callId,lifecycle:lifecycleAt(call.close_date?.toISOString().slice(0,10)??null,call.open_date?.toISOString().slice(0,10)??null,call.is_rolling?'ROLLING':null),decision_versions:{prompt:TRIAGE_VERSION,model:'deterministic-existing-1',fullHash}}}))
+        return true
       }
+      return false
     }
+    if(await reuseUnchanged(early))continue
     const local=process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'?await localSuggestion(r.id):null
     if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
       await withFence(lease,async tx=>{await queueLocalAnalysis(r.id,tx);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'SCORED',triage_reason:'Waiting for laptop first-pass analysis; no paid screening has run.'}})})
@@ -98,6 +102,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     }
     const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title
     early=await matchCatalog(r.canonical_url??'',proposed??'',funderId,prisma,null,current.final_url?[current.final_url]:[])
+    if(await reuseUnchanged(early))continue
     const key = fingerprint({ stage: TRIAGE_VERSION, schema: SCHEMA, routing: ROUTING_POLICY_VERSION, policy: RELEVANCE_VERSION, config, funders: r.site.funders.map(f => f.funder_id).sort(), url: r.canonical_url, title: r.title, context: observation?.context_hash, contentHash, fullHash, local:local?{decision:local.decision,details:local.details}:null })
     const priorVersions = prior?.decision_versions as { input?: string; fullHash?: string } | null
     if (opportunity.id === prior?.id && prior.review_state === 'PUBLISHED' && (prior.stale_evidence || (priorVersions?.input && priorVersions.input !== key) || (priorVersions?.fullHash && priorVersions.fullHash !== fullHash))) {
