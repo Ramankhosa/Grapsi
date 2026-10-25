@@ -18,6 +18,7 @@ import { PaidAttemptsExhaustedError, PaidStageFailedError } from './paidCall'
 import { embedCall } from './embed'
 import { notifyPublication } from './publicationNotify'
 import { MonitorCapacityError } from './capacity'
+import { SharedWorkPendingError } from './sharedWork'
 
 /** Kinds this phase can execute. Others stay queued for the phase that adds them. */
 export const EXECUTABLE_KINDS: TaskKind[] = ['CHECK_SOURCE', 'REFRESH_URL_INDEX', 'HOUSEKEEPING', 'TRIAGE', 'REVISIT', 'EXTRACT', 'HANDOFF', 'DISCOVER_SITE', 'EMBED', 'NOTIFY']
@@ -83,6 +84,7 @@ export async function executeTask(lease: Lease, deps: ExecuteDeps): Promise<void
 
 async function settleFailure(lease: Lease, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error)
+  if (error instanceof SharedWorkPendingError) { await deferTask(lease, new Date(Date.now() + 30000), message); return }
   const isCheck = lease.kind === 'CHECK_SOURCE'
   if (error instanceof MonitorCapacityError) {
     await deferTask(lease, new Date(Date.now() + 6 * 3600000), message, 'DEFERRED_BUDGET')

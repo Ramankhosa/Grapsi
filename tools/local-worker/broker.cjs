@@ -8,20 +8,20 @@ class ProtocolError extends Error {constructor(code,message){super(message);this
 const check=(condition,code,message)=>{if(!condition)throw new ProtocolError(code,message);};
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 class Broker {
-  constructor(db,options={}){this.db=db;this.enabled=options.enabled!==false;this.allowedHosts=options.allowedHosts??['anrfonline.in','onlinedst.gov.in'];this.reload=options.reload;this.worker=null;this.closed=false;this.lastScan=0;this.skipTable=false;}
+  constructor(db,options={}){this.db=db;this.enabled=options.enabled!==false;this.allowedHosts=options.allowedHosts??['anrfonline.in','onlinedst.gov.in'];this.reload=options.reload;this.worker=null;this.legacy=false;this.closed=false;this.lastScan=0;this.skipTable=false;}
   async rules(db=this.db){
     const present=await db.$queryRawUnsafe("SELECT to_regclass('public.monitor_skip_rules')::text AS name");this.skipTable=Boolean(present[0]?.name);
     return this.skipTable?db.$queryRawUnsafe('SELECT site_id,dedup_key,match FROM monitor_skip_rules WHERE expires_at IS NULL OR expires_at>now()'):[];
   }
   refresh(){if(this.reload){const config=this.reload();this.enabled=config.enabled!==false;if(config.allowedHosts)this.allowedHosts=config.allowedHosts;}}
   async hello(input){
-    this.refresh();check(input.protocol===P.PROTOCOL,'UPGRADE_REQUIRED','This worker requires a compatible application version.');
+    this.refresh();check([1,P.PROTOCOL].includes(input.protocol),'UPGRADE_REQUIRED','This worker requires a compatible application version.');this.legacy=input.protocol===1;
     check(uuid(input.workerId),'INVALID_REQUEST','A valid device identifier is required.');
     check(input.modelSha256===P.MODEL.sha256,'MODEL_MISMATCH','The approved model must be verified before connecting.');
     const name=String(input.displayName??'Windows worker').slice(0,120).replace(/[\x00-\x1f]/g,'');
     await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_workers(id,display_name,app_version,model_sha256,state) VALUES($1,$2,$3,$4,'IDLE') ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,app_version=excluded.app_version,model_sha256=excluded.model_sha256,last_seen_at=now(),state='IDLE'`,input.workerId,name,String(input.appVersion??'unknown').slice(0,40),input.modelSha256);
     this.worker=input.workerId;
-    return {protocol:P.PROTOCOL,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:P.POLICY_HASH,model:P.MODEL,promptTemplate:P.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:this.allowedHosts};
+    return {protocol:input.protocol,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:this.legacy?P.LEGACY_POLICY_HASH:P.POLICY_HASH,model:P.MODEL,promptTemplate:this.legacy?P.LEGACY_TEMPLATE:P.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:this.allowedHosts};
   }
   async touch(state='IDLE'){
     check(this.worker,'NOT_REGISTERED','Connect this worker first.');
@@ -32,7 +32,7 @@ class Broker {
     this.lastScan=Date.now();
     const rows=await this.db.$queryRawUnsafe(`SELECT r.id,r.site_id,r.current_version_id,r.title,r.canonical_url AS url,r.dedup_key,v.text,v.truncated,v.raw_hash,v.meaningful_hash,s.host
       FROM monitor_resources r JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=r.current_version_id AND v.resource_id=r.id
-      WHERE s.status='ACTIVE' AND s.host=ANY($1::text[]) AND v.text IS NOT NULL AND length(v.text)>=40 AND r.canonical_url IS NOT NULL
+      WHERE s.status='ACTIVE' AND s.host=ANY($1::text[]) AND v.text IS NOT NULL AND r.canonical_url IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM monitor_local_analysis_jobs j WHERE j.version_id=v.id AND j.policy_hash=$2)
       ORDER BY r.last_observed_at DESC LIMIT 150`,this.allowedHosts,P.POLICY_HASH);
     if(!rows.length)return 0;
@@ -40,17 +40,19 @@ class Broker {
     let added=0;
     for(const row of rows){
       if(!P.publicUrl(row.url,row.host)||P.skipped(row.dedup_key,rules.filter(r=>r.site_id===row.site_id)))continue;
-      const payload={resourceId:row.id,versionId:row.current_version_id,sourceHash:row.raw_hash,fullTextHash:P.sha256(row.text),asOfDate:P.dateInIndia(),policyHash:P.POLICY_HASH,page:P.packPage(row)};
+      const payload=P.makePayload(row);
       const inputHash=P.sha256(JSON.stringify(payload));
       added+=await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(version_id,policy_hash) DO NOTHING`,crypto.randomUUID(),row.id,row.current_version_id,P.POLICY_HASH,inputHash,JSON.stringify(payload));
     }
     return added;
   }
   async sweep(){
+    await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state='SUPERSEDED',updated_at=now() WHERE state='QUEUED' AND policy_hash<>$1",P.POLICY_HASH);
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs j SET state='SUPERSEDED',lease_until=NULL,updated_at=now() WHERE state IN ('QUEUED','RUNNING') AND NOT EXISTS(SELECT 1 FROM monitor_resources r WHERE r.id=j.resource_id AND r.current_version_id=j.version_id)");
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state=CASE WHEN attempts >= $1 THEN 'FAILED' ELSE 'QUEUED' END,lease_until=NULL,available_at=now(),last_error='Lease expired; device unavailable',updated_at=now() WHERE state='RUNNING' AND lease_until<now()",MAX_ATTEMPTS);
   }
   async claim(){
+    check(!this.legacy,'UPGRADE_REQUIRED','Saved results can upload, but new title analysis requires worker 1.1.0.');
     this.refresh();await this.touch();if(!this.enabled)return {job:null,paused:true};
     await this.scan();await this.rules();
     const skipGuard=this.skipTable?"AND NOT EXISTS(SELECT 1 FROM monitor_skip_rules k WHERE k.site_id=r.site_id AND (k.expires_at IS NULL OR k.expires_at>now()) AND (k.dedup_key=r.dedup_key OR (k.match='FOLDER' AND (starts_with(r.dedup_key,rtrim(k.dedup_key,'/') || '/') OR starts_with(r.dedup_key,k.dedup_key || '?')))))":'';
@@ -68,7 +70,7 @@ class Broker {
         WHERE ((j.state='QUEUED' AND j.available_at<=now()) OR (j.state='RUNNING' AND j.lease_until<now())) AND j.attempts<$1
           AND j.policy_hash=$2 AND s.status='ACTIVE' AND s.host=ANY($3::text[]) AND r.current_version_id=j.version_id
           ${skipGuard}
-        ORDER BY j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
+        ORDER BY CASE WHEN j.created_at<now()-interval '6 hours' THEN 0 WHEN j.payload->'page'->>'text' ~* 'deadline|closes|extension|corrigendum' THEN 1 ELSE 2 END,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
         UPDATE monitor_local_analysis_jobs j SET state='RUNNING',owner=$4,lease_token=$5,lease_until=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
         FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token);
       if(!rows.length)return {job:null};
@@ -95,16 +97,19 @@ class Broker {
     this.refresh();await this.touch();
     check(uuid(input.jobId)&&uuid(input.leaseToken),'INVALID_REQUEST','Invalid lease.');
     check(P.TYPES.includes(input.decision),'INVALID_RESULT','Invalid classification.');
-    check(input.modelSha256===P.MODEL.sha256&&input.policyHash===P.POLICY_HASH,'INVALID_RESULT','Model or policy does not match.');
+    check(input.modelSha256===P.MODEL.sha256&&[P.POLICY_HASH,P.LEGACY_POLICY_HASH].includes(input.policyHash),'INVALID_RESULT','Model or policy does not match.');
     check(Number.isInteger(input.elapsedMs)&&input.elapsedMs>=0&&input.elapsedMs<=300000,'INVALID_RESULT','Invalid processing duration.');
     return this.db.$transaction(async tx=>{
       const rows=await tx.$queryRawUnsafe(`SELECT j.*,r.current_version_id,r.dedup_key AS resource_key,r.site_id,s.status AS site_status,s.host,v.text AS current_text,v.raw_hash AS current_raw_hash FROM monitor_local_analysis_jobs j JOIN monitor_resources r ON r.id=j.resource_id JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=j.version_id WHERE j.id=$1 FOR UPDATE OF j,r,s,v`,input.jobId);
       check(rows.length,'NOT_FOUND','The job is no longer available.');const job=rows[0];
+      check(input.policyHash===job.policy_hash,'INVALID_RESULT','The result policy does not match this job.');
+      const details=input.policyHash===P.POLICY_HASH?P.validateDetails(input.details,job.payload.page):{};
+      const resultHash=P.sha256(P.stable({decision:input.decision,details}));
       check(job.owner===this.worker&&job.lease_token===input.leaseToken&&job.input_hash===input.inputHash,'LEASE_LOST','This result belongs to a different task version or lease.');
       if(job.state==='DONE'){
-        const saved=await tx.$queryRawUnsafe('SELECT decision FROM monitor_local_analysis_results WHERE job_id=$1',job.id);
-        check(saved[0]?.decision===input.decision,'RESULT_CONFLICT','A different result was already accepted.');
-        return {accepted:true,duplicate:true,mode:'SHADOW'};
+        const saved=await tx.$queryRawUnsafe('SELECT decision,result_hash FROM monitor_local_analysis_results WHERE job_id=$1',job.id);
+        check(saved[0]?.decision===input.decision&&(!saved[0].result_hash||saved[0].result_hash===resultHash),'RESULT_CONFLICT','A different result was already accepted.');
+        return {accepted:true,duplicate:true,mode:'SHADOW',details};
       }
       check(job.state==='RUNNING'&&new Date(job.lease_until)>new Date(),'LEASE_LOST','The job lease expired; it can be retried.');
       if(job.current_version_id!==job.version_id||job.site_status!=='ACTIVE'||!this.allowedHosts.includes(job.host)||P.sha256(job.current_text??'')!==job.payload.fullTextHash||job.current_raw_hash!==job.payload.sourceHash){
@@ -115,9 +120,9 @@ class Broker {
       if(P.skipped(job.resource_key,ruleRows)){
         await tx.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state='SUPERSEDED',lease_until=NULL,updated_at=now() WHERE id=$1",job.id);return {accepted:false,stale:true};
       }
-      await tx.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_results(job_id,resource_id,version_id,worker_id,input_hash,policy_hash,model_sha256,decision,elapsed_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,job.id,job.resource_id,job.version_id,this.worker,job.input_hash,P.POLICY_HASH,P.MODEL.sha256,input.decision,input.elapsedMs);
+      await tx.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_results(job_id,resource_id,version_id,worker_id,input_hash,policy_hash,model_sha256,decision,elapsed_ms,details,result_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`,job.id,job.resource_id,job.version_id,this.worker,job.input_hash,job.policy_hash,P.MODEL.sha256,input.decision,input.elapsedMs,JSON.stringify(details),resultHash);
       await tx.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state='DONE',lease_until=NULL,updated_at=now() WHERE id=$1",job.id);
-      return {accepted:true,duplicate:false,mode:'SHADOW'};
+      return {accepted:true,duplicate:false,mode:'SHADOW',details};
     },{timeout:15000});
   }
   async release(input){
@@ -129,7 +134,7 @@ class Broker {
     await this.touch();
     const jobs=await this.db.$queryRawUnsafe('SELECT state,count(*)::int AS count FROM monitor_local_analysis_jobs GROUP BY state');
     const results=await this.db.$queryRawUnsafe('SELECT decision,count(*)::int AS count FROM monitor_local_analysis_results GROUP BY decision');
-    const recent=await this.db.$queryRawUnsafe(`SELECT a.decision,a.created_at,r.title,r.canonical_url AS url,a.elapsed_ms FROM monitor_local_analysis_results a JOIN monitor_resources r ON r.id=a.resource_id ORDER BY a.created_at DESC LIMIT 10`);
+    const recent=await this.db.$queryRawUnsafe(`SELECT a.decision,a.details,a.created_at,r.title,r.canonical_url AS url,a.elapsed_ms FROM monitor_local_analysis_results a JOIN monitor_resources r ON r.id=a.resource_id ORDER BY a.created_at DESC LIMIT 10`);
     return {mode:'SHADOW',enabled:this.enabled,jobs,results,recent};
   }
   async dispatch(request){
@@ -156,6 +161,8 @@ async function initialize(db){
     await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended('local-worker-schema-1',0))");
     for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await tx.$executeRawUnsafe(statement);
   },{timeout:30000});
+  await db.$executeRawUnsafe("ALTER TABLE monitor_local_analysis_results ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}'::jsonb");
+  await db.$executeRawUnsafe('ALTER TABLE monitor_local_analysis_results ADD COLUMN IF NOT EXISTS result_hash varchar(64)');
 }
 async function stdio(broker,input=process.stdin,output=process.stdout){
   // A bounded line parser closes the transport before an unbounded line can accumulate.

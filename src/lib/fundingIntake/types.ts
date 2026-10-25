@@ -190,6 +190,7 @@ export interface BatchIntakeCreateInput {
 
 /** Internal service argument, never accepted from the public intake routes. */
 export interface SourceWatchIntakeContext {
+  identity?: {reference:string|null;round:string|null};
   handoffKey: string;
   opportunityId: string;
   funderId: string | null;

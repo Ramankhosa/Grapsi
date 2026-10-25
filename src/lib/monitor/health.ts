@@ -3,6 +3,8 @@ import { ledgerDay } from './budget'
 
 import { browserTierEnabled, monitorEngine } from './engine'
 import { WORKER_STALE_MS } from './planner'
+import { localQueueHealth } from './localAnalysis'
+import { coverageSnapshot } from './coverage'
 
 /**
  * Everything the Health strip shows, in one read: is the worker alive, is the
@@ -49,6 +51,8 @@ export async function monitorHealthSnapshot(now = new Date()) {
   }
 
   return {
+    localAnalysis: await localQueueHealth(now),
+    coverage: await coverageSnapshot(),
     engine: monitorEngine(),
     pipelineEnabled: process.env.MONITOR_PIPELINE_ENABLED === 'true',
     paidWorkEnabled: process.env.MONITOR_PAID_WORK_ENABLED === 'true',

@@ -22,8 +22,8 @@ namespace Grapsi.LocalWorker {
             if(model==null)model=new ModelRunner(assets,status);
             connection=new Connection();status("Connecting","Connecting securely to production.");
             await connection.Open(assets.Config,token);
-            var hello=await connection.Call("hello",new {protocol=1,workerId=workerId,displayName=Environment.MachineName,appVersion="1.0.0",modelSha256=Json.Text(assets.Model,"sha256")},token);
-            if(Json.Number(hello,"protocol")!=1||Json.Text(hello,"mode")!="SHADOW"||Json.Text(hello,"policyHash")!=Json.Text(assets.Config,"policyHash"))throw new RpcException("UPGRADE_REQUIRED","Production requires an updated worker.");
+            var hello=await connection.Call("hello",new {protocol=Json.Number(assets.Config,"protocol"),workerId=workerId,displayName=Environment.MachineName,appVersion=Json.Text(assets.Config,"version"),modelSha256=Json.Text(assets.Model,"sha256")},token);
+            if(Json.Number(hello,"protocol")!=Json.Number(assets.Config,"protocol")||Json.Text(hello,"mode")!="SHADOW"||Json.Text(hello,"policyHash")!=Json.Text(assets.Config,"policyHash"))throw new RpcException("UPGRADE_REQUIRED","Production requires an updated worker.");
             failures=0;Files.Log("Connected to production. Results are queued for review.");
             await FlushOutbox(connection,token);
             DateTime idleSince=DateTime.UtcNow,lastStats=DateTime.MinValue;
@@ -61,7 +61,7 @@ namespace Grapsi.LocalWorker {
               var submission=new Dictionary<string,object> {
                 {"jobId",Json.Text(active,"id")},{"leaseToken",Json.Text(active,"leaseToken")},{"inputHash",Json.Text(active,"inputHash")},
                 {"modelSha256",Json.Text(assets.Model,"sha256")},{"policyHash",Json.Text(hello,"policyHash")},
-                {"decision",Json.Text(result,"decision")},{"elapsedMs",Json.Number(result,"elapsedMs")}
+                {"decision",Json.Text(result,"decision")},{"details",Json.Map(result,"details")},{"elapsedMs",Json.Number(result,"elapsedMs")}
               };
               var outbox=Path.Combine(Files.Outbox,Json.Text(active,"id")+".dat");
               Files.Protect(outbox,new {submission=submission,title=PageTitle(page)});
@@ -113,7 +113,7 @@ namespace Grapsi.LocalWorker {
       try {
         var ack=await connection.Call("complete",submission,token);
         Archive(filename,Json.Flag(ack,"accepted")?"accepted":"stale");
-        if(Json.Flag(ack,"accepted")) {Completed++;history(Json.Text(saved,"title"),Json.Text(submission,"decision"),Json.Number(submission,"elapsedMs"));Files.Log("Production acknowledged an analysis result.");}
+        if(Json.Flag(ack,"accepted")) {var title=Json.Text(saved,"title");foreach(var candidate in Json.List(Json.Map(ack,"details"),"candidates")){title=Json.Text(candidate as Dictionary<string,object>,"title",title);break;}Completed++;history(title,Json.Text(submission,"decision"),Json.Number(submission,"elapsedMs"));Files.Log("Production acknowledged an analysis result.");}
         else Files.Log("Production rejected an outdated page result; it was retained locally.");
       }catch(RpcException error) {
         if(new[]{"LEASE_LOST","NOT_FOUND","INVALID_RESULT","INVALID_REQUEST","RESULT_CONFLICT"}.Contains(error.Code)) {Archive(filename,"stale");Files.Log("A stale saved result was retained locally; current work stays with production.");return;}throw;

@@ -206,7 +206,7 @@ async function claimOnce(options: { owner: string; kinds?: TaskKind[]; leaseMs?:
             WHERE r."site_id" = t."site_id" AND r."status" = 'RUNNING' AND r."id" <> t."id"
           )
         )
-      ORDER BY t."priority" ASC, t."available_at" ASC
+      ORDER BY CASE WHEN t."created_at" < ${NOW_UTC} - interval '6 hours' THEN LEAST(t."priority",30) ELSE t."priority" END ASC, t."available_at" ASC
       LIMIT 1
       FOR UPDATE OF t SKIP LOCKED
     )

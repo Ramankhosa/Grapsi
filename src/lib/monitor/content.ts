@@ -101,12 +101,12 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   return { segments: segmentsFromVersion(resource, version), links, changed: previous?.meaningful_hash !== hash }
 }
 
-export function segmentsFromVersion(resource: Pick<MonitorResource, 'id' | 'canonical_url' | 'role'>, version: { id: string; text: string | null; truncated: boolean; page_statuses: unknown }): EvidenceSegment[] {
+export function segmentsFromVersion(resource: Pick<MonitorResource, 'id' | 'canonical_url' | 'role'>, version: { id: string; text: string | null; truncated: boolean; page_statuses: unknown; final_url?: string | null }): EvidenceSegment[] {
   const pages = Array.isArray(version.page_statuses) ? version.page_statuses as Array<{ page: number | null; text?: string; status: string }> : []
   const parts = pages.some(p => typeof p.text === 'string') ? pages : [{ page: null, text: version.text ?? '', status: 'OK' }]
   const role = resource.role === 'GUIDELINES' ? 'GUIDELINES' : resource.role === 'CORRIGENDUM' ? 'CORRIGENDUM' : 'CALL_NOTICE'
   return parts.filter(p => p.text?.trim()).map((p, i) => ({ id: `s:${sha256(`${resource.id}:${p.page ?? i}:${meaningfulHash(p.text ?? '')}`).slice(0, 40)}`, resourceId: resource.id, versionId: version.id,
-    url: resource.canonical_url ?? '', role, page: p.page, text: p.text ?? '', complete: !version.truncated && p.status === 'OK' }))
+    url: version.final_url ?? resource.canonical_url ?? '', role, page: p.page, text: p.text ?? '', complete: !version.truncated && p.status === 'OK' }))
 }
 
 /** A revisit is a recurring fetch, never a cached decision pretending to be a fetch. */

@@ -32,7 +32,7 @@ namespace Grapsi.LocalWorker {
       var keyFile=Path.Combine(Files.Private,"model-api-key.txt");
       if(!File.Exists(keyFile)) {var bytes=new byte[32];using(var random=RandomNumberGenerator.Create())random.GetBytes(bytes);Files.Atomic(keyFile,Encoding.ASCII.GetBytes(BitConverter.ToString(bytes).Replace("-","").ToLowerInvariant()));}
       var key=File.ReadAllText(keyFile).Trim();
-      var args="--model "+Connection.Quote(assets.ModelPath)+" --host 127.0.0.1 --port "+port+" --alias grapsi-local-screen --ctx-size 2048 --parallel 1 --threads "+Math.Max(1,Math.Min(3,Environment.ProcessorCount-1))+" --threads-batch 3 --n-gpu-layers 0 --no-repack --batch-size 512 --ubatch-size 128 --cache-ram 0 --jinja --reasoning off --reasoning-budget 0 --api-key-file "+Connection.Quote(keyFile);
+      var args="--model "+Connection.Quote(assets.ModelPath)+" --host 127.0.0.1 --port "+port+" --alias grapsi-local-screen --ctx-size 4096 --parallel 1 --threads "+Math.Max(1,Math.Min(3,Environment.ProcessorCount-1))+" --threads-batch 3 --n-gpu-layers 0 --no-repack --batch-size 512 --ubatch-size 128 --cache-ram 0 --jinja --reasoning off --reasoning-budget 0 --api-key-file "+Connection.Quote(keyFile);
       children=new ChildGroup();
       process=new Process {StartInfo=new ProcessStartInfo(assets.RuntimePath,args) {UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(assets.RuntimePath),RedirectStandardOutput=true,RedirectStandardError=true} };
       process.Start();children.Add(process);
@@ -58,19 +58,21 @@ namespace Grapsi.LocalWorker {
       status("Analysing",Engine.PageTitle(page));
       var prompt=template.Replace("{DATE}",Json.Text(payload,"asOfDate"));
       var watch=Stopwatch.StartNew();
-      var schema=new {type="object",properties=new {type=new {type="string",@enum=new[]{"CALL","RELATED","GENERAL","UNSURE"}}},required=new[]{"type"},additionalProperties=false};
-      var body=new {model="grapsi-local-screen",messages=new[]{new{role="system",content=prompt},new{role="user",content=Json.Write(page)}},response_format=new {type="json_schema",json_schema=new {name="call_filter",strict=true,schema=schema}},temperature=0,max_tokens=24,stream=false,seed=42,reasoning_effort="none"};
+      var schema=Json.Map(assets.Config,"resultSchema");
+      var body=new {model="grapsi-local-screen",messages=new[]{new{role="system",content=prompt},new{role="user",content=Json.Write(page)}},response_format=new {type="json_schema",json_schema=new {name="call_filter",strict=true,schema=schema}},temperature=0,max_tokens=1024,stream=false,seed=42,reasoning_effort="none"};
       using(var content=new StringContent(Json.Write(body),Encoding.UTF8,"application/json"))
       using(var response=await client.PostAsync(endpoint+"/v1/chat/completions",content,token)) {
         // An oversized/unreadable page is retained for stronger review, not retried forever.
         if(response.StatusCode==HttpStatusCode.BadRequest)return new Dictionary<string,object>{{"decision","UNSURE"},{"elapsedMs",(int)watch.ElapsedMilliseconds}};
         response.EnsureSuccessStatusCode();
+        try {
         var json=Json.Read(await response.Content.ReadAsStringAsync());
         Dictionary<string,object> choice=null;foreach(var item in Json.List(json,"choices")){choice=item as Dictionary<string,object>;break;}
         var message=Json.Map(choice,"message");var result=Json.Read(Json.Text(message,"content"));
         var decision=Json.Text(result,"type");
-        if(Array.IndexOf(new[]{"CALL","RELATED","GENERAL","UNSURE"},decision)<0)throw new InvalidDataException("The local model returned an invalid classification.");
-        return new Dictionary<string,object>{{"decision",decision},{"elapsedMs",(int)watch.ElapsedMilliseconds}};
+        if(Array.IndexOf(new[]{"CALL","RELATED","GENERAL","UNSURE"},decision)<0)decision="UNSURE";
+        return new Dictionary<string,object>{{"decision",decision},{"details",result},{"elapsedMs",(int)watch.ElapsedMilliseconds}};
+        }catch(ArgumentException){return new Dictionary<string,object>{{"decision","UNSURE"},{"elapsedMs",(int)watch.ElapsedMilliseconds}};}
       }
     }
     public void Stop() {

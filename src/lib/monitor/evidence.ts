@@ -19,7 +19,7 @@ export function verifyCitation(citation: unknown, segments: EvidenceSegment[]): 
 }
 export function evidenceFingerprint(segments: EvidenceSegment[], context: unknown) {
   return fingerprint({ version: EVIDENCE_VERSION, segments: segments.map(s => ({
-    resource: s.resourceId, role: s.role, page: s.page, complete: s.complete, text: normalQuote(s.text),
+    source: s.url, role: s.role, page: s.page, complete: s.complete, text: normalQuote(s.text),
   })), context })
 }
 export function renderEvidence(segments: EvidenceSegment[], maxChars = 60_000) {
@@ -29,7 +29,7 @@ export function renderEvidence(segments: EvidenceSegment[], maxChars = 60_000) {
   for (const s of segments) {
     if (remaining <= 0) break
     const text = s.text.slice(0, remaining)
-    selected.push({ ...s, text, complete: s.complete && text.length === s.text.length })
+    selected.push({ ...s, id: `E${selected.length + 1}`, text, complete: s.complete && text.length === s.text.length })
     remaining -= text.length
   }
   return {
@@ -40,9 +40,11 @@ export function renderEvidence(segments: EvidenceSegment[], maxChars = 60_000) {
 }
 export type Lifecycle = 'OPEN' | 'ROLLING' | 'FUTURE' | 'EXPIRED' | 'UNKNOWN' | 'WITHDRAWN' | 'CANCELLED' | 'POSTPONED' | 'REOPENED'
 export function lifecycleAt(closeDate: string | null, opensOn: string | null, explicit: string | null, now = new Date()): Lifecycle {
-  if (['WITHDRAWN', 'CANCELLED', 'POSTPONED', 'REOPENED', 'ROLLING'].includes(explicit ?? '')) return explicit as Lifecycle
-  if (opensOn && Date.parse(opensOn) > now.getTime()) return 'FUTURE'
+  if (['WITHDRAWN', 'CANCELLED', 'POSTPONED'].includes(explicit ?? '')) return explicit as Lifecycle
   // Date-only deadlines expire at end of the stated day in IST, not UTC midnight.
-  if (closeDate && /^\d{4}-\d{2}-\d{2}$/.test(closeDate)) return now.getTime() > Date.parse(`${closeDate}T23:59:59+05:30`) ? 'EXPIRED' : 'OPEN'
+  if (closeDate && /^\d{4}-\d{2}-\d{2}$/.test(closeDate) && now.getTime() > Date.parse(`${closeDate}T23:59:59+05:30`)) return 'EXPIRED'
+  if (opensOn && Date.parse(`${opensOn}T00:00:00+05:30`) > now.getTime()) return 'FUTURE'
+  if (['REOPENED', 'ROLLING'].includes(explicit ?? '')) return explicit as Lifecycle
+  if (closeDate && /^\d{4}-\d{2}-\d{2}$/.test(closeDate)) return 'OPEN'
   return 'UNKNOWN'
 }

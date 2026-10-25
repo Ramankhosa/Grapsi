@@ -10161,6 +10161,8 @@ model MonitorLocalAnalysisResult {
   model_sha256 String @db.VarChar(64)
   decision String @db.VarChar(16)
   elapsed_ms Int
+  details Json @default("{}")
+  result_hash String? @db.VarChar(64)
   mode String @default("SHADOW") @db.VarChar(16)
   created_at DateTime @default(now()) @db.Timestamptz(6)
   job MonitorLocalAnalysisJob @relation(fields:[job_id],references:[id],onDelete:Cascade,onUpdate:NoAction)
@@ -10169,4 +10171,27 @@ model MonitorLocalAnalysisResult {
   worker MonitorLocalWorker @relation(fields:[worker_id],references:[id],onDelete:NoAction,onUpdate:NoAction)
   @@index([resource_id,created_at(sort:Desc)],map:"monitor_local_results_resource")
   @@map("monitor_local_analysis_results")
+}
+
+model MonitorProcessingClaim {
+  input_key String @id
+  owner String
+  lease_until DateTime @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  @@index([lease_until],map:"monitor_processing_claims_expiry")
+  @@map("monitor_processing_claims")
+}
+
+model MonitorCoverageGap {
+  id String @id @default(cuid())
+  site_id String
+  url String
+  kind String
+  reason String
+  state String @default("OPEN")
+  first_seen_at DateTime @default(now()) @db.Timestamp(3)
+  last_seen_at DateTime @default(now()) @db.Timestamp(3)
+  @@unique([site_id, url, kind])
+  @@index([state, last_seen_at])
+  @@map("monitor_coverage_gaps")
 }

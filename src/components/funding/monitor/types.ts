@@ -43,6 +43,8 @@ export type MonitorSource = {
 export type MonitorEngine = 'legacy' | 'v2'
 
 export type HealthSnapshot = {
+  coverage?: {groups:Record<string,number>;frontier:Record<string,number>;recent:Array<{id:string;kind:string;url:string;reason:string}>}
+  localAnalysis?: { required: boolean; online: boolean; ageSeconds: number | null; backlogWarning: boolean; waiting: number; needsAttention: number }
   engine: MonitorEngine
   browserEnabled: boolean
   worker: {

@@ -145,6 +145,10 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
   if (process.env.MONITOR_PAID_WORK_ENABLED !== 'true') throw new MonitorConfigError('PAID_WORK_DISABLED', 'Paid Source Watch work is disabled until its actor, provider and budgets are verified')
   const actor = await resolveMonitorActor()
   const { models } = await stageModels(input.stage)
+  const receipt=await prisma.monitorLlmAttempt.findFirst({where:{operation_key:input.operationKey,status:'SUCCEEDED'},orderBy:{attempt_no:'desc'}})
+  const savedOutput=(receipt?.usage as {outputText?:unknown}|null)?.outputText
+  if(receipt&&typeof savedOutput==='string'&&savedOutput.trim()&&models.includes(receipt.model??''))return {text:jsonResponseText(savedOutput),model:receipt.model!,attemptId:receipt.id,actualMicros:receipt.actual_cost_micros??0n,attemptNo:receipt.attempt_no}
+  const rejected=await prisma.monitorLlmAttempt.findMany({where:{operation_key:input.operationKey,status:'FAILED_UNBILLED',error_class:'CONFIG'},select:{model:true}})
   const previous = await prisma.monitorLlmAttempt.count({ where: { operation_key: input.operationKey } })
   const limit = maxPaidAttempts()
   if (previous >= limit) throw new PaidAttemptsExhaustedError(input.operationKey, previous)
@@ -163,6 +167,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
 
   for (const model of models) {
     if (attemptNo > limit) break
+    if(rejected.some(r=>r.model===model)){lastClass='CONFIG';lastMessage='This exact request was already rejected by this model; fix its versioned contract before replay.';continue}
     const account = getProviderFromModelCode(model)
     const breaker = await breakerState(account)
     if (breaker.state === 'OPEN') {
@@ -244,6 +249,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
         outputTokens: meta.outputTokens,
         thoughtTokens: meta.thoughtTokens,
         modelUsed: meta.modelUsed,
+        outputText: result.response.output.slice(0,300000),
       }
       // Missing usage is not evidence of a free request. Keep a conservative
       // charge until an operator can reconcile the provider's receipt.

@@ -518,7 +518,7 @@ export class GeminiProvider implements LLMProvider {
     }
 
     if (thinkingLevel) {
-      body.thinking_level = thinkingLevel
+      body.generationConfig.thinkingConfig = { thinkingLevel }
     }
 
     // Use the configured baseURL (defaults to https://generativelanguage.googleapis.com/v1beta)
@@ -535,17 +535,18 @@ export class GeminiProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`Gemini API error: ${response.status} ${errorText}`)
+      let detail: { error?: { status?: string } } = {}
+      try { detail = JSON.parse(errorText) } catch { /* HTTP status still identifies the rejection. */ }
+      throw Object.assign(new Error(`Gemini API error: ${response.status} ${errorText.slice(0, 2000)}`), {
+        status: response.status, code: detail.error?.status ?? 'HTTP_ERROR',
+        requestId: response.headers.get('x-request-id') ?? response.headers.get('x-goog-request-id') ?? undefined,
+      })
     }
 
     const data = await response.json()
     const candidate = data?.candidates?.[0]
     const candidateParts = candidate?.content?.parts || []
-    const output = candidateParts.map((p: any) => p?.text).filter(Boolean).join('\n')
-
-    if (!output || output.trim().length === 0) {
-      throw new Error(`Gemini API returned empty response (finishReason: ${candidate?.finishReason || 'unknown'})`)
-    }
+    const output = candidateParts.filter((p: any) => !p?.thought).map((p: any) => p?.text).filter(Boolean).join('\n')
 
     const usage =
       data?.usageMetadata && typeof data.usageMetadata === 'object'
@@ -558,6 +559,11 @@ export class GeminiProvider implements LLMProvider {
     const cachedInputTokens = this.readTokenNumber(
       usage?.cachedContentTokenCount ?? usage?.cached_content_token_count
     )
+    if (!output.trim()) {
+      throw Object.assign(new Error(`Gemini API returned empty response (finishReason: ${candidate?.finishReason || 'unknown'})`), {
+        code: 'EMPTY_RESPONSE', ...(usage ? { billableUsage: { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens } } : {}),
+      })
+    }
     return {
       output,
       outputTokens,

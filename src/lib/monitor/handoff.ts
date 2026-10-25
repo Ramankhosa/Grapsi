@@ -12,8 +12,9 @@ export async function handoffOpportunity(lease: Lease) {
   const opportunity = await prisma.monitorOpportunity.findUniqueOrThrow({ where: { id }, include: { primary_resource: true } })
   const revision = Number(lease.payload.reviewRevision)
   if (opportunity.review_revision !== revision || opportunity.review_state === 'REJECTED') throw new Error('Handoff is stale')
-  const extracted = opportunity.field_evidence as unknown as { payload?: FundingExtractionPayload; conflicts?: string[] }
+  const extracted = opportunity.field_evidence as unknown as { payload?: FundingExtractionPayload; conflicts?: string[]; quality?: {state:string}; identity?:{reference:string|null;round:string|null} }
   if (!extracted?.payload || extracted.conflicts?.length || opportunity.stale_evidence) throw new Error('Resolve evidence conflicts before drafting')
+  if(extracted.quality?.state!=='READY')throw new Error('Identity, invitation and current application-window evidence are required before drafting')
   const payload = extracted.payload
   const currentLifecycle = lifecycleAt(extracted.payload.fields.close_date.value as string | null, extracted.payload.fields.open_date.value as string | null, opportunity.lifecycle)
   if (['EXPIRED', 'CANCELLED', 'WITHDRAWN', 'POSTPONED'].includes(currentLifecycle)) throw new Error('This announcement is no longer open; review its status before creating a draft')
@@ -27,7 +28,7 @@ export async function handoffOpportunity(lease: Lease) {
     if (current.review_revision !== revision) throw new Error('Discovery changed before handoff')
     const existing = await tx.monitorHandoff.findUnique({ where: { handoff_key: lease.operationKey } })
     if (existing && await tx.fundingIntakeBatch.findUnique({ where: { handoff_key: existing.handoff_key } })) return existing
-    const match = await matchCatalog(url, opportunity.title ?? '', opportunity.funder_id, tx, opportunity.round_key)
+    const match = await matchCatalog(url, opportunity.title ?? '', opportunity.funder_id, tx, opportunity.round_key, opportunity.primary_resource?.final_url?[opportunity.primary_resource.final_url]:[], extracted.identity?.reference)
     const competing = await tx.monitorHandoff.findFirst({ where: { opportunity_id: { not: id }, state: { in: ['PENDING', 'LINKED'] }, opportunity: { primary_resource: { dedup_key: key } } }, include: { opportunity: { select: { title: true } } } })
     const year = opportunity.title?.match(/\b20\d{2}\b/)?.[0]
     const otherYear = competing?.opportunity.title?.match(/\b20\d{2}\b/)?.[0]
@@ -56,7 +57,7 @@ export async function handoffOpportunity(lease: Lease) {
   if (current.review_revision !== revision || current.review_state === 'REJECTED' || current.stale_evidence) throw new Error('Discovery changed before intake handoff')
   const batch = await fundingIntakeService.createBatch({ userId: actor.userId, email: 'source-watch@system.invalid', role: 'CURATOR', tenantId: actor.tenantId }, {
     label: `Source Watch: ${opportunity.title ?? url}`, jobs: [{ sources: [{ sourceKey: 'source_1', inputType: 'text', sourceText: text, originUrl: url }], detailsSourceKey: 'source_1', autoCreateDraft: true, extractAll: false, autoPublish: false }],
-  }, { handoffKey: handoff.handoff_key, opportunityId: id, funderId: opportunity.funder_id, payload })
+  }, { handoffKey: handoff.handoff_key, opportunityId: id, funderId: opportunity.funder_id, payload, identity:extracted.identity })
     const job = await tx.fundingIntakeJob.findFirst({ where: { batch_id: batch.id } })
     await tx.monitorHandoff.update({ where: { id: handoff.id }, data: { state: 'LINKED', intake_batch_id: batch.id, intake_job_id: job?.id, funding_call_id: job?.linked_funding_call_id } })
     await tx.monitorOpportunity.update({ where: { id }, data: { processing_state: 'DRAFTED', funding_call_id: job?.linked_funding_call_id ?? null } })

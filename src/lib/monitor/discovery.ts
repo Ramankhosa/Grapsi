@@ -8,6 +8,7 @@ import { sameSiteHost, identifyUrl } from './urlIdentity'
 import type { MonitorSite } from '@/lib/prisma-generated'
 import { tlsExceptionHosts } from './sites'
 import { isMonitorFetchError } from './errors'
+import { retainCoverageGap } from './coverage'
 
 export const DISCOVERY_LIMITS = { requests: 10, frontier: 2000, depth: 4, linksPerPage: 150 }
 export function isCrawlTrap(url: string): boolean {
@@ -26,6 +27,11 @@ export function discoveryScope(site: Pick<MonitorSite, 'host' | 'related_hosts'>
 export async function addFrontier(db: Db, site: MonitorSite, urls: Array<{ url: string; title?: string; depth?: number; from?: string }>) {
   const count = await db.monitorCrawlFrontier.count({ where: { site_id: site.id } })
   const capacity = Math.max(0, DISCOVERY_LIMITS.frontier - count)
+  for(const input of urls){
+    const id=identifyUrl(input.url)
+    if(id&&!discoveryScope(site)(id.host)&&/fund|grant|call|proposal|appl|fellow|scholar|अनुदान/i.test(`${input.title??''} ${id.canonical}`))await retainCoverageGap(db,site.id,id.canonical,'HOST_APPROVAL','Observed funding link requires related-host approval before fetching.')
+    else if(id&&discoveryScope(site)(id.host))await db.monitorCoverageGap.updateMany({where:{site_id:site.id,url:id.canonical,kind:'HOST_APPROVAL',state:'OPEN'},data:{state:'RESOLVED',last_seen_at:new Date()}})
+  }
   const candidates = urls.map(input => {
     const id = identifyUrl(input.url)
     if (!id || !discoveryScope(site)(id.host) || isCrawlTrap(id.canonical) || (input.depth ?? 0) > DISCOVERY_LIMITS.depth || /\.(pdf|docx?|png|zip|jpe?g|gif)([?#]|$)/i.test(id.canonical)) return null
@@ -35,6 +41,7 @@ export async function addFrontier(db: Db, site: MonitorSite, urls: Array<{ url: 
   const existing = new Set((await db.monitorCrawlFrontier.findMany({ where: { site_id: site.id, dedup_key: { in: candidates.map(c => c.dedup_key) } }, select: { dedup_key: true } })).map(c => c.dedup_key))
   const fresh = [...new Map(candidates.filter(c => !existing.has(c.dedup_key)).map(c => [c.dedup_key, c])).values()]
   const records = fresh.slice(0, capacity)
+  for(const input of fresh.slice(capacity))await retainCoverageGap(db,site.id,input.url,'UNVISITED_LIMIT','Site exploration reached its retained frontier limit; this link has not been visited.')
   const added = records.length ? (await db.monitorCrawlFrontier.createMany({ data: records, skipDuplicates: true })).count : 0
   return { added, limited: fresh.length > capacity }
 }

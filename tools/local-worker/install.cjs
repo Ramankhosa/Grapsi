@@ -5,11 +5,11 @@ async function main(){
  process.umask(0o077);
  const appRoot='/var/www/granter/Grapsi',db=loadDb(appRoot);
  try{
-  const folder=path.join(__dirname,'prisma','migrations'),target='20261024150000_local_analysis_worker';
+  const folder=path.join(__dirname,'prisma','migrations'),targets=['20261024150000_local_analysis_worker','20261025100000_local_titles_and_shared_extraction','20261025110000_monitor_coverage_gaps'];
   const applied=await db.$queryRawUnsafe('SELECT migration_name,finished_at,rolled_back_at FROM _prisma_migrations');
   const known=new Set(applied.filter(r=>r.finished_at&&!r.rolled_back_at).map(r=>r.migration_name));
   const pending=fs.readdirSync(folder,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>e.name).filter(n=>!known.has(n));
-  if(pending.some(n=>n!==target))throw Error('Unexpected pending migration; deployment stopped.');
+  if(pending.some(n=>!targets.includes(n)))throw Error('Unexpected pending migration; deployment stopped.');
   const stamp=new Date().toISOString().replace(/[:.]/g,'-');
   const backup=path.join(appRoot,'backups','local-worker-'+stamp);fs.mkdirSync(backup,{mode:0o700});
   const url=new URL(process.env.DATABASE_URL);

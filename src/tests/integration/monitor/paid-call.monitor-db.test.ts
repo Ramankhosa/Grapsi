@@ -13,6 +13,19 @@ afterAll(async () => { vi.unstubAllEnvs(); await resetMonitorTables(); await db.
 const input = (key: string) => ({ stage: 'FUNDING_SOURCE_TRIAGE', operationKey: key, systemPrompt: 'Return JSON', prompt: 'Funding call', jsonSchema: { name: 'fixture', schema: { type: 'object' } }, maxOutputTokens: 250, scopes: ['PLATFORM'] })
 const success = { success: true, response: { output: '{"ok":true}', outputTokens: 8, modelClass: 'fixture', metadata: { inputTokens: 12, outputTokens: 8, thoughtTokens: 0 } } }
 describe('paid provider attempt accounting', () => {
+  it('reuses a durable paid receipt after a crash before stage caching',async()=>{
+    vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce(success)
+    const first=await runPaidStage(input('receipt-recovery'));const again=await runPaidStage(input('receipt-recovery'))
+    expect(again.attemptId).toBe(first.attemptId);expect(vi.mocked(llmGateway.executeLLMOperation)).toHaveBeenCalledTimes(1);expect(await db.monitorLlmAttempt.count()).toBe(1)
+  })
+  it('does not resubmit a definitive rejected model request on replay',async()=>{
+    vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({success:false,error:{message:'Invalid request',details:{providerStatus:400,providerCode:'INVALID_ARGUMENT'}}} as any).mockResolvedValueOnce({success:false,error:{message:'Invalid request',details:{providerStatus:400}}} as any)
+    await expect(runPaidStage(input('rejected'))).rejects.toThrow()
+    const calls=vi.mocked(llmGateway.executeLLMOperation).mock.calls.length
+    await expect(runPaidStage(input('rejected'))).rejects.toThrow()
+    expect(vi.mocked(llmGateway.executeLLMOperation).mock.calls.length).toBe(calls)
+    expect((await db.monitorBudgetLedger.findFirstOrThrow()).reserved_micros).toBe(0n)
+  })
   it('accepts a single valid fenced JSON response without adding a provider attempt', async () => {
     vi.mocked(llmGateway.executeLLMOperation).mockResolvedValueOnce({ ...success, response: { ...success.response, output: '```json\n{"ok":true}\n```' } })
     expect((await runPaidStage(input('fenced'))).text).toBe('{"ok":true}')

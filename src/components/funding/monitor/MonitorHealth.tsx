@@ -104,6 +104,13 @@ export default function MonitorHealth({
       )}
 
       {notice && <div className="rounded-lg border border-cobalt-100 bg-cobalt-50 p-3 text-[13px] text-cobalt-700">{notice}</div>}
+      {health.localAnalysis && <div className="cb-card p-4 text-sm space-y-2">
+        <strong>Laptop analysis: {health.localAnalysis.online ? 'connected' : 'offline'}</strong>
+        <p>{health.localAnalysis.waiting} pages waiting · {health.localAnalysis.needsAttention} need attention</p>
+        {health.localAnalysis.required && !health.localAnalysis.online && <p className="text-amber-800">New pages remain queued until the laptop returns. Paid screening will wait.</p>}
+        {health.localAnalysis.backlogWarning && <p className="text-amber-800">Some pages have waited more than six hours. Check approaching deadlines and laptop availability.</p>}
+      </div>}
+      {health.coverage && <div className="cb-card p-4 text-sm space-y-2"><strong>Coverage needing attention</strong><p>{Object.entries(health.coverage.frontier).map(([state,count])=>`${count} ${state.toLowerCase()} links`).join(' · ')||'No exploration recorded'}</p><p>{Object.entries(health.coverage.groups).map(([kind,count])=>`${count} ${kind.toLowerCase().replace(/_/g,' ')}`).join(' · ')||'No retained coverage gaps'}</p><details><summary>Recent coverage gaps</summary><ul>{health.coverage.recent.map(gap=><li key={gap.id} className="py-2"><a href={gap.url} target="_blank" rel="noreferrer" className="underline">{gap.url}</a><p>{gap.reason}</p></li>)}</ul></details></div>}
 
       <div className="cb-card p-4">
         <div className="flex items-center gap-2">

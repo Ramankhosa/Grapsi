@@ -1106,7 +1106,7 @@ async function persistDraft(
     origin_school_source: job.origin_school_source || null,
     metadata: {
       source_module: 'funding_intake',
-      ...(sourceWatch ? { origin: 'source_watch', source_watch_opportunity_id: sourceWatch.opportunityId } : {}),
+      ...(sourceWatch ? { origin: 'source_watch', source_watch_opportunity_id: sourceWatch.opportunityId, source_watch_identity: sourceWatch.identity??null } : {}),
       intake_job_id: job.id,
       saved_by: operator.email,
       saved_at: new Date().toISOString(),

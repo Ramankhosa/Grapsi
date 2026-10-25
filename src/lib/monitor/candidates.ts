@@ -5,15 +5,18 @@ import { readResource } from './content'
 import { fingerprint, meaningfulText } from './hashing'
 import { matchCatalog } from './matching'
 import { estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
-import { completeTaskInTx, enqueueTask, withFence, type Db, type Lease } from './queue'
+import { completeTaskInTx, deferTask, enqueueTask, withFence, type Db, type Lease } from './queue'
 import { RELEVANCE_VERSION, scoreRelevance } from './relevance'
 import type { SafeFetch } from './safeFetch'
 import { emitEvent } from './events'
 import { autoDraftAllowed } from './metrics'
 import { isMonitorFetchError } from './errors'
 import { LeaseLostError } from './queue'
+import { localSuggestion, queueLocalAnalysis } from './localAnalysis'
+import { addFrontier } from './discovery'
+import { retainCoverageGap } from './coverage'
 
-export const TRIAGE_VERSION = 'triage-1'
+export const TRIAGE_VERSION = 'triage-2'
 export type TriageVerdict = 'NOT_FUNDING' | 'NEW_OPPORTUNITY' | 'UPDATE_TO_EXISTING' | 'UNSURE' | 'NEEDS_EVIDENCE'
 export interface ItemDecision { id: string; verdict: TriageVerdict; confidence: number; reason: string; type: string }
 const VERDICTS = ['NOT_FUNDING', 'NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING', 'UNSURE', 'NEEDS_EVIDENCE']
@@ -45,6 +48,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
   const ids = Array.isArray(lease.payload.resourceIds) ? lease.payload.resourceIds.filter((id): id is string => typeof id === 'string').slice(0, 25) : []
   const resources = await prisma.monitorResource.findMany({ where: { id: { in: ids }, site: { status: 'ACTIVE' } }, include: { site: { include: { funders: { where: { status: 'CONFIRMED' } } } }, observations: { include: { source: true }, orderBy: { last_seen_at: 'desc' }, take: 5 } } })
   const pending: Array<{ resource: typeof resources[number]; cacheKey: string; fullHash: string; opportunityId: string; prompt: Record<string, unknown> }> = []
+  let waitingForLocal=0
   for (const r of resources) {
     const observation = r.observations[0]
     const config = { include: observation?.source.keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), exclude: observation?.source.exclude_keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), languages: r.site.language_profile }
@@ -57,20 +61,44 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     let content = ''
     let contentHash = ''
     let fullHash = ''
+    let completeEvidence=false
     if (score.outcome !== 'STRONG_NEGATIVE' && r.canonical_url) {
       let fetched
       try { fetched = await readResource(r, r.site, lease, deps.fetch, deps.signal) }
       catch (error) {
         if (error instanceof MonitorCapacityError || error instanceof LeaseLostError || (isMonitorFetchError(error) && error.isDeferral)) throw error
         await withFence(lease, tx => tx.monitorOpportunity.update({ where: { id: opportunity.id }, data: { processing_state: 'NEEDS_EVIDENCE', review_state: 'PENDING', triage_reason: `Detail evidence could not be read: ${error instanceof Error ? error.message : 'fetch failed'}` } }))
+        await withFence(lease,tx=>retainCoverageGap(tx,r.site_id,r.canonical_url!,'UNREADABLE',error instanceof Error?error.message:'Evidence could not be read'))
         continue
       }
       content = fetched.segments.map(s => s.text).join('\n')
+      await withFence(lease,tx=>tx.monitorCoverageGap.updateMany({where:{site_id:r.site_id,url:r.canonical_url!,kind:'UNREADABLE',state:'OPEN'},data:{state:'RESOLVED',last_seen_at:new Date()}}))
+      completeEvidence=content.length>=80&&fetched.segments.length>0&&fetched.segments.every(s=>s.complete)
+      if(fetched.links.some(l=>/\.pdf(?:[?#]|$)|\.docx(?:[?#]|$)/i.test(l.url)))completeEvidence=false
+      if(fetched.links.length)await withFence(lease,tx=>addFrontier(tx,r.site,fetched.links.map(l=>({url:l.url,title:l.title,from:r.canonical_url!}))))
       fullHash = fingerprint(fetched.segments.map(s => ({ page: s.page, text: meaningfulText(s.text) })))
       contentHash = fingerprint(meaningfulText(content.slice(0, 2000)))
       score = scoreRelevance(r.title ?? '', `${observation?.context_text ?? ''}\n${content.slice(0, 4000)}`, r.canonical_url, config)
     }
-    const key = fingerprint({ stage: TRIAGE_VERSION, schema: SCHEMA, routing: ROUTING_POLICY_VERSION, policy: RELEVANCE_VERSION, config, funders: r.site.funders.map(f => f.funder_id).sort(), url: r.canonical_url, title: r.title, context: observation?.context_hash, contentHash })
+    const funderId=r.site.funders.length===1?r.site.funders[0].funder_id:null
+    const current=await prisma.monitorResource.findUniqueOrThrow({where:{id:r.id},select:{final_url:true}})
+    let early=await matchCatalog(r.canonical_url??'',r.title??'',funderId,prisma,null,current.final_url?[current.final_url]:[])
+    if(early.type==='UPDATE_OF'&&early.callId&&completeEvidence){
+      const call=await prisma.fundingCall.findUniqueOrThrow({where:{id:early.callId},select:{normalized_text:true,raw_text:true,catalog_status:true}})
+      const stored=call.normalized_text||call.raw_text
+      if(call.catalog_status==='PUBLISHED'&&stored&&meaningfulText(stored)===meaningfulText(content)){
+        await withFence(lease,tx=>tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'DONE',review_state:['REJECTED','PUBLISHED','MERGED','SNOOZED'].includes(opportunity.review_state)?opportunity.review_state:'NONE',triage_verdict:'UPDATE_TO_EXISTING',triage_confidence:1,triage_reason:'Existing verified call and complete evidence are unchanged; no paid request needed.',match_type:'UPDATE_OF',match_confidence:'EXACT',funding_call_id:early.callId,decision_versions:{prompt:TRIAGE_VERSION,model:'deterministic-existing-1',fullHash}}}))
+        continue
+      }
+    }
+    const local=process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'?await localSuggestion(r.id):null
+    if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
+      await withFence(lease,async tx=>{await queueLocalAnalysis(r.id,tx);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'SCORED',triage_reason:'Waiting for laptop first-pass analysis; no paid screening has run.'}})})
+      waitingForLocal++;continue
+    }
+    const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title
+    early=await matchCatalog(r.canonical_url??'',proposed??'',funderId,prisma,null,current.final_url?[current.final_url]:[])
+    const key = fingerprint({ stage: TRIAGE_VERSION, schema: SCHEMA, routing: ROUTING_POLICY_VERSION, policy: RELEVANCE_VERSION, config, funders: r.site.funders.map(f => f.funder_id).sort(), url: r.canonical_url, title: r.title, context: observation?.context_hash, contentHash, fullHash, local:local?{decision:local.decision,details:local.details}:null })
     const priorVersions = prior?.decision_versions as { input?: string; fullHash?: string } | null
     if (opportunity.id === prior?.id && prior.review_state === 'PUBLISHED' && (prior.stale_evidence || (priorVersions?.input && priorVersions.input !== key) || (priorVersions?.fullHash && priorVersions.fullHash !== fullHash))) {
       opportunity = await withFence(lease, tx => tx.monitorOpportunity.create({ data: { site_id: r.site_id, primary_resource_id: r.id, title: r.title, bootstrap: false } }))
@@ -84,13 +112,18 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       })
       continue
     }
+    if(early.type==='UPDATE_OF'&&early.callId){
+      await applyDecision(lease,opportunity.id,r.id,{id:r.id,verdict:'UPDATE_TO_EXISTING',confidence:1,reason:'Official URL and call title match an existing call; changed or unverified evidence requires an update review.',type:'existing-call'},'deterministic-existing-1',key,fullHash,proposed??undefined)
+      continue
+    }
+    if(local?.decision==='GENERAL'&&parseInt(key.slice(0,8),16)%10===0)await withFence(lease,tx=>tx.monitorAuditSample.create({data:{opportunity_id:opportunity.id,resource_id:r.id,stage:'LOCAL',sampled_outcome:'GENERAL',sampling_weight:10}}))
     const cached = await prisma.monitorStageCache.findUnique({ where: { cache_key: key } })
     if (cached) {
       await withFence(lease, tx => tx.monitorStageCache.update({ where: { id: cached.id }, data: { hit_count: { increment: 1 }, last_hit_at: new Date() } }))
       await applyDecision(lease, opportunity.id, r.id, cached.result as unknown as ItemDecision, cached.model_used ?? 'cached', key, fullHash)
       continue
     }
-    pending.push({ resource: r, cacheKey: key, fullHash, opportunityId: opportunity.id, prompt: { id: r.id, title: r.title, url: r.canonical_url, context: observation?.context_text?.slice(0, 600), text: content.slice(0, 2000), completeness: content.length <= 2000 ? 'available-text' : 'PARTIAL' } })
+    pending.push({ resource: r, cacheKey: key, fullHash, opportunityId: opportunity.id, prompt: { id: r.id, title: r.title, url: r.canonical_url, localSuggestion:local, context: observation?.context_text?.slice(0, 600), text: content.slice(0, 5000), completeness: completeEvidence && content.length <= 5000 ? 'available-text' : 'PARTIAL' } })
   }
   // Compact packing; caches remain per item, independent of batch composition.
   while (pending.length) {
@@ -106,22 +139,24 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     try { parsed = JSON.parse(result.text) } catch { parsed = null }
     const decisions = validateBatch(parsed, batch.map(b => b.resource.id))
     for (const b of batch) {
-      const decision = decisions.get(b.resource.id)
+      let decision = decisions.get(b.resource.id)
       if (!decision) continue
+      if(decision.verdict==='NOT_FUNDING'&&b.prompt.completeness==='PARTIAL')decision={...decision,verdict:'NEEDS_EVIDENCE',confidence:0,reason:'Only part of the source was available; a negative screening result requires further evidence.'}
       await withFence(lease, tx => tx.monitorStageCache.upsert({ where: { cache_key: b.cacheKey }, create: { cache_key: b.cacheKey, stage: 'TRIAGE', result: decision as unknown as Prisma.InputJsonObject, model_used: result.model, routing_policy_version: ROUTING_POLICY_VERSION, cost_micros: result.actualMicros / BigInt(batch.length) }, update: {} }))
       await applyDecision(lease, b.opportunityId, b.resource.id, decision, result.model, b.cacheKey, b.fullHash)
     }
     if (decisions.size !== batch.length) { await recordInvalidOutput(result.attemptId, 'Triage omitted or duplicated item ids'); throw new Error('Triage omitted or duplicated item ids; only unresolved items will be retried') }
   }
-  await withFence(lease, tx => completeTaskInTx(tx, lease, { processed: resources.length }))
+  if(waitingForLocal)await deferTask(lease,new Date(Date.now()+60000),`${waitingForLocal} pages await laptop analysis; paid screening is held.`)
+  else await withFence(lease, tx => completeTaskInTx(tx, lease, { processed: resources.length }))
 }
 
-async function applyDecision(lease: Lease, opportunityId: string, resourceId: string, decision: ItemDecision, model: string, inputKey: string, fullHash: string) {
+async function applyDecision(lease: Lease, opportunityId: string, resourceId: string, decision: ItemDecision, model: string, inputKey: string, fullHash: string, proposedTitle?:string) {
   const resource = await prisma.monitorResource.findUniqueOrThrow({ where: { id: resourceId } })
   const funders = await prisma.monitorSiteFunder.findMany({ where: { site_id: resource.site_id, status: 'CONFIRMED' } })
   const funderId = funders.length === 1 ? funders[0].funder_id : null
   // Catalog association is recomputed, even on a triage cache hit.
-  const match = await matchCatalog(resource.canonical_url ?? '', resource.title ?? '', funderId)
+  const match = await matchCatalog(resource.canonical_url ?? '', proposedTitle??resource.title ?? '', funderId,prisma,null,resource.final_url?[resource.final_url]:[])
   const autoDraft = decision.confidence >= 0.9 && ['NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING'].includes(decision.verdict) && ['NEW', 'NEW_ROUND_OF'].includes(match.type) && await autoDraftAllowed(resource.site_id, `${RELEVANCE_VERSION}/${TRIAGE_VERSION}/${ROUTING_POLICY_VERSION}`)
   await withFence(lease, async tx => {
     await tx.$queryRaw`SELECT "id" FROM "monitor_opportunities" WHERE "id" = ${opportunityId} FOR UPDATE`
@@ -142,7 +177,7 @@ async function applyDecision(lease: Lease, opportunityId: string, resourceId: st
     if ((autoDraft || process.env.MONITOR_EXTRACTION_ENABLED === 'true') && decision.confidence >= 0.9 && ['NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING'].includes(decision.verdict) && !reviewed && match.type !== 'AMBIGUOUS') {
       const revision = current.review_revision + (changed ? 1 : 0)
       await enqueueTask(tx, { kind: 'EXTRACT', operationKey: `extract-auto:${opportunityId}:${inputKey}:${fullHash}`, siteId: resource.site_id, opportunityId,
-        payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: 80 })
+        payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: match.type==='UPDATE_OF'?30:80 })
     }
     await tx.monitorResource.update({ where: { id: resourceId }, data: { revisit_policy: 'ACTIVE', next_revisit_at: new Date(Date.now() + 3 * 86400_000) } })
   })

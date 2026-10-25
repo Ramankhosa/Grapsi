@@ -31,8 +31,14 @@ async function page(id='r1',text='Applications invited for research grant suppor
   await db.$executeRawUnsafe("INSERT INTO monitor_resources(id,site_id,current_version_id,title,canonical_url,dedup_key) VALUES($1,'site',$2,'Grant applications',$3,$3)",id,id+'-v1','https://unit-test.invalid/'+id);
   await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) VALUES($1,$2,$3,$4,$4)",id+'-v1',id,text,P.sha256(text));
 }
-async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:1,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:'1.0.0',modelSha256:P.MODEL.sha256});return broker;}
+async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:'1.0.0',modelSha256:P.MODEL.sha256});return broker;}
 const completion=job=>({jobId:job.id,leaseToken:job.leaseToken,inputHash:job.inputHash,modelSha256:P.MODEL.sha256,policyHash:P.POLICY_HASH,decision:'CALL',elapsedMs:1500});
+test('legacy workers may reconnect to upload but cannot claim new title analysis',async()=>{
+ const broker=new Broker(db);const hello=await broker.hello({protocol:1,workerId:crypto.randomUUID(),appVersion:'1.0.0',modelSha256:P.MODEL.sha256});assert.equal(hello.policyHash,P.LEGACY_POLICY_HASH);await assert.rejects(broker.claim(),{code:'UPGRADE_REQUIRED'});
+});
+test('flattened long paragraphs retain an application invitation in their middle',()=>{
+ const page=P.packPage({title:'Research',text:'navigation '.repeat(600)+' Applications invited for the Alpha Research Grant. Deadline 30 November 2026. '+'navigation '.repeat(600)});assert(page.text.includes('Alpha Research Grant'));assert(page.truncated);assert(page.text.length<=3400);
+});
 test('idle device discovers stored pages and returns a versioned shadow result',async()=>{
   await page();const broker=await connect();const {job}=await broker.claim();assert(job);assert.equal(job.payload.versionId,'r1-v1');
   assert.equal((await broker.complete(completion(job))).accepted,true);
@@ -95,7 +101,7 @@ test('do-not-visit rules prevent discovery and folder underscores are literal',a
   assert.equal(P.skipped('https://example.com/aXb/c',[{dedup_key:'https://example.com/a_b',match:'FOLDER'}]),false);
 });
 test('bad model, bad results, forged leases and unknown commands are rejected',async()=>{
-  const broker=new Broker(db);await assert.rejects(broker.hello({protocol:1,workerId:crypto.randomUUID(),modelSha256:'bad'}),{code:'MODEL_MISMATCH'});
+  const broker=new Broker(db);await assert.rejects(broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),modelSha256:'bad'}),{code:'MODEL_MISMATCH'});
   await page();const valid=await connect();const {job}=await valid.claim();
   await assert.rejects(valid.complete({...completion(job),decision:'PUBLISH'}),{code:'INVALID_RESULT'});
   await assert.rejects(valid.complete({...completion(job),leaseToken:crypto.randomUUID()}),{code:'LEASE_LOST'});
@@ -151,6 +157,21 @@ test('request framing is bounded and does not execute oversized data',async()=>{
 });
 test('date and packing preserve input provenance without following page instructions',()=>{
   assert.equal(P.dateInIndia(new Date('2026-10-24T21:00:00Z')),'25 October 2026');
-  const packed=P.packPage({title:'x',url:'https://unit-test.invalid',text:'x'.repeat(5000)});assert.equal(packed.truncated,true);assert(packed.text.length<3000);
+  const packed=P.packPage({title:'x',url:'https://unit-test.invalid',text:'x'.repeat(5000)});assert.equal(packed.truncated,true);assert(packed.text.length<=3400);
   assert.equal(P.publicUrl('http://127.0.0.1/x','127.0.0.1'),false);
 });
+test('grounded title suggestions survive while invented titles are removed without another model call',async()=>{
+  await page('title','Alpha Research Grant 2026 invites applications from researchers for funding until December 2026.')
+  const broker=await connect();const {job}=await broker.claim();const input={...completion(job),details:{candidates:[{title:'Alpha Research Grant 2026',titleQuote:'Alpha Research Grant 2026 invites applications',invitationQuote:'invites applications'},{title:'Invented Grant',titleQuote:'Invented Grant is open',invitationQuote:null}],multipleCalls:false,needsMoreEvidence:false}}
+  const ack=await broker.complete(input);assert.equal(ack.details.candidates.length,1);assert.equal(ack.details.needsMoreEvidence,true)
+  assert.equal((await broker.complete(input)).duplicate,true)
+  await assert.rejects(broker.complete({...input,details:{...input.details,candidates:[]}}),{code:'RESULT_CONFLICT'})
+})
+test('section selection retains application evidence from the middle of a long page',()=>{
+ const text=Array.from({length:100},(_,i)=>i===55?'The Alpha Research Grant invites applications until 30 November 2026.':'Navigation text for informational sections '+i).join('\n')
+ const page=P.packPage({title:'Scheme',url:'https://unit-test.invalid',text});assert(page.text.includes('30 November 2026'));assert(page.truncated)
+})
+test('legacy queued submissions can be acknowledged after the worker upgrade',async()=>{
+ await page();const broker=await connect();const {job}=await broker.claim();await db.$executeRawUnsafe('UPDATE monitor_local_analysis_jobs SET policy_hash=$1 WHERE id=$2',P.LEGACY_POLICY_HASH,job.id)
+ const ack=await broker.complete({...completion(job),policyHash:P.LEGACY_POLICY_HASH});assert(ack.accepted)
+})

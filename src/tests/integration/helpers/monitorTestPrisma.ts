@@ -29,6 +29,11 @@ export const testPrisma = new PrismaClient({ datasources: { db: { url } } })
 
 /** Every table the Source Watch suites write, emptied between suites. */
 const MONITOR_TABLES = [
+  'monitor_coverage_gaps',
+  'monitor_processing_claims',
+  'monitor_local_analysis_results',
+  'monitor_local_analysis_jobs',
+  'monitor_local_workers',
   'monitor_notification_deliveries',
   'monitor_events',
   'monitor_opportunity_evidence',

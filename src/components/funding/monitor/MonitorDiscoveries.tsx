@@ -5,9 +5,11 @@ interface Discovery {
   id: string; title: string | null; review_revision: number; evidence_manifest_version: number
   review_state: string; processing_state: string; lifecycle: string; triage_reason: string | null; triage_confidence: number | null
   match_type: string | null; stale_evidence: boolean; site: { host: string }
-  primary_resource: { canonical_url: string | null; last_validation_status: string | null } | null
-  funding_call: { id: string; revision: number; catalog_status: string | null } | null
-  field_evidence: { payload?: { fields?: Record<string, { value: unknown; status: string; evidence: Array<{ quote: string }> }> }; conflicts?: string[] } | null
+  primary_resource: { title:string|null; canonical_url: string | null; last_validation_status: string | null } | null
+  funding_call: { id: string; title:string; revision: number; catalog_status: string | null } | null
+  conflicts: Array<string|{id:string;title:string}>
+  local_analysis?: { decision: string; assessedOn: string; details: { candidates: Array<{title:string;titleQuote:string;invitationQuote:string|null}>; multipleCalls:boolean;needsMoreEvidence:boolean } } | null
+  field_evidence: { quality?: {state:string;reasons:string[]}; warnings?:string[]; payload?: { fields?: Record<string, { value: unknown; status: string; evidence: Array<{ quote: string }> }> }; conflicts?: string[] } | null
 }
 export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish }: { authedFetch: AuthedFetch; canOperate: boolean; canPublish: boolean }) {
   const [rows, setRows] = useState<Discovery[]>([])
@@ -44,7 +46,7 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
   }
   return <section className="space-y-4">
     <p className="cb-hint">New announcements and source changes appear here. Review the quoted evidence before publishing. Drafts are never published automatically.</p>
-    <div className="flex flex-wrap gap-2">{[['PENDING', 'To review'], ['UPDATE_PROPOSED', 'Updates'], ['PUBLISHED', 'Published'], ['REJECTED', 'Rejected'], ['SNOOZED', 'Snoozed'], ['AUDIT', 'Screened out'], ['ALL', 'All']].map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button></div>
+    <div className="flex flex-wrap gap-2">{[['PENDING', 'To review'], ['WAITING_LOCAL', 'Waiting for laptop'], ['NEEDS_EVIDENCE', 'Needs evidence'], ['UPDATE_PROPOSED', 'Updates'], ['PUBLISHED', 'Published'], ['REJECTED', 'Rejected'], ['SNOOZED', 'Snoozed'], ['AUDIT', 'Screened out'], ['ALL', 'All']].map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button></div>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}{notice && <p role="status" className="text-sm text-green-700">{notice}</p>}
     {!rows.length && <p className="cb-hint">No discoveries in this view yet. Check Health to see whether sources are being checked.</p>}
     {rows.map(row => <article key={row.id} className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
@@ -52,6 +54,12 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
       <p className="cb-hint">{row.site.host} · {row.processing_state.toLowerCase().replace(/_/g, ' ')}{row.triage_confidence !== null ? ` · ${Math.round(row.triage_confidence * 100)}% screening confidence` : ''}</p>
       {row.primary_resource?.canonical_url && <a className="text-sm text-blue-700 underline" href={row.primary_resource.canonical_url} target="_blank" rel="noreferrer">Official source</a>}
       <p className="text-sm">{row.triage_reason}</p>
+      {row.primary_resource?.title&&<p className="text-sm">Page heading: {row.primary_resource.title}</p>}
+      {row.funding_call&&<p className="text-sm">Catalogue title: {row.funding_call.title}</p>}
+      {row.conflicts?.some(c=>typeof c==='object')&&<div className="text-sm"><p>Possible catalogue matches · {row.match_type?.toLowerCase().replace(/_/g,' ')}</p>{row.conflicts.filter((c):c is {id:string;title:string}=>typeof c==='object').map(c=><a className="block underline" key={c.id} href={`/admin/funding/catalog/${c.id}`}>{c.title}</a>)}<p>Similar titles require identity and round review.</p></div>}
+      {row.local_analysis && <div className="rounded border bg-slate-50 p-3 text-sm space-y-2"><p>Local suggestion · {row.local_analysis.decision} · assessed {row.local_analysis.assessedOn}</p>{row.local_analysis.details.candidates.map((candidate,i)=><div key={i}><strong>Proposed call title: {candidate.title}</strong><blockquote className="ml-3 border-l-2 pl-2">{candidate.titleQuote}</blockquote>{candidate.invitationQuote&&<p>{candidate.invitationQuote}</p>}</div>)}{row.local_analysis.details.multipleCalls&&<p>This page lists several calls. Follow each official call link.</p>}{row.local_analysis.details.needsMoreEvidence&&<p>Further evidence is needed; this suggestion does not establish an open call.</p>}</div>}
+      {row.field_evidence?.quality && <p className="text-sm">Evidence quality: {row.field_evidence.quality.state.toLowerCase()} · {row.field_evidence.quality.reasons.join('; ')}</p>}
+      {!!row.field_evidence?.warnings?.length&&<details className="text-sm"><summary>Fields needing further evidence</summary>{row.field_evidence.warnings.join('; ')}</details>}
       {row.funding_call && <a className="text-sm text-blue-700 underline" href={`/admin/funding/catalog/${row.funding_call.id}`}>Review or edit the catalog draft</a>}
       {canOperate && <input className="rounded border px-2 text-sm" aria-label="Scanned PDF pages" placeholder="Scanned PDF pages (optional, e.g. 3,4; maximum two)" value={ocrPages[row.id] ?? ''} onChange={e => setOcrPages(old => ({ ...old, [row.id]: e.target.value }))} />}
       {Boolean(row.stale_evidence || row.field_evidence?.conflicts?.length) && <p className="text-sm text-amber-800">{row.stale_evidence ? 'Source evidence changed. Check it again before publishing.' : row.field_evidence?.conflicts?.join('; ')}</p>}
