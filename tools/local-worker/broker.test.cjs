@@ -19,12 +19,13 @@ before(async()=>{
     "CREATE TABLE IF NOT EXISTS monitor_sites(id text PRIMARY KEY,host text,status text)",
     "CREATE TABLE IF NOT EXISTS monitor_resources(id text PRIMARY KEY,site_id text REFERENCES monitor_sites(id),current_version_id text,title text,canonical_url text,dedup_key text,last_observed_at timestamp DEFAULT now())",
     "CREATE TABLE IF NOT EXISTS monitor_resource_versions(id text PRIMARY KEY,resource_id text REFERENCES monitor_resources(id),text text,truncated boolean DEFAULT false,raw_hash text,meaningful_hash text)",
+    "CREATE TABLE IF NOT EXISTS monitor_opportunities(id text PRIMARY KEY,primary_resource_id text,field_evidence jsonb)",
     "CREATE TABLE IF NOT EXISTS monitor_skip_rules(id text PRIMARY KEY,site_id text REFERENCES monitor_sites(id),dedup_key text,match text,expires_at timestamp)"
   ];
   for(const sql of foundation)await db.$executeRawUnsafe(sql);
   await initialize(db);
 });
-beforeEach(async()=>{await db.$executeRawUnsafe('TRUNCATE monitor_local_analysis_results,monitor_local_analysis_jobs,monitor_local_workers,monitor_skip_rules,monitor_resource_versions,monitor_resources,monitor_sites CASCADE');});
+beforeEach(async()=>{await db.$executeRawUnsafe('TRUNCATE monitor_local_analysis_results,monitor_local_analysis_jobs,monitor_local_workers,monitor_skip_rules,monitor_opportunities,monitor_resource_versions,monitor_resources,monitor_sites CASCADE');});
 after(async()=>{if(db)await db.$disconnect();});
 async function page(id='r1',text='Applications invited for research grant support until December 2026.'){
   await db.$executeRawUnsafe("INSERT INTO monitor_sites VALUES('site','unit-test.invalid','ACTIVE') ON CONFLICT DO NOTHING");
@@ -33,6 +34,9 @@ async function page(id='r1',text='Applications invited for research grant suppor
 }
 async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:'1.0.0',modelSha256:P.MODEL.sha256});return broker;}
 const completion=job=>({jobId:job.id,leaseToken:job.leaseToken,inputHash:job.inputHash,modelSha256:P.MODEL.sha256,policyHash:P.POLICY_HASH,decision:'CALL',elapsedMs:1500});
+test('an approaching supported deadline takes priority over an old ordinary job',async()=>{
+ await page('old');await page('urgent');const broker=await connect();await broker.scan();await db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET created_at=now()-interval '8 hours' WHERE resource_id='old'");await db.$executeRawUnsafe("INSERT INTO monitor_opportunities VALUES('deadline','urgent',jsonb_build_object('payload',jsonb_build_object('fields',jsonb_build_object('close_date',jsonb_build_object('status','supported','value',to_char(current_date+2,'YYYY-MM-DD'))))))");assert.equal((await broker.claim()).job.payload.resourceId,'urgent');
+});
 test('proposed dates require literal unambiguous quotations and do not splice separate dates',()=>{
  assert(P.groundedDate('2026-11-30','Applications close on 30 November 2026.'));
  assert(!P.groundedDate('2026-11-10','Applications close 10/11/2026.'));

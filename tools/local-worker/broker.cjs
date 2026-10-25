@@ -72,7 +72,10 @@ class Broker {
         WHERE ((j.state='QUEUED' AND j.available_at<=now()) OR (j.state='RUNNING' AND j.lease_until<now())) AND j.attempts<$1
           AND j.policy_hash=$2 AND s.status='ACTIVE' AND s.host=ANY($3::text[]) AND r.current_version_id=j.version_id
           ${skipGuard}
-        ORDER BY CASE WHEN j.created_at<now()-interval '6 hours' THEN 0 WHEN j.payload->'page'->>'text' ~* 'deadline|closes|extension|corrigendum' THEN 1 ELSE 2 END,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
+        ORDER BY CASE WHEN coalesce((j.payload->>'queuePriority')::int,100)<10 THEN 0
+          WHEN EXISTS(SELECT 1 FROM monitor_opportunities o WHERE o.primary_resource_id=r.id AND o.field_evidence->'payload'->'fields'->'close_date'->>'status'='supported' AND o.field_evidence->'payload'->'fields'->'close_date'->>'value' BETWEEN to_char(current_date,'YYYY-MM-DD') AND to_char(current_date+7,'YYYY-MM-DD')) THEN 10
+          WHEN coalesce((j.payload->>'queuePriority')::int,100)<=20 THEN 20
+          WHEN j.created_at<now()-interval '6 hours' THEN 30 WHEN j.payload->'page'->>'text' ~* 'deadline|closes|extension|corrigendum' THEN 40 ELSE 100 END,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
         UPDATE monitor_local_analysis_jobs j SET state='RUNNING',owner=$4,lease_token=$5,lease_until=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
         FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token);
       if(!rows.length)return {job:null};

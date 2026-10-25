@@ -82,7 +82,7 @@ function validateDetails(value,page){
   }
   return {schemaVersion:2,candidates,multipleCalls:value?.multipleCalls===true,needsMoreEvidence:value?.needsMoreEvidence!==false||Boolean(page.truncated)||warnings.length>0,warnings};
 }
-function makePayload(row){return {resourceId:row.id,versionId:row.current_version_id,sourceHash:row.raw_hash,fullTextHash:sha256(row.text),asOfDate:dateInIndia(),policyHash:POLICY_HASH,page:packPage(row)};}
+function makePayload(row){return {resourceId:row.id,versionId:row.current_version_id,sourceHash:row.raw_hash,fullTextHash:sha256(row.text),asOfDate:dateInIndia(),policyHash:POLICY_HASH,queuePriority:Math.max(1,Math.min(1000,Math.floor(Number(row.queue_priority)||100))),page:packPage(row)};}
 function stable(value){return JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);}
 function dateInIndia(now = new Date()) {
   return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',day:'numeric',month:'long',year:'numeric'}).format(now);

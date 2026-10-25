@@ -18,11 +18,11 @@ export async function localSuggestion(resourceId: string, db: Db = prisma): Prom
   const row=rows[0]
   return row && row.details.schemaVersion===2 && row.full_hash===P.sha256(row.text??'') ? { decision: row.decision, details: row.details, assessedOn: row.assessed_on, resultId: row.job_id } : null
 }
-export async function queueLocalAnalysis(resourceId: string, db: Db = prisma) {
+export async function queueLocalAnalysis(resourceId: string, db: Db = prisma, priority = 100) {
   const rows=await db.$queryRawUnsafe<Array<Record<string, unknown>>>(`SELECT r.id,r.current_version_id,r.title,r.canonical_url AS url,v.text,v.truncated,v.raw_hash FROM monitor_resources r JOIN monitor_resource_versions v ON v.id=r.current_version_id WHERE r.id=$1 AND v.text IS NOT NULL`,resourceId)
   if(!rows[0])return false
-  const payload=P.makePayload(rows[0]);const inputHash=P.sha256(JSON.stringify(payload))
-  await db.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(version_id,policy_hash) DO NOTHING`,randomUUID(),resourceId,rows[0].current_version_id,P.POLICY_HASH,inputHash,JSON.stringify(payload))
+  const payload=P.makePayload({...rows[0],queue_priority:priority});const inputHash=P.sha256(JSON.stringify(payload))
+  await db.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(version_id,policy_hash) DO UPDATE SET payload=excluded.payload,input_hash=excluded.input_hash,updated_at=now() WHERE monitor_local_analysis_jobs.state='QUEUED' AND coalesce((monitor_local_analysis_jobs.payload->>'queuePriority')::int,100)>coalesce((excluded.payload->>'queuePriority')::int,100)`,randomUUID(),resourceId,rows[0].current_version_id,P.POLICY_HASH,inputHash,JSON.stringify(payload))
   return true
 }
 export async function localQueueHealth(now = new Date()) {
