@@ -15,7 +15,7 @@ import { LeaseLostError } from './queue'
 import { localSuggestion, queueLocalAnalysis } from './localAnalysis'
 import { addFrontier } from './discovery'
 import { retainCoverageGap } from './coverage'
-import { lifecycleAt } from './evidence'
+import { lifecycleAt,normalQuote } from './evidence'
 
 export const TRIAGE_VERSION = 'triage-2'
 export type TriageVerdict = 'NOT_FUNDING' | 'NEW_OPPORTUNITY' | 'UPDATE_TO_EXISTING' | 'UNSURE' | 'NEEDS_EVIDENCE'
@@ -77,7 +77,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       completeEvidence=content.length>=80&&fetched.segments.length>0&&fetched.segments.every(s=>s.complete)
       if(fetched.links.some(l=>/\.pdf(?:[?#]|$)|\.docx(?:[?#]|$)/i.test(l.url)))completeEvidence=false
       if(fetched.links.length)await withFence(lease,tx=>addFrontier(tx,r.site,fetched.links.map(l=>({url:l.url,title:l.title,from:r.canonical_url!}))))
-      fullHash = fingerprint(fetched.segments.map(s => ({ page: s.page, text: meaningfulText(s.text) })))
+      fullHash = fingerprint(fetched.segments.map(s => ({ page: s.page, text: normalQuote(s.text),complete:s.complete })))
       contentHash = fingerprint(meaningfulText(content.slice(0, 2000)))
       score = scoreRelevance(r.title ?? '', `${observation?.context_text ?? ''}\n${content.slice(0, 4000)}`, r.canonical_url, config)
     }
@@ -88,7 +88,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       if(match.type!=='UPDATE_OF'||!match.callId||!completeEvidence)return false
       const call=await prisma.fundingCall.findUniqueOrThrow({where:{id:match.callId},select:{normalized_text:true,raw_text:true,catalog_status:true,open_date:true,close_date:true,is_rolling:true}})
       const stored=call.normalized_text||call.raw_text
-      if(call.catalog_status==='PUBLISHED'&&stored&&meaningfulText(stored)===meaningfulText(content)){
+      if(call.catalog_status==='PUBLISHED'&&stored&&normalQuote(stored)===normalQuote(content)){
         await withFence(lease,tx=>tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:'DONE',review_state:['REJECTED','PUBLISHED','MERGED','SNOOZED'].includes(opportunity.review_state)?opportunity.review_state:'NONE',triage_verdict:'UPDATE_TO_EXISTING',triage_confidence:1,triage_reason:'Existing verified call and complete evidence are unchanged; no paid request needed.',match_type:'UPDATE_OF',match_confidence:'EXACT',funding_call_id:match.callId,lifecycle:lifecycleAt(call.close_date?.toISOString().slice(0,10)??null,call.open_date?.toISOString().slice(0,10)??null,call.is_rolling?'ROLLING':null),decision_versions:{prompt:TRIAGE_VERSION,model:'deterministic-existing-1',fullHash}}}))
         return true
       }
@@ -131,6 +131,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     pending.push({ resource: r, cacheKey: key, fullHash, opportunityId: opportunity.id, prompt: { id: r.id, title: r.title, url: r.canonical_url, localSuggestion:local, context: observation?.context_text?.slice(0, 600), text: content.slice(0, 5000), completeness: completeEvidence && content.length <= 5000 ? 'available-text' : 'PARTIAL' } })
   }
   // Compact packing; caches remain per item, independent of batch composition.
+  pending.sort((a,b)=>Number((a.prompt.localSuggestion as {decision?:string}|null)?.decision==='GENERAL')-Number((b.prompt.localSuggestion as {decision?:string}|null)?.decision==='GENERAL'))
   while (pending.length) {
     const batch: typeof pending = []
     let total = estimateTokens(SYSTEM)
