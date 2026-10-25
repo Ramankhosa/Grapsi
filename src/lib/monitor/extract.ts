@@ -77,8 +77,8 @@ export function validateExtraction(value: unknown, segments: EvidenceSegment[]):
   const invitation = raw.application_invitation as { value?: unknown; citations?: unknown[] } | undefined
   const invitationText=(invitation?.citations as Array<{quote?:string}>|undefined)?.map(c=>c.quote??'').join(' ')??''
   const invitationVerified = invitation?.value === true && Boolean(invitation.citations?.length) && invitation.citations!.every(c => verifyCitation(c, segments)) &&
-    /invit\w*\s+(?:\w+\s+){0,3}(?:applications?|proposals?|nominations?)|applications?\s+(?:are\s+)?(?:invited|open|accepted)|submit\s+(?:\w+\s+){0,3}proposals?|call for\s+(?:\w+\s+){0,3}proposals?|आवेदन.{0,30}आमंत्र/i.test(invitationText) &&
-    !/not (?:accept|invit)|applications? (?:are )?(?:not accepted|closed)/i.test(invitationText)
+    /invit(?:es|ing)\s+(?:\w+\s+){0,3}(?:applications?|proposals?|nominations?)|(?:applications?|proposals?|nominations?)\s+(?:(?:are|now|currently)\s+)*(?:invited|open|accepted)|(?:applications?|proposals?)\s+can be submitted|accepting\s+(?:applications?|proposals?)|submit\s+(?:\w+\s+){0,3}proposals?|call for\s+(?:\w+\s+){0,3}proposals?\s+is\s+(?:now\s+)?open|आवेदन.{0,30}आमंत्र/i.test(invitationText) &&
+    !/not (?:accept|invit)|(?:applications?|proposals?) (?:are )?(?:not accepted|closed)|will (?:be )?(?:invit|open)|opens? (?:next|soon)/i.test(invitationText)
   return { payload: { fields: fields as FundingExtractionPayload['fields'], warnings: conflicts }, conflicts, coverage, identity, invitationVerified }
 }
 

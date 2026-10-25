@@ -21,6 +21,7 @@ export async function matchCatalog(url: string, title: string, funderId: string 
   const storedReference=(c:typeof direct[number])=>(c.metadata as {source_watch_identity?:{reference?:string}}|null)?.source_watch_identity?.reference
   if(reference&&direct.some(c=>storedReference(c)&&storedReference(c)!==reference))return {type:'AMBIGUOUS',confidence:'AMBIGUOUS',callId:null,candidates:direct}
   if(explicitRound&&direct.length&&direct.every(c=>storedRound(c)&&storedRound(c)!==explicitRound))return {type:'NEW_ROUND_OF',confidence:'PROBABLE',callId:null,candidates:direct}
+  if(explicitRound&&!/^20\d{2}(?:[-/]\d{2,4})?$/.test(explicitRound)&&direct.some(c=>!storedRound(c)))return {type:'AMBIGUOUS',confidence:'AMBIGUOUS',callId:null,candidates:direct}
   const year = explicitRound?.match(/\b20\d{2}\b/)?.[0] ?? title.match(/\b20\d{2}\b/)?.[0]
   const callYear = (c: typeof direct[number]) => c.title.match(/\b20\d{2}\b/)?.[0] ?? (explicitRound && c.close_date ? c.close_date.getUTCFullYear().toString() : null)
   const sameRound = direct.filter(c => (!explicitRound||!storedRound(c)||storedRound(c)===explicitRound)&&(!year || !callYear(c) || callYear(c) === year))
