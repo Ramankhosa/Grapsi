@@ -2,10 +2,12 @@ import { describe,expect,it } from 'vitest'
 import { validateExtraction,groundedValue } from '@/lib/monitor/extract'
 import { extractionQuality } from '@/lib/monitor/extractionContract'
 import { lifecycleAt,type EvidenceSegment } from '@/lib/monitor/evidence'
+import { roundIdentity } from '@/lib/monitor/matching'
 const text='Alpha Foundation invites applications for Alpha Research Grant 2026. It supports university research. Applications close on 30 November 2026.'
 const segment:EvidenceSegment={id:'E1',resourceId:'r',versionId:'v',url:'https://funder.invalid/call',role:'CALL_NOTICE',page:null,text,complete:true}
 const field=(value:unknown)=>({value,citations:[{segment:'E1',quote:text,coverage:'COMPLETE'}]})
 describe('opportunity evidence quality',()=>{
+ it('does not invent a funding round from an extended deadline',()=>{expect(roundIdentity('Alpha Scheme','REF-7','2027-01-01','funder').roundKey).toBeNull();expect(roundIdentity('Alpha Scheme','REF-7','2027-01-01','funder','Round 2026').roundKey).toBe('Round 2026')})
  it('keeps ambiguous dates and project deadlines from proving an application deadline',()=>{expect(groundedValue('close_date','2026-11-10','Application deadline 10/11/2026')).toBe(false);expect(groundedValue('close_date','2026-11-30','Project completion deadline 30 November 2026')).toBe(false);expect(groundedValue('close_date','2026-11-30','Applications open 10 November 2026 and close 30 December 2026')).toBe(false)})
  it.each(['Call for proposals','Applications will be invited next month'])('does not turn a promotional phrase into an active invitation: %s',quote=>{
   const r=validateExtraction({fields:{application_invitation:{value:true,citations:[{segment:'E1',quote,coverage:'COMPLETE'}]}}},[{...segment,text:quote}]);expect(r.invitationVerified).toBe(false)

@@ -197,7 +197,7 @@ async function applyDecision(lease: Lease, opportunityId: string, resourceId: st
       ...(changed ? { review_revision: { increment: 1 }, stale_evidence: true } : {}),
     } })
     if (!reviewed && decision.verdict !== 'NOT_FUNDING') await emitEvent(tx, { kind: 'NEW_DISCOVERY', eventKey: `discovery:${opportunityId}:${inputKey}`, payload: { title: resource.title ?? 'Funding announcement' } })
-    if ((autoDraft || process.env.MONITOR_EXTRACTION_ENABLED === 'true') && decision.confidence >= 0.9 && ['NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING'].includes(decision.verdict) && !reviewed && match.type !== 'AMBIGUOUS') {
+    if ((autoDraft || process.env.MONITOR_EXTRACTION_ENABLED === 'true') && decision.confidence >= 0.9 && ['NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING'].includes(decision.verdict) && !reviewed) {
       const revision = current.review_revision + (changed ? 1 : 0)
       await enqueueTask(tx, { kind: 'EXTRACT', operationKey: `extract-auto:${opportunityId}:${inputKey}:${fullHash}`, siteId: resource.site_id, opportunityId,
         payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: match.type==='UPDATE_OF'?30:80 })

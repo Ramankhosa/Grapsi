@@ -4,7 +4,7 @@ import { identifyUrl } from './urlIdentity'
 import { jaccard, tokens } from './relevance'
 
 export function roundIdentity(title: string, reference: string | null, deadline: string | null, funderId: string | null, explicitRound?: string | null) {
-  const year = title.match(/\b20\d{2}(?:[-/]\d{2,4})?\b/)?.[0] ?? deadline?.slice(0, 4) ?? null
+  const year = title.match(/\b20\d{2}(?:[-/]\d{2,4})?\b/)?.[0] ?? null
   // A common title/year on a shared portal is not sufficient for an exact claim.
   const referenceKey = reference ? tokens(reference).filter(t => !/^20\d{2}$/.test(t)).join('-') : ''
   const scheme = funderId && referenceKey ? `${funderId}:${referenceKey}` : null
@@ -16,7 +16,7 @@ export async function matchCatalog(url: string, title: string, funderId: string 
   const owners = keys.length ? await db.fundingCallUrlKey.findMany({ where: { dedup_key: { in: keys } }, take: 30 }) : []
   const ids = owners.map(o => o.funding_call_id).filter((s): s is string => Boolean(s))
   // Consult current rows even when the periodically refreshed URL index is stale.
-  const direct = await db.fundingCall.findMany({ where: { OR: [{ id: { in: ids } }, { source_url: { in: urls } }, { sourceUrl: { in: urls } }, { official_urls: { hasSome: urls } }] }, select: { id: true, title: true, funder_id: true, close_date: true,metadata:true }, take: 20 })
+  const direct = await db.fundingCall.findMany({ where: { OR: [{ id: { in: ids } }, { source_url: { in: urls } }, { sourceUrl: { in: urls } }, { official_urls: { hasSome: urls } },...(reference&&funderId?[{funder_id:funderId,metadata:{path:['source_watch_identity','reference'],equals:reference}}]:[])] }, select: { id: true, title: true, funder_id: true, close_date: true,metadata:true }, take: 20 })
   const storedRound=(c:typeof direct[number])=>(c.metadata as {source_watch_identity?:{round?:string}}|null)?.source_watch_identity?.round
   const storedReference=(c:typeof direct[number])=>(c.metadata as {source_watch_identity?:{reference?:string}}|null)?.source_watch_identity?.reference
   if(reference&&direct.some(c=>storedReference(c)&&storedReference(c)!==reference))return {type:'AMBIGUOUS',confidence:'AMBIGUOUS',callId:null,candidates:direct}
