@@ -21,6 +21,12 @@ test('profiles retain the identity and opening biography ahead of navigation and
  const text=nav+biography+'Country\nAfghanistan\nAlbania\n'.repeat(100)+'Company\nFooter';const page=P.packPage({url:'https://unit-test.invalid/people-profile/peter-weismantle/',text});assert(page.text.includes('Peter Weismantle is an architect'));assert(page.text.includes('Peter Weismantle\nCompany'));assert(page.text.length<=3400);
  assert(P.packPage({url:'https://unit-test.invalid/people-profile/peter-weismantl/',text}).text.includes('Peter Weismantle is an architect'));
 });
+
+test('an observed RFP URL cannot displace the opening invitation and deadline',()=>{
+ const text='Summary\nWe are launching a funding call for developing novel interventions to improve fish welfare in India.\nProposals will be accepted until November 18th, 2026.\nBackground\n'+'Detailed research background and programme information. '.repeat(75)+'\nSee the full RFP\n[http://fwi.fish/India-RFP]\nA staffer monitoring water quality.\nMore background. '.repeat(8);
+ const page=P.packPage({title:'Open Call: Funding New Ideas',url:'https://unit-test.invalid/post/rfp-india',text});
+ assert(page.text.includes('We are launching a funding call'));assert(page.text.includes('Proposals will be accepted until November 18th, 2026.'));assert(page.text.length<=3400);
+});
 test('existing date safeguards remain independent of title capitalization',()=>{
  assert(!P.applicationDate('opensOn','2026-11-18','Proposals accepted until November 18th, 2026.'));assert(!P.groundedDate('2026-11-10','Deadline 10/11/2026'));assert(!P.groundedDate('2026-10-31','Applications close October 31'));assert(!P.applicationDate('closesOn','2026-11-30','Project completion 30 November 2026'));
  const page=P.packPage({title:'Calls',url:'https://unit-test.invalid/calls',text:'Pilot Grant\nApplications close 30 November 2026.\nResearch Grant\nApplications close 31 December 2026.'});const details=P.validateDetails({multipleCalls:true,candidates:[{title:'Pilot Grant',titleQuote:'Pilot Grant',closesOn:'2026-12-31',closesQuote:'Applications close 30 November 2026.'},{title:'Research Grant',titleQuote:'Research Grant',closesOn:'2026-12-31',closesQuote:'Applications close 31 December 2026.'}]},page);assert(details.multipleCalls);assert.equal(details.candidates[0].closesOn,null);assert.equal(details.candidates[1].closesOn,'2026-12-31');

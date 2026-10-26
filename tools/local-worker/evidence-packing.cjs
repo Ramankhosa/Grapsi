@@ -28,8 +28,10 @@ function packPage(row){
  const exactHeading=fold(title);let anchor=-1,best=0;
  for(let i=0;i<lines.length;i++){
   const line=lines[i];if(form.has(i)||line.text.length>500)continue;
-  let score=exactHeading.length>8&&fold(line.text)===exactHeading?100:0;
-  if(slug.length>=2&&slug.length<=30){const words=new Set(fold(line.text).match(/[\p{L}\p{N}]+/gu)??[]);const hits=slug.filter(s=>words.has(s.toLowerCase())).length;if(hits===slug.length&&words.size<=slug.length+5)score=Math.max(score,80)}
+  // A URL containing the route slug is a link, not evidence of a heading.
+  const visible=line.text.replace(/\[https?:\/\/[^\]]+\]|https?:\/\/\S+/gi,'').trim();
+  let score=exactHeading.length>8&&fold(visible)===exactHeading?100:0;
+  if(slug.length>=2&&slug.length<=30){const words=new Set(fold(visible).match(/[\p{L}\p{N}]+/gu)??[]);const hits=slug.filter(s=>words.has(s.toLowerCase())).length;if(hits===slug.length&&words.size<=slug.length+5)score=Math.max(score,80)}
   // Later headings beat their earlier menu entries, but not footer links.
   if(score&&i>lines.length*.85)score-=60;
   if(score>best||(score===best&&score>60)){best=score;anchor=i}
