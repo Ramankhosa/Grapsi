@@ -6,6 +6,7 @@ const P = require('../../../tools/local-worker/policy.cjs') as {
   POLICY_HASH: string; APP_VERSION: string; MODEL: { sha256: string }; dateInIndia: () => string; sha256: (s: string) => string
   makePayload: (row: Record<string, unknown>) => Record<string, unknown>
 }
+export const LOCAL_ANALYSIS_POLICY_HASH = P.POLICY_HASH
 export interface LocalDetails { schemaVersion: number; candidates: Array<{ title: string; titleQuote: string; invitationQuote: string | null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null }>; multipleCalls: boolean; needsMoreEvidence: boolean; warnings: string[] }
 export interface LocalSuggestion { decision: string; details: LocalDetails; assessedOn: string; resultId: string }
 export async function localSuggestion(resourceId: string, db: Db = prisma): Promise<LocalSuggestion | null> {
