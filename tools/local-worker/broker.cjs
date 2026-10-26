@@ -3,6 +3,7 @@
 // No HTTP listener, database credentials on clients, or arbitrary commands.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const P=require('./policy.cjs');
+const Previous=require('./policy-1.1.0.cjs');
 const LEASE_SECONDS=120, MAX_ATTEMPTS=5;
 class ProtocolError extends Error {constructor(code,message){super(message);this.code=code;}}
 const check=(condition,code,message)=>{if(!condition)throw new ProtocolError(code,message);};
@@ -15,13 +16,16 @@ class Broker {
   }
   refresh(){if(this.reload){const config=this.reload();this.enabled=config.enabled!==false;if(config.allowedHosts)this.allowedHosts=config.allowedHosts;}}
   async hello(input){
-    this.refresh();check([1,P.PROTOCOL].includes(input.protocol),'UPGRADE_REQUIRED','This worker requires a compatible application version.');this.legacy=input.protocol===1;
+    this.refresh();check([1,P.PROTOCOL].includes(input.protocol),'UPGRADE_REQUIRED','This worker requires a compatible application version.');
+    this.legacy=input.protocol===1||input.appVersion!==P.APP_VERSION;
+    const clientPolicy=input.protocol===1?{POLICY_HASH:P.LEGACY_POLICY_HASH,TEMPLATE:P.LEGACY_TEMPLATE}:input.appVersion===Previous.APP_VERSION?Previous:P;
     check(uuid(input.workerId),'INVALID_REQUEST','A valid device identifier is required.');
     check(input.modelSha256===P.MODEL.sha256,'MODEL_MISMATCH','The approved model must be verified before connecting.');
+    check(input.protocol===1||[P.APP_VERSION,Previous.APP_VERSION].includes(input.appVersion),'UPGRADE_REQUIRED','Install the current local worker.');
     const name=String(input.displayName??'Windows worker').slice(0,120).replace(/[\x00-\x1f]/g,'');
     await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_workers(id,display_name,app_version,model_sha256,state) VALUES($1,$2,$3,$4,'IDLE') ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,app_version=excluded.app_version,model_sha256=excluded.model_sha256,last_seen_at=now(),state='IDLE'`,input.workerId,name,String(input.appVersion??'unknown').slice(0,40),input.modelSha256);
     this.worker=input.workerId;
-    return {protocol:input.protocol,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:this.legacy?P.LEGACY_POLICY_HASH:P.POLICY_HASH,model:P.MODEL,promptTemplate:this.legacy?P.LEGACY_TEMPLATE:P.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:this.allowedHosts};
+    return {protocol:input.protocol,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:clientPolicy.POLICY_HASH,model:P.MODEL,promptTemplate:clientPolicy.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:this.allowedHosts};
   }
   async touch(state='IDLE'){
     check(this.worker,'NOT_REGISTERED','Connect this worker first.');
@@ -54,7 +58,7 @@ class Broker {
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state=CASE WHEN attempts >= $1 THEN 'FAILED' ELSE 'QUEUED' END,lease_until=NULL,available_at=now(),last_error='Lease expired; device unavailable',updated_at=now() WHERE state='RUNNING' AND lease_until<now()",MAX_ATTEMPTS);
   }
   async claim(){
-    check(!this.legacy,'UPGRADE_REQUIRED','Saved results can upload, but new title analysis requires worker 1.1.0.');
+    check(!this.legacy,'UPGRADE_REQUIRED',`Saved results can upload, but new analysis requires worker ${P.APP_VERSION}.`);
     this.refresh();await this.touch();if(!this.enabled)return {job:null,paused:true};
     await this.scan();await this.rules();
     const skipGuard=this.skipTable?"AND NOT EXISTS(SELECT 1 FROM monitor_skip_rules k WHERE k.site_id=r.site_id AND (k.expires_at IS NULL OR k.expires_at>now()) AND (k.dedup_key=r.dedup_key OR (k.match='FOLDER' AND (starts_with(r.dedup_key,rtrim(k.dedup_key,'/') || '/') OR starts_with(r.dedup_key,k.dedup_key || '?')))))":'';
@@ -102,13 +106,14 @@ class Broker {
     this.refresh();await this.touch();
     check(uuid(input.jobId)&&uuid(input.leaseToken),'INVALID_REQUEST','Invalid lease.');
     check(P.TYPES.includes(input.decision),'INVALID_RESULT','Invalid classification.');
-    check(input.modelSha256===P.MODEL.sha256&&[P.POLICY_HASH,P.LEGACY_POLICY_HASH].includes(input.policyHash),'INVALID_RESULT','Model or policy does not match.');
+    check(input.modelSha256===P.MODEL.sha256&&[P.POLICY_HASH,Previous.POLICY_HASH,P.LEGACY_POLICY_HASH].includes(input.policyHash),'INVALID_RESULT','Model or policy does not match.');
     check(Number.isInteger(input.elapsedMs)&&input.elapsedMs>=0&&input.elapsedMs<=300000,'INVALID_RESULT','Invalid processing duration.');
     return this.db.$transaction(async tx=>{
       const rows=await tx.$queryRawUnsafe(`SELECT j.*,r.current_version_id,r.dedup_key AS resource_key,r.site_id,s.status AS site_status,s.host,v.text AS current_text,v.raw_hash AS current_raw_hash FROM monitor_local_analysis_jobs j JOIN monitor_resources r ON r.id=j.resource_id JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=j.version_id WHERE j.id=$1 FOR UPDATE OF j,r,s,v`,input.jobId);
       check(rows.length,'NOT_FOUND','The job is no longer available.');const job=rows[0];
       check(input.policyHash===job.policy_hash,'INVALID_RESULT','The result policy does not match this job.');
-      const details=input.policyHash===P.POLICY_HASH?P.validateDetails(input.details,job.payload.page):{};
+      const validator=input.policyHash===P.POLICY_HASH?P:input.policyHash===Previous.POLICY_HASH?Previous:null;
+      const details=validator?validator.validateDetails(input.details,job.payload.page):{};
       const resultHash=P.sha256(P.stable({decision:input.decision,details}));
       check(job.owner===this.worker&&job.lease_token===input.leaseToken&&job.input_hash===input.inputHash,'LEASE_LOST','This result belongs to a different task version or lease.');
       if(job.state==='DONE'){

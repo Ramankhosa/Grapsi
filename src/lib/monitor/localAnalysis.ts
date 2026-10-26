@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import type { Db } from './queue'
 // Shared with the Windows RPC broker so prompt, packing and hashes cannot drift.
 const P = require('../../../tools/local-worker/policy.cjs') as {
-  POLICY_HASH: string; MODEL: { sha256: string }; dateInIndia: () => string; sha256: (s: string) => string
+  POLICY_HASH: string; APP_VERSION: string; MODEL: { sha256: string }; dateInIndia: () => string; sha256: (s: string) => string
   makePayload: (row: Record<string, unknown>) => Record<string, unknown>
 }
 export interface LocalDetails { schemaVersion: number; candidates: Array<{ title: string; titleQuote: string; invitationQuote: string | null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null }>; multipleCalls: boolean; needsMoreEvidence: boolean; warnings: string[] }
@@ -27,7 +27,7 @@ export async function queueLocalAnalysis(resourceId: string, db: Db = prisma, pr
 }
 export async function localQueueHealth(now = new Date()) {
   const [workers,queue]=await Promise.all([
-    prisma.$queryRawUnsafe<Array<{ last_seen_at: Date }>>("SELECT last_seen_at FROM monitor_local_workers WHERE app_version='1.1.0' ORDER BY last_seen_at DESC LIMIT 1"),
+    prisma.$queryRawUnsafe<Array<{ last_seen_at: Date }>>("SELECT last_seen_at FROM monitor_local_workers WHERE app_version=$1 ORDER BY last_seen_at DESC LIMIT 1",P.APP_VERSION),
     prisma.$queryRawUnsafe<Array<{ state: string; count: number; oldest: Date }>>("SELECT state,count(*)::int AS count,min(created_at) AS oldest FROM monitor_local_analysis_jobs WHERE policy_hash=$1 GROUP BY state",P.POLICY_HASH),
   ])
   const age=workers[0]?now.getTime()-workers[0].last_seen_at.getTime():null

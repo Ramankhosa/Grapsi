@@ -32,7 +32,7 @@ async function page(id='r1',text='Applications invited for research grant suppor
   await db.$executeRawUnsafe("INSERT INTO monitor_resources(id,site_id,current_version_id,title,canonical_url,dedup_key) VALUES($1,'site',$2,'Grant applications',$3,$3)",id,id+'-v1','https://unit-test.invalid/'+id);
   await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) VALUES($1,$2,$3,$4,$4)",id+'-v1',id,text,P.sha256(text));
 }
-async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:'1.0.0',modelSha256:P.MODEL.sha256});return broker;}
+async function connect(options={}){const broker=new Broker(db,{allowedHosts:['unit-test.invalid'],...options});await broker.hello({protocol:P.PROTOCOL,workerId:crypto.randomUUID(),displayName:'test laptop',appVersion:options.appVersion??P.APP_VERSION,modelSha256:P.MODEL.sha256});return broker;}
 const completion=job=>({jobId:job.id,leaseToken:job.leaseToken,inputHash:job.inputHash,modelSha256:P.MODEL.sha256,policyHash:P.POLICY_HASH,decision:'CALL',elapsedMs:1500});
 test('an approaching supported deadline takes priority over an old ordinary job',async()=>{
  await page('old');await page('urgent');const broker=await connect();await broker.scan();await db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET created_at=now()-interval '8 hours' WHERE resource_id='old'");await db.$executeRawUnsafe("INSERT INTO monitor_opportunities VALUES('deadline','urgent',jsonb_build_object('payload',jsonb_build_object('fields',jsonb_build_object('close_date',jsonb_build_object('status','supported','value',to_char(current_date+2,'YYYY-MM-DD'))))))");assert.equal((await broker.claim()).job.payload.resourceId,'urgent');
@@ -51,6 +51,18 @@ test('proposed dates require literal unambiguous quotations and do not splice se
 });
 test('legacy workers may reconnect to upload but cannot claim new title analysis',async()=>{
  const broker=new Broker(db);const hello=await broker.hello({protocol:1,workerId:crypto.randomUUID(),appVersion:'1.0.0',modelSha256:P.MODEL.sha256});assert.equal(hello.policyHash,P.LEGACY_POLICY_HASH);await assert.rejects(broker.claim(),{code:'UPGRADE_REQUIRED'});
+});
+test('worker 1.1.0 receives its frozen policy and cannot claim upgraded jobs',async()=>{
+ const previous=require('./policy-1.1.0.cjs');const broker=new Broker(db);
+ const hello=await broker.hello({protocol:2,workerId:crypto.randomUUID(),appVersion:'1.1.0',modelSha256:P.MODEL.sha256});assert.equal(hello.policyHash,previous.POLICY_HASH);assert.equal(hello.promptTemplate,previous.TEMPLATE);
+ await assert.rejects(broker.claim(),{code:'UPGRADE_REQUIRED'});
+});
+test('a saved 1.1.0 submission keeps frozen validation and the same acknowledgement hash',async()=>{
+ await page('old','REGULAR GRANT PROGRAMME\nApplications close 30 November 2026.');const broker=await connect(),{job}=await broker.claim();const previous=require('./policy-1.1.0.cjs');
+ await db.$executeRawUnsafe('UPDATE monitor_local_analysis_jobs SET policy_hash=$1 WHERE id=$2',previous.POLICY_HASH,job.id);
+ const input={...completion(job),policyHash:previous.POLICY_HASH,details:{candidates:[{title:'Regular Grant Programme',titleQuote:'REGULAR GRANT PROGRAMME'}]}};
+ const ack=await broker.complete(input);assert.equal(ack.details.candidates.length,0);assert.equal((await broker.complete(input)).duplicate,true);
+ await assert.rejects(broker.complete({...input,details:{candidates:[{title:'REGULAR GRANT PROGRAMME',titleQuote:'REGULAR GRANT PROGRAMME'}]}}),{code:'RESULT_CONFLICT'});
 });
 test('flattened long paragraphs retain an application invitation in their middle',()=>{
  const page=P.packPage({title:'Research',text:'navigation '.repeat(600)+' Applications invited for the Alpha Research Grant. Deadline 30 November 2026. '+'navigation '.repeat(600)});assert(page.text.includes('Alpha Research Grant'));assert(page.truncated);assert(page.text.length<=3400);
