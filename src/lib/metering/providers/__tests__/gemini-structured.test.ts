@@ -6,6 +6,12 @@ const request:LLMRequest={taskCode:'FUNDING_CALL_INGEST',prompt:'Synthetic evide
 const provider=()=>new GeminiProvider({apiKey:'test-key',baseURL:'https://gemini.invalid',model:'gemini-3.1-flash'})
 afterEach(()=>vi.unstubAllGlobals())
 describe('Gemini extraction transport',()=>{
+  it('uses the typed REST schema and a bounded thinking budget for Gemini 2.5 Pro',async()=>{
+    let body:Record<string,any>={}
+    vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{body=JSON.parse(init.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:'{"fields":{}}'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:20,candidatesTokenCount:8}}),{status:200})}))
+    await provider().execute({...request,modelClass:'gemini-2.5-pro',parameters:{...request.parameters,thinking_budget:256}},{allowed:true,maxTokensOut:6000})
+    expect(body.generationConfig.thinkingConfig).toEqual({thinkingBudget:256});expect(body.generationConfig.responseJsonSchema).toEqual(EXTRACTION_SCHEMA);expect(body.generationConfig.responseSchema).toBeUndefined()
+  })
   it('sends a fully typed schema and thinking config inside generationConfig, omitting reasoning parts',async()=>{
     let body:Record<string,any>={}
     vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{body=JSON.parse(init.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{thought:true,text:'private reasoning'},{text:'{"fields":{}}'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:20,candidatesTokenCount:8,thoughtsTokenCount:3}}),{status:200})}))

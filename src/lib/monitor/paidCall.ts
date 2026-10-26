@@ -220,6 +220,8 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
             responseSchema: input.jsonSchema.schema,
             responseMimeType: 'application/json',
             ...(getProviderFromModelCode(model)==='gemini'&&model.startsWith('gemini-3')?{thinking_level:'low'}:{}),
+            ...(input.stage==='FUNDING_SOURCE_EXTRACT'&&model==='gpt-5.2'?{reasoning_effort:'none'}:{}),
+            ...(input.stage==='FUNDING_SOURCE_EXTRACT'&&model==='gemini-2.5-pro'?{thinking_budget:256}:{}),
           },
           metadata: {
             skipFeaturePolicy: true,

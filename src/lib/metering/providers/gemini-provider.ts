@@ -160,15 +160,16 @@ export class GeminiProvider implements LLMProvider {
       // Gemini 3 "thinking_level" is expressed in the REST request schema.
       // The @google/generative-ai SDK may not expose it directly for all versions, so for
       // gemini-3 models we call REST directly to ensure thinking_level is honored.
-      if (isGemini3) {
-        return await this.executeGemini3ViaRest({
+      if (isGemini3 || (modelClass === 'gemini-2.5-pro' && request.parameters?.responseJsonSchema)) {
+        return await this.executeStructuredViaRest({
           requestedModel,
           modelClass,
           request,
           maxTokens,
           temperature,
           topP,
-          thinkingLevel
+          thinkingLevel: isGemini3 ? thinkingLevel : undefined,
+          thinkingBudget: !isGemini3 && Number.isInteger(request.parameters?.thinking_budget) ? request.parameters!.thinking_budget : undefined,
         })
       }
 
@@ -453,7 +454,7 @@ export class GeminiProvider implements LLMProvider {
     return costs[normalized] || { input: 0.00000125, output: 0.000005 }
   }
 
-  private async executeGemini3ViaRest(args: {
+  private async executeStructuredViaRest(args: {
     requestedModel: string
     modelClass: string
     request: LLMRequest
@@ -461,8 +462,9 @@ export class GeminiProvider implements LLMProvider {
     temperature: number
     topP: number
     thinkingLevel?: string
+    thinkingBudget?: number
   }): Promise<LLMResponse> {
-    const { requestedModel, modelClass, request, maxTokens, temperature, topP, thinkingLevel } = args
+    const { requestedModel, modelClass, request, maxTokens, temperature, topP, thinkingLevel, thinkingBudget } = args
 
     // Build multimodal content payload for Gemini REST API
     let parts: any[] = []
@@ -519,6 +521,8 @@ export class GeminiProvider implements LLMProvider {
 
     if (thinkingLevel) {
       body.generationConfig.thinkingConfig = { thinkingLevel }
+    } else if (thinkingBudget !== undefined) {
+      body.generationConfig.thinkingConfig = { thinkingBudget }
     }
 
     // Use the configured baseURL (defaults to https://generativelanguage.googleapis.com/v1beta)

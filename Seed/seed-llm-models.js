@@ -1396,8 +1396,8 @@ async function main() {
       sortOrder: 17,
       description: 'Extract cited fields from fetched evidence without automatic publication.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 6000 },
-      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' },
-      fallbacks: ['gemini-3.1-flash']
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' },
+      fallbacks: ['gemini-2.5-pro']
     },
     {
       code: 'GRANT_PREP_CHAT',

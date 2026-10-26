@@ -11,7 +11,7 @@ import type { SafeFetch } from './safeFetch'
 import { identifyUrl } from './urlIdentity'
 import { transcribeSelectedPages } from './ocr'
 import { semanticCandidates } from './embed'
-import { EXTRACTION_SCHEMA, EXTRACTION_VERSION, extractionQuality, REQUIRED_FIELDS } from './extractionContract'
+import { EXTRACTION_SCHEMA, EXTRACTION_VERSION, extractionQuality, explicitApplicationInvitation, REQUIRED_FIELDS } from './extractionContract'
 import { claimSharedWork, releaseSharedWork } from './sharedWork'
 import { retainCoverageGap } from './coverage'
 import { fingerprint } from './hashing'
@@ -75,8 +75,7 @@ export function validateExtraction(value: unknown, segments: EvidenceSegment[]):
   const invitation = raw.application_invitation as { value?: unknown; citations?: unknown[] } | undefined
   const invitationText=(invitation?.citations as Array<{quote?:string}>|undefined)?.map(c=>c.quote??'').join(' ')??''
   const invitationVerified = invitation?.value === true && Boolean(invitation.citations?.length) && invitation.citations!.every(c => verifyCitation(c, segments)) &&
-    /invit(?:es|ing)\s+(?:\w+\s+){0,3}(?:applications?|proposals?|nominations?)|(?:applications?|proposals?|nominations?)\s+(?:(?:are|now|currently)\s+)*(?:invited|open|accepted)|(?:applications?|proposals?)\s+can be submitted|accepting\s+(?:applications?|proposals?)|submit\s+(?:\w+\s+){0,3}proposals?|call for\s+(?:\w+\s+){0,3}proposals?\s+is\s+(?:now\s+)?open|आवेदन.{0,30}आमंत्र/i.test(invitationText) &&
-    !/not (?:accept|invit)|(?:applications?|proposals?) (?:are )?(?:not accepted|closed)|will (?:be )?(?:invit|open)|opens? (?:next|soon)/i.test(invitationText)
+    explicitApplicationInvitation(invitationText)
   return { payload: { fields: fields as FundingExtractionPayload['fields'], warnings: conflicts }, conflicts, coverage, identity, invitationVerified }
 }
 
