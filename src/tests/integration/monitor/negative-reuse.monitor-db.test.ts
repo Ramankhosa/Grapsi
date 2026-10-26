@@ -3,6 +3,7 @@ vi.mock('@/lib/prisma',async()=>{const {testPrisma}=await import('../helpers/mon
 import {resetMonitorTables,testPrisma as db} from '../helpers/monitorTestPrisma'
 import {queueCandidates,triageCandidates} from '@/lib/monitor/candidates'
 import {claimNextTask} from '@/lib/monitor/queue'
+import {localSuggestion} from '@/lib/monitor/localAnalysis'
 import type {SafeFetch} from '@/lib/monitor/safeFetch'
 
 beforeEach(async()=>{await resetMonitorTables()})
@@ -13,8 +14,28 @@ function transport(html=body,truncated=false):SafeFetch{return async url=>({requ
 async function fixture(){const site=await db.monitorSite.create({data:{host:'negative.invalid',min_delay_ms:0}});const resource=await db.monitorResource.create({data:{site_id:site.id,dedup_key:'https://negative.invalid/news',canonical_url:'https://negative.invalid/news',title:'Foundation research news'}});return {site,resource}}
 function paidFor(id:string,verdict='NOT_FUNDING',confidence=0.95){return vi.fn(async()=>({text:JSON.stringify({items:[{id,verdict,confidence,reason:'Alumni celebration; no funding opportunity',type:'news'}]}),model:'fixture',actualMicros:1n,attemptId:'fixture',attemptNo:1}))}
 async function run(siteId:string,resourceId:string,key:string,paid:ReturnType<typeof paidFor>,fetch=transport()){await queueCandidates(db,siteId,[resourceId],false,key);const lease=await claimNextTask({owner:'negative-test',kinds:['TRIAGE']});expect(lease).not.toBeNull();await triageCandidates(lease!,{fetch,paid});return lease!}
+async function generalResult(){
+ const P=require('../../../../tools/local-worker/policy.cjs'),job=await db.monitorLocalAnalysisJob.findFirstOrThrow()
+ const worker=await db.monitorLocalWorker.create({data:{id:crypto.randomUUID(),display_name:'Fixture',app_version:P.APP_VERSION,model_sha256:P.MODEL.sha256}})
+ await db.monitorLocalAnalysisResult.create({data:{job_id:job.id,resource_id:job.resource_id,version_id:job.version_id,worker_id:worker.id,input_hash:job.input_hash,policy_hash:P.POLICY_HASH,model_sha256:P.MODEL.sha256,decision:'GENERAL',elapsed_ms:1,details:{schemaVersion:2,candidates:[],multipleCalls:false,needsMoreEvidence:false,warnings:[]}}})
+ return job
+}
 
 describe('unchanged non-funding pages',()=>{
+ it('reuses the original local GENERAL hypothesis across identical full text and still runs cloud screening',async()=>{
+  const {site,resource}=await fixture(),paid=paidFor(resource.id,'UNSURE');process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true'
+  await run(site.id,resource.id,'first',paid);const job=await generalResult()
+  await run(site.id,resource.id,'raw-churn',paid,transport('<nav>New counter</nav>'+body))
+  expect(await db.monitorLocalAnalysisJob.count()).toBe(1);expect((await localSuggestion(resource.id,db))?.resultId).toBe(job.id)
+  expect(paid).toHaveBeenCalledTimes(1);expect((await db.monitorOpportunity.findFirstOrThrow()).triage_verdict).toBe('UNSURE')
+ })
+ it.each(['title','truncated'])('does not reuse a local GENERAL result after %s changes its original input',async(kind)=>{
+  const {site,resource}=await fixture(),paid=paidFor(resource.id);process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true'
+  await run(site.id,resource.id,'first',paid);await generalResult()
+  if(kind==='title')await db.monitorResource.update({where:{id:resource.id},data:{title:'Applications for the research grant'}})
+  await run(site.id,resource.id,'new-input',paid,transport('<nav>New counter</nav>'+body,kind==='truncated'))
+  expect(await db.monitorLocalAnalysisJob.count()).toBe(2);expect(await localSuggestion(resource.id,db)).toBeNull();expect(paid).not.toHaveBeenCalled()
+ })
  it('skips local and paid inference after raw HTML churn while refreshing source checks',async()=>{
   const {site,resource}=await fixture(),paid=paidFor(resource.id)
   await run(site.id,resource.id,'first',paid)

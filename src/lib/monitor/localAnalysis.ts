@@ -7,14 +7,17 @@ const P = require('../../../tools/local-worker/policy.cjs') as {
   makePayload: (row: Record<string, unknown>) => Record<string, unknown>
 }
 export const LOCAL_ANALYSIS_POLICY_HASH = P.POLICY_HASH
+const {sameGeneralEvidence}=require('../../../tools/local-worker/general-reuse.cjs') as {sameGeneralEvidence:(...aliases:string[])=>string}
 export interface LocalDetails { schemaVersion: number; candidates: Array<{ title: string; titleQuote: string; invitationQuote: string | null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null }>; multipleCalls: boolean; needsMoreEvidence: boolean; warnings: string[] }
 export interface LocalSuggestion { decision: string; details: LocalDetails; assessedOn: string; resultId: string }
 export async function localSuggestion(resourceId: string, db: Db = prisma): Promise<LocalSuggestion | null> {
   const rows = await db.$queryRawUnsafe<Array<{ decision: string; details: LocalDetails; assessed_on: string; job_id: string; full_hash: string; text: string }>>(`SELECT a.decision,a.details,j.payload->>'asOfDate' AS assessed_on,a.job_id,j.payload->>'fullTextHash' AS full_hash,v.text
     FROM monitor_local_analysis_results a JOIN monitor_local_analysis_jobs j ON j.id=a.job_id
-    JOIN monitor_resources r ON r.id=a.resource_id AND r.current_version_id=a.version_id
+    JOIN monitor_resources r ON r.id=a.resource_id
     JOIN monitor_resource_versions v ON v.id=a.version_id
+    JOIN monitor_resource_versions current_v ON current_v.id=r.current_version_id
     WHERE r.id=$1 AND a.policy_hash=$2 AND a.model_sha256=$3 AND j.payload->>'sourceHash'=v.raw_hash
+    AND (r.current_version_id=a.version_id OR ${sameGeneralEvidence('r','current_v','a','j','v','$2','$3')})
     ORDER BY a.created_at DESC LIMIT 1`,resourceId,P.POLICY_HASH,P.MODEL.sha256)
   const row=rows[0]
   return row && row.details.schemaVersion===2 && row.full_hash===P.sha256(row.text??'') ? { decision: row.decision, details: row.details, assessedOn: row.assessed_on, resultId: row.job_id } : null

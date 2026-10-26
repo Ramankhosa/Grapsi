@@ -4,6 +4,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const P=require('./policy.cjs');
 const Previous=require('./policy-1.1.0.cjs');
+const {hasReusableGeneral}=require('./general-reuse.cjs');
 const LEASE_SECONDS=120, MAX_ATTEMPTS=5;
 class ProtocolError extends Error {constructor(code,message){super(message);this.code=code;}}
 const check=(condition,code,message)=>{if(!condition)throw new ProtocolError(code,message);};
@@ -40,8 +41,9 @@ class Broker {
       FROM monitor_resources r JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=r.current_version_id AND v.resource_id=r.id
       WHERE s.status='ACTIVE' AND s.host=ANY($1::text[]) AND v.text IS NOT NULL AND r.canonical_url IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM monitor_local_analysis_jobs j WHERE j.version_id=v.id AND j.policy_hash=$2)
+      AND NOT ${hasReusableGeneral('r','v','$2','$3')}
       ${skipGuard}
-      ORDER BY r.last_observed_at DESC LIMIT 150`,this.allowedHosts,P.POLICY_HASH);
+      ORDER BY r.last_observed_at DESC LIMIT 150`,this.allowedHosts,P.POLICY_HASH,P.MODEL.sha256);
     if(!rows.length)return 0;
     let added=0;
     for(const row of rows){
@@ -53,9 +55,15 @@ class Broker {
     return added;
   }
   async sweep(){
+    await this.retireUnchanged();
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state='SUPERSEDED',updated_at=now() WHERE state='QUEUED' AND policy_hash<>$1",P.POLICY_HASH);
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs j SET state='SUPERSEDED',lease_until=NULL,updated_at=now() WHERE state IN ('QUEUED','RUNNING') AND NOT EXISTS(SELECT 1 FROM monitor_resources r WHERE r.id=j.resource_id AND r.current_version_id=j.version_id)");
     await this.db.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state=CASE WHEN attempts >= $1 THEN 'FAILED' ELSE 'QUEUED' END,lease_until=NULL,available_at=now(),last_error='Lease expired; device unavailable',updated_at=now() WHERE state='RUNNING' AND lease_until<now()",MAX_ATTEMPTS);
+  }
+  async retireUnchanged(db=this.db){
+    return db.$executeRawUnsafe(`UPDATE monitor_local_analysis_jobs j SET state='SUPERSEDED',last_error='Identical source evidence; existing local result retained',updated_at=now()
+      WHERE j.state='QUEUED' AND EXISTS(SELECT 1 FROM monitor_resources r JOIN monitor_resource_versions v ON v.id=r.current_version_id
+        WHERE r.id=j.resource_id AND ${hasReusableGeneral('r','v','$1','$2')})`,P.POLICY_HASH,P.MODEL.sha256);
   }
   async claim(){
     check(!this.legacy,'UPGRADE_REQUIRED',`Saved results can upload, but new analysis requires worker ${P.APP_VERSION}.`);
@@ -63,6 +71,7 @@ class Broker {
     await this.scan();await this.rules();
     const skipGuard=this.skipTable?"AND NOT EXISTS(SELECT 1 FROM monitor_skip_rules k WHERE k.site_id=r.site_id AND (k.expires_at IS NULL OR k.expires_at>now()) AND (k.dedup_key=r.dedup_key OR (k.match='FOLDER' AND (starts_with(r.dedup_key,rtrim(k.dedup_key,'/') || '/') OR starts_with(r.dedup_key,k.dedup_key || '?')))))":'';
     return this.db.$transaction(async tx=>{
+      await this.retireUnchanged(tx);
       // These leases are independent of the live crawler's per-site lease.
       await tx.$executeRawUnsafe(`UPDATE monitor_local_analysis_jobs SET state='FAILED',lease_until=NULL,last_error='Retry limit reached',updated_at=now() WHERE state='RUNNING' AND lease_until<now() AND attempts >= $1`,MAX_ATTEMPTS);
       await tx.$executeRawUnsafe(`UPDATE monitor_local_analysis_jobs j SET state='SUPERSEDED',lease_until=NULL,updated_at=now() WHERE j.state IN ('QUEUED','RUNNING') AND NOT EXISTS(SELECT 1 FROM monitor_resources r WHERE r.id=j.resource_id AND r.current_version_id=j.version_id)`);
@@ -72,16 +81,17 @@ class Broker {
       if(busy.length)return {job:null,busy:true};
       const token=crypto.randomUUID();
       const rows=await tx.$queryRawUnsafe(`WITH candidate AS (
-        SELECT j.id FROM monitor_local_analysis_jobs j JOIN monitor_resources r ON r.id=j.resource_id JOIN monitor_sites s ON s.id=r.site_id
+        SELECT j.id FROM monitor_local_analysis_jobs j JOIN monitor_resources r ON r.id=j.resource_id JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=r.current_version_id
         WHERE ((j.state='QUEUED' AND j.available_at<=now()) OR (j.state='RUNNING' AND j.lease_until<now())) AND j.attempts<$1
           AND j.policy_hash=$2 AND s.status='ACTIVE' AND s.host=ANY($3::text[]) AND r.current_version_id=j.version_id
+          AND NOT ${hasReusableGeneral('r','v','$2','$6')}
           ${skipGuard}
         ORDER BY CASE WHEN coalesce((j.payload->>'queuePriority')::int,100)<10 THEN 0
           WHEN EXISTS(SELECT 1 FROM monitor_opportunities o WHERE o.primary_resource_id=r.id AND o.field_evidence->'payload'->'fields'->'close_date'->>'status'='supported' AND o.field_evidence->'payload'->'fields'->'close_date'->>'value' BETWEEN to_char(current_date,'YYYY-MM-DD') AND to_char(current_date+7,'YYYY-MM-DD')) THEN 10
           WHEN coalesce((j.payload->>'queuePriority')::int,100)<=20 THEN 20
           WHEN j.created_at<now()-interval '6 hours' THEN 30 WHEN j.payload->'page'->>'text' ~* 'deadline|closes|extension|corrigendum' THEN 40 ELSE 100 END,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
         UPDATE monitor_local_analysis_jobs j SET state='RUNNING',owner=$4,lease_token=$5,lease_until=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
-        FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token);
+        FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token,P.MODEL.sha256);
       if(!rows.length)return {job:null};
       const row=rows[0];
       // A laptop may return days after discovery. Judge deadlines as of claim time,

@@ -73,6 +73,30 @@ test('idle device discovers stored pages and returns a versioned shadow result',
   const rows=await db.$queryRawUnsafe('SELECT * FROM monitor_local_analysis_results');assert.equal(rows.length,1);assert.equal(rows[0].mode,'SHADOW');
   assert.equal((await broker.claim()).job,null);
 });
+
+test('the independent scanner reuses identical GENERAL evidence after a new raw version',async()=>{
+ await page();const broker=await connect(),{job}=await broker.claim();await broker.complete({...completion(job),decision:'GENERAL',details:{needsMoreEvidence:false}});
+ await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) SELECT 'r1-v2',resource_id,text,'raw-churn',meaningful_hash FROM monitor_resource_versions WHERE id='r1-v1'");
+ await db.$executeRawUnsafe("UPDATE monitor_resources SET current_version_id='r1-v2' WHERE id='r1'");broker.lastScan=0;
+ assert.equal(await broker.scan(),0);assert.equal((await broker.claim()).job,null);
+ assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM monitor_local_analysis_results'))[0].n,1);
+});
+
+test('a redundant queued job is retained as superseded while saved acknowledgements remain idempotent',async()=>{
+ await page();const broker=await connect(),{job}=await broker.claim(),input={...completion(job),decision:'GENERAL',details:{needsMoreEvidence:false}};await broker.complete(input);
+ await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) SELECT 'r1-v2',resource_id,text,'raw-churn',meaningful_hash FROM monitor_resource_versions WHERE id='r1-v1'");
+ await db.$executeRawUnsafe("UPDATE monitor_resources SET current_version_id='r1-v2' WHERE id='r1'");
+ const row=(await db.$queryRawUnsafe("SELECT r.id,r.current_version_id,r.title,r.canonical_url AS url,v.text,v.raw_hash,v.truncated FROM monitor_resources r JOIN monitor_resource_versions v ON v.id=r.current_version_id WHERE r.id='r1'"))[0],payload=P.makePayload(row),id=crypto.randomUUID();
+ await db.$executeRawUnsafe("INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload) VALUES($1,'r1','r1-v2',$2,$3,$4::jsonb)",id,P.POLICY_HASH,P.sha256(JSON.stringify(payload)),JSON.stringify(payload));
+ assert.equal((await broker.claim()).job,null);assert.equal((await db.$queryRawUnsafe('SELECT state FROM monitor_local_analysis_jobs WHERE id=$1',id))[0].state,'SUPERSEDED');assert.equal((await broker.complete(input)).duplicate,true);
+});
+
+test('an identical page with a changed heading still gets a new local job',async()=>{
+ await page();const broker=await connect(),{job}=await broker.claim();await broker.complete({...completion(job),decision:'GENERAL'});
+ await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) SELECT 'r1-v2',resource_id,text,'new-heading',meaningful_hash FROM monitor_resource_versions WHERE id='r1-v1'");
+ await db.$executeRawUnsafe("UPDATE monitor_resources SET current_version_id='r1-v2',title='New research applications' WHERE id='r1'");broker.lastScan=0;
+ assert.equal((await broker.claim()).job.payload.versionId,'r1-v2');
+});
 test('an offline host leaves work durable and another host reclaims an expired lease',async()=>{
   await page();const first=await connect(),second=await connect();const {job}=await first.claim();
   assert.equal((await second.claim()).job,null);
