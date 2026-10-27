@@ -19,7 +19,10 @@ import { sameSiteHost } from './urlIdentity'
  * - each render has request, byte and time budgets, a fresh context with no
  *   persistent storage, and closes on timeout or lease loss;
  * - readiness is DOM ready plus a readiness selector (or enough links), never
- *   `networkidle`;
+ *   `networkidle`; then up to MAX_SCROLLS scrolls for lazy-loaded content;
+ * - the HTML returned includes open shadow roots and same-site frames;
+ * - nothing is clicked or typed: consent banners, logins and bot checks are
+ *   left as they are;
  * - the Chromium sandbox stays on.
  *
  * Chromium resolves DNS itself, so the address check here cannot pin its
@@ -59,6 +62,8 @@ const MAX_HTML_CHARS = 5_000_000
 const NAVIGATION_TIMEOUT_MS = 20_000
 const READINESS_TIMEOUT_MS = 10_000
 const RECYCLE_AFTER_RENDERS = 50
+const MAX_SCROLLS = 4
+const MAX_FRAMES = 3
 
 /** Script/style CDNs a rendered funder page commonly needs. Overridable by env. */
 const DEFAULT_DEPENDENCY_HOSTS = [
@@ -259,7 +264,43 @@ export async function createBrowserRenderer(
           .catch(() => false)
       }
 
-      let html = await page.content()
+      // Lazy-loaded listings fill in as the reader scrolls: a few bounded
+      // scrolls, stopping as soon as the page stops growing.
+      for (let i = 0; i < MAX_SCROLLS && !renderController.signal.aborted; i += 1) {
+        const grew = await page.evaluate(async () => {
+          const before = document.documentElement.scrollHeight
+          window.scrollTo(0, before)
+          await new Promise((resolve) => setTimeout(resolve, 500))
+          return document.documentElement.scrollHeight > before
+        }).catch(() => false)
+        if (!grew) break
+      }
+
+      // Web components keep their text in shadow roots, which page.content()
+      // leaves out; serialise the open ones with the page.
+      let html = await page.evaluate(() => {
+        const roots: ShadowRoot[] = []
+        const walk = (node: Element | ShadowRoot) => node.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) { roots.push(el.shadowRoot); walk(el.shadowRoot) } })
+        walk(document.documentElement)
+        const root = document.documentElement as HTMLElement & { getHTML?: (o: { serializableShadowRoots: boolean; shadowRoots: ShadowRoot[] }) => string }
+        return roots.length && root.getHTML ? `<html>${root.getHTML({ serializableShadowRoots: true, shadowRoots: roots })}</html>` : null
+      }).catch(() => null) ?? await page.content()
+
+      // Same-site frames (old portals list their calls in one): their body goes
+      // into the page, marked with where it came from.
+      const frames: string[] = []
+      for (const frame of page.frames().slice(1, 1 + MAX_FRAMES)) {
+        try {
+          const frameUrl = new URL(frame.url())
+          if (!/^https?:$/.test(frameUrl.protocol) || !options.inScope(frameUrl.hostname)) continue
+          const body = await frame.evaluate(() => document.body?.innerHTML ?? '')
+          if (body) frames.push(`<section data-frame-src="${frameUrl.href.replace(/"/g, '&quot;')}">${body}</section>`)
+        } catch {
+          // a detached or cross-origin frame is skipped
+        }
+      }
+      if (frames.length) html = html.includes('</body>') ? html.replace('</body>', `${frames.join('')}</body>`) : html + frames.join('')
+
       let truncated = bytes > MAX_BYTES
       if (html.length > MAX_HTML_CHARS) {
         html = html.slice(0, MAX_HTML_CHARS)

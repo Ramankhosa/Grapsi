@@ -20,6 +20,8 @@ export type MonitorFetchErrorCode =
   | 'TLS_ERROR'
   | 'NETWORK'
   | 'BROWSER'
+  /** A bot check (Cloudflare, CAPTCHA…) answered instead of the page. Never bypassed. */
+  | 'BOT_PROTECTED'
   /** An admin marked the page "don't visit"; not a failure of the site. */
   | 'SKIPPED_BY_ADMIN'
 

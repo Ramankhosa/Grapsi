@@ -3,6 +3,7 @@ import { requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth
 import { prisma } from '@/lib/prisma'
 import { lifecycleAt } from '@/lib/monitor/evidence'
 import { localSuggestion } from '@/lib/monitor/localAnalysis'
+import { laneWhere } from '@/lib/monitor/discoveryExport'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest) {
   const lane = request.nextUrl.searchParams.get('lane') ?? 'PENDING'
   const cursor = request.nextUrl.searchParams.get('cursor')
   const rows = await prisma.monitorOpportunity.findMany({ where: {
-    ...(lane === 'ALL' ? {} : lane === 'WAITING_LOCAL' ? {triage_reason:{startsWith:'Waiting for laptop'}} : lane === 'NEEDS_EVIDENCE' ? {processing_state:'NEEDS_EVIDENCE'} : lane === 'AUDIT' ? { triage_verdict: 'NOT_FUNDING' } : { review_state: lane }),
+    ...laneWhere(lane),
     ...(cursor ? { id: { lt: cursor } } : {}),
   }, orderBy: { id: 'desc' }, take: 50, include: { site: { select: { host: true, display_name: true } }, primary_resource: { select: { title:true, canonical_url: true, last_validated_at: true, last_validation_status: true } }, funding_call: { select: { id: true, title:true, revision: true, catalog_status: true } }, evidence: { include: { version: { select: { text: true, truncated: true, fetched_at: true } }, resource: { select: { canonical_url: true } } } } } })
   return NextResponse.json({ discoveries: await Promise.all(rows.map(async row => {

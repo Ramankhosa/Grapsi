@@ -1,4 +1,5 @@
 'use client'
+import { FileSpreadsheet, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { classifyOpportunity } from '@/lib/monitor/outcomes'
@@ -30,6 +31,7 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [selected, setSelected] = useState<Record<string, string[]>>({})
   const [reasons, setReasons] = useState<Record<string, string>>({})
   const [cursor, setCursor] = useState<string | null>(null)
@@ -57,9 +59,21 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
     } catch (e) { setError(e instanceof Error ? e.message : 'The action failed') }
     finally { setBusy(false) }
   }
+  async function download() {
+    setExporting(true); setError('')
+    try {
+      const response = await authedFetch(`/api/funding/monitor/discoveries/export?lane=${lane}`)
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.message ?? 'The download failed')
+      const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'source-watch.xlsx'
+      const href = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a'); link.href = href; link.download = name; link.click()
+      setTimeout(() => URL.revokeObjectURL(href), 1000)
+    } catch (e) { setError(e instanceof Error ? e.message : 'The download failed') }
+    finally { setExporting(false) }
+  }
   return <section className="space-y-4">
     {intro !== '' && <p className="cb-hint">{intro ?? 'New announcements and source changes appear here. Review the quoted evidence before publishing. Drafts are never published automatically.'}</p>}
-    <div className="flex flex-wrap gap-2">{lanes.map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button></div>
+    <div className="flex flex-wrap gap-2">{lanes.map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button><button className="cb-btn-secondary cb-btn-sm" disabled={exporting} onClick={() => void download()} title="An Excel sheet of this lane for manual review">{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />} Download Excel</button></div>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}{notice && <p role="status" className="text-sm text-green-700">{notice}</p>}
     {!rows.length && <p className="cb-hint">Nothing in this view yet. The Crawl stage shows whether websites are being checked.</p>}
     {rows.map(row => { const shown = result(row); return <article key={row.id} className={`space-y-3 rounded-xl border border-l-4 border-gray-200 bg-white p-4 ${shown.style.row.split(' ')[0]}`}>

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireFundingReadOperatorRequest, requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { approveImportRequest, type ImportRequest } from '@/lib/monitor/catalogImport'
+import { approveImportRequests } from '@/lib/monitor/catalogImport'
 import { z } from 'zod'
 import { seedCatalogSuggestions } from '@/lib/monitor/discovery'
 import { enqueueTask } from '@/lib/monitor/queue'
@@ -22,8 +22,11 @@ export async function GET(request: NextRequest) {
   const status = request.nextUrl.searchParams.get('status')
   const cursor = request.nextUrl.searchParams.get('cursor')
   const search = (request.nextUrl.searchParams.get('search') ?? '').slice(0, 150)
+  const pendingOnly = request.nextUrl.searchParams.get('pending') === '1'
+  const pendingWhere = { pending_scope: { not: Prisma.DbNull }, status: { not: 'BLOCKED' } }
+  const pendingCount = await prisma.monitorSite.count({ where: pendingWhere })
   const sites = await prisma.monitorSite.findMany({
-    where: { ...(status ? { status } : {}), ...(cursor ? { id: { gt: cursor } } : {}), ...(search ? { host: { contains: search, mode: 'insensitive' } } : {}) },
+    where: { ...(status ? { status } : {}), ...(pendingOnly ? pendingWhere : {}), ...(cursor ? { id: { gt: cursor } } : {}), ...(search ? { host: { contains: search, mode: 'insensitive' } } : {}) },
     orderBy: { id: 'asc' },
     take: 100,
     include: {
@@ -46,11 +49,11 @@ export async function GET(request: NextRequest) {
       _count: { select: { resources: true } },
     },
   })
-  return NextResponse.json({ sites: sites.map(s => ({ ...s, daily_budget_micros: s.daily_budget_micros?.toString() ?? null, storage_quota_bytes: s.storage_quota_bytes?.toString() ?? null })), next: sites.length === 100 ? sites[99].id : null }, { headers: { 'Cache-Control': 'private, no-store' } })
+  return NextResponse.json({ sites: sites.map(s => ({ ...s, daily_budget_micros: s.daily_budget_micros?.toString() ?? null, storage_quota_bytes: s.storage_quota_bytes?.toString() ?? null })), next: sites.length === 100 ? sites[99].id : null, pendingCount }, { headers: { 'Cache-Control': 'private, no-store' } })
 }
 
 const host = z.string().min(3).max(253).regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i)
-const change = z.object({ action: z.enum(['activate', 'pause', 'discover', 'configure', 'seed', 'approve_feed', 'confirm_website', 'approve_import', 'reject_import']), ids: z.array(z.string()).max(100).default([]), cursor: z.string().optional(), feedId: z.string().optional(), relatedHosts: z.array(host).max(20).optional(), attachmentHosts: z.array(host).max(20).optional(), funderId: z.string().optional(), confirmWebsite: z.boolean().optional(), tlsException: z.object({ reason: z.string().min(20).max(1000), expiresAt: z.string().datetime() }).nullable().optional() })
+const change = z.object({ action: z.enum(['activate', 'pause', 'discover', 'configure', 'seed', 'approve_feed', 'confirm_website', 'approve_import', 'reject_import', 'approve_all_imports', 'reject_all_imports']), ids: z.array(z.string()).max(500).default([]), cursor: z.string().optional(), feedId: z.string().optional(), relatedHosts: z.array(host).max(20).optional(), attachmentHosts: z.array(host).max(20).optional(), funderId: z.string().optional(), confirmWebsite: z.boolean().optional(), tlsException: z.object({ reason: z.string().min(20).max(1000), expiresAt: z.string().datetime() }).nullable().optional() })
 export async function POST(request: NextRequest) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) return auth.response
@@ -61,17 +64,25 @@ export async function POST(request: NextRequest) {
   if ((body.action === 'approve_feed' && (!body.feedId || body.ids.length !== 1)) || (body.action === 'confirm_website' && (!body.funderId || body.ids.length !== 1))) return NextResponse.json({ message: 'Select one site and its feed or funder' }, { status: 400 })
   if (body.confirmWebsite && !body.funderId) return NextResponse.json({ message: 'Select the confirmed funder for this website' }, { status: 400 })
   if (body.action === 'seed') return NextResponse.json(await seedCatalogSuggestions(500, body.cursor))
+  // Import requests, one or many: each site is approved in its own transaction
+  // (one blocked site does not undo the rest) and big batches start staggered.
+  if (body.action === 'approve_import' || body.action === 'approve_all_imports' || body.action === 'reject_all_imports') {
+    const ids = body.action === 'approve_import' ? body.ids
+      : (await prisma.monitorSite.findMany({ where: { pending_scope: { not: Prisma.DbNull }, status: { not: 'BLOCKED' } }, select: { id: true }, orderBy: { created_at: 'asc' }, take: 500 })).map(s => s.id)
+    if (body.action === 'reject_all_imports') {
+      const rejected = await prisma.monitorSite.updateMany({ where: { id: { in: ids } }, data: { pending_scope: Prisma.DbNull } })
+      return NextResponse.json({ ok: true, rejected: rejected.count })
+    }
+    return NextResponse.json({ ok: true, ...(await approveImportRequests(ids, auth.actor.id)) })
+  }
+  if (body.ids.length > 100) return NextResponse.json({ message: 'Select at most 100 sites for this action' }, { status: 400 })
   if (body.tlsException && (Date.parse(body.tlsException.expiresAt) <= Date.now() || Date.parse(body.tlsException.expiresAt) > Date.now() + 7 * 86400_000)) return NextResponse.json({ message: 'A TLS exception must expire within seven days' }, { status: 400 })
   await prisma.$transaction(async tx => {
     for (const id of body.ids) {
-      if (body.action === 'approve_import' || body.action === 'reject_import') {
-        // An operator's catalogue-import request: scope, budget, priority and
-        // funder links are applied only here, by a super admin.
+      if (body.action === 'reject_import') {
         const site = await tx.monitorSite.findUniqueOrThrow({ where: { id } })
-        const request = site.pending_scope as unknown as ImportRequest | null
-        if (!request) throw new Error('This site has no import request waiting')
-        if (body.action === 'approve_import') await approveImportRequest(tx, id, request, auth.actor.id)
-        else await tx.monitorSite.update({ where: { id }, data: { pending_scope: Prisma.DbNull } })
+        if (!site.pending_scope) throw new Error('This site has no import request waiting')
+        await tx.monitorSite.update({ where: { id }, data: { pending_scope: Prisma.DbNull } })
         continue
       }
       if (body.action === 'approve_feed') {

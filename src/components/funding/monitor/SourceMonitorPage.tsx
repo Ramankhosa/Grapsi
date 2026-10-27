@@ -540,7 +540,7 @@ export default function SourceMonitorPage() {
         {activeView === 'sources' && sub === 'import' && (
           <MonitorCatalogImport authedFetch={authedFetch} isSuperAdmin={canManageOperators} onAdded={() => void load()} />
         )}
-        {activeView === 'sources' && sub === 'websites' && <MonitorSites authedFetch={authedFetch} canApprove={canManageOperators} />}
+        {activeView === 'sources' && sub === 'websites' && <MonitorSites authedFetch={authedFetch} canApprove={canManageOperators} onChanged={() => void load()} />}
         {activeView === 'sources' && sub === 'watchpoints' && (
           <MonitorSources sources={sources} busy={busy} onCheckNow={checkNow} onToggleStatus={toggleStatus} onDelete={deleteSource} />
         )}

@@ -8,6 +8,7 @@ import { lockClaim, matchCatalog, roundIdentity } from './matching'
 import { ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
 import { completeTaskInTx, enqueueTask, operationKeys, withFence, type Lease } from './queue'
 import type { SafeFetch } from './safeFetch'
+import type { Renderer } from './browser'
 import { identifyUrl } from './urlIdentity'
 import { transcribeSelectedPages } from './ocr'
 import { semanticCandidates } from './embed'
@@ -79,7 +80,7 @@ export function validateExtraction(value: unknown, segments: EvidenceSegment[]):
   return { payload: { fields: fields as FundingExtractionPayload['fields'], warnings: conflicts }, conflicts, coverage, identity, invitationVerified }
 }
 
-export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch; signal?: AbortSignal; paid?: (input: PaidStageInput) => Promise<PaidStageResult> }) {
+export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch; signal?: AbortSignal; renderer?: Renderer | null; paid?: (input: PaidStageInput) => Promise<PaidStageResult> }) {
   const id = String(lease.payload.opportunityId)
   const opportunity = await prisma.monitorOpportunity.findUniqueOrThrow({ where: { id }, include: { site: true, primary_resource: true } })
   if (!opportunity.primary_resource || opportunity.review_state === 'REJECTED') {
@@ -87,7 +88,7 @@ export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch;
   }
   if (lease.payload.reviewRevision !== opportunity.review_revision) throw new Error('Extraction request is stale; refresh the discovery')
   let primary
-  try { primary=await readResource(opportunity.primary_resource, opportunity.site, lease, deps.fetch, deps.signal) }
+  try { primary=await readResource(opportunity.primary_resource, opportunity.site, lease, deps.fetch, deps.signal, deps.renderer ?? null) }
   catch(error){
     if(error instanceof Error&&/outside.*approved hosts|out.of.scope/i.test(error.message)){
       await withFence(lease,async tx=>{await tx.monitorOpportunity.update({where:{id},data:{processing_state:'NEEDS_EVIDENCE',triage_reason:`Related host approval required: ${error.message}`}});await completeTaskInTx(tx,lease,{needsHostApproval:true})});return
@@ -105,7 +106,7 @@ export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch;
     if(!siteScope(opportunity.site)(identity.host)){failures.push(`Related host approval required: ${attachment.url}`);await withFence(lease,tx=>retainCoverageGap(tx,opportunity.site_id,attachment.url,'HOST_APPROVAL','Observed supporting document requires related-host approval.'));continue}
     const resource = await withFence(lease, tx => tx.monitorResource.upsert({ where: { site_id_dedup_key: { site_id: opportunity.site_id, dedup_key: identity.dedupKey } },
       create: { site_id: opportunity.site_id, dedup_key: identity.dedupKey, canonical_url: identity.canonical, raw_url: attachment.url, title: attachment.title, kind: 'DOCUMENT', role: /corrig|amend|extension/i.test(attachment.title) ? 'CORRIGENDUM' : 'GUIDELINES', revisit_policy: 'ACTIVE', next_revisit_at: new Date(Date.now() + 3 * 86400_000) }, update: {} }))
-    try { segments.push(...(await readResource(resource, opportunity.site, lease, deps.fetch, deps.signal)).segments) }
+    try { segments.push(...(await readResource(resource, opportunity.site, lease, deps.fetch, deps.signal, deps.renderer ?? null)).segments) }
     catch (error) { failures.push(`${attachment.url}: ${error instanceof Error ? error.message : 'fetch failed'}`) }
   }
   if (process.env.MONITOR_OCR_ENABLED === 'true') {

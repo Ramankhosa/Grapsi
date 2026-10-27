@@ -9,6 +9,7 @@ import { fingerprint, listingMeaningfulHash, meaningfulText, sha256 } from './ha
 import { extractListing, extractScopeText, type ListingItem } from './items'
 import { completeTaskInTx, withFence, type Lease } from './queue'
 import { decodeBody, gunzipCapped, type SafeFetch } from './safeFetch'
+import { botChallenge, botChallengeError, frameLinks } from './pageText'
 import { SITE_AUTO_PAUSE_FAILURES, siteScope, tlsExceptionHosts } from './sites'
 import { identifyUrl, type UrlIdentityOptions } from './urlIdentity'
 import { queueCandidates } from './candidates'
@@ -220,12 +221,35 @@ async function fetchListingPage(
   }
 
   const html = decodeBody(result)
-  const { extraction, scopeText } = fromHtml(html, result.finalUrl)
+  const vendor = botChallenge(result.status, result.headers, html)
+  if (vendor) throw botChallengeError(result.finalUrl, vendor, result.status)
+  let { extraction, scopeText } = fromHtml(html, result.finalUrl)
+  // An old-style site keeps its listing in a frame or iframe: read the
+  // same-site frame documents (at most two) when the page itself lists nothing.
+  let rawHash = sha256(result.body)
+  if (meaningfulItems(extraction.items) === 0 && !source.selector) {
+    const skipRules = await loadSkipRules(prisma, site.id)
+    for (const frameUrl of frameLinks(html, result.finalUrl, scope).slice(0, 2)) {
+      if (skipRuleFor(skipRules, frameUrl)) continue
+      try {
+        const frame = await deps.fetch(frameUrl, { inScope: scope, minDelayMs: site.min_delay_ms, tlsInsecureHosts: tlsExceptionHosts(site), maxBytes: CHECK_LIMITS.listingMaxBytes, signal: deps.signal })
+        if (frame.contentKind !== 'html') continue
+        const framed = fromHtml(decodeBody(frame), frame.finalUrl)
+        if (meaningfulItems(framed.extraction.items) > meaningfulItems(extraction.items)) {
+          extraction = framed.extraction
+          scopeText = framed.scopeText
+          rawHash = sha256(Buffer.concat([result.body, frame.body]))
+        }
+      } catch {
+        // a frame that cannot be read leaves the page as it was
+      }
+    }
+  }
   const plain: FetchedPage = {
     url,
     finalUrl: result.finalUrl,
     notModified: false,
-    rawHash: sha256(result.body),
+    rawHash,
     truncated: result.truncated,
     httpStatus: result.status,
     etag: result.headers.etag ?? null,

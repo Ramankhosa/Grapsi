@@ -48,3 +48,20 @@ export function adaptiveCadenceDays(baseDays: number, quietStreak: number, prior
 export function nextCheckAt(now: Date, everyDays: number, key: string): Date {
   return new Date(startOfIstDay(now).getTime() + Math.max(1, everyDays) * DAY_MS + jitterMs(key))
 }
+
+/**
+ * First checks of a bulk import or approval: up to `freeUpTo` sites start at
+ * once, larger batches are spread `minutesPerSite` apart, never longer than
+ * `maxMinutes` in all. Returns null when the site may start now.
+ */
+export const BULK_SPREAD = { freeUpTo: 10, minutesPerSite: 3, maxMinutes: 24 * 60 }
+
+export function bulkSpreadMinutes(count: number): number {
+  return count <= BULK_SPREAD.freeUpTo ? 0 : Math.min(BULK_SPREAD.maxMinutes, count * BULK_SPREAD.minutesPerSite)
+}
+
+export function staggeredStart(now: Date, index: number, count: number): Date | null {
+  const spread = bulkSpreadMinutes(count)
+  if (!spread || index === 0) return null
+  return new Date(now.getTime() + Math.floor((index * spread * 60_000) / count))
+}

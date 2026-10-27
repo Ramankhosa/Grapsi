@@ -1,6 +1,6 @@
 'use client'
 
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Database, Eye, Loader2, Search, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CalendarRange, Check, CheckCircle2, ChevronDown, Database, Eye, Loader2, Search, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 type AuthedFetch = (path: string, init?: RequestInit) => Promise<Response>
@@ -10,6 +10,9 @@ interface Website {
   host: string
   calls: number
   liveCalls: number
+  matchedCalls: number
+  nextDeadline: string | null
+  latestAdded: string | null
   documents: number
   funders: Funder[]
   sampleUrls: string[]
@@ -18,6 +21,8 @@ interface Website {
   warnings: Array<{ code: string; message: string }>
   suggested: { frequencyMinutes: number; priority: 'HIGH' | 'NORMAL' | 'LOW'; documentHosts: string[] }
 }
+interface Facet { value: string; calls: number }
+interface Facets { kinds: Facet[]; areas: Facet[]; careerStages: Facet[]; countries: Facet[]; funderTypes: Facet[] }
 
 interface Setup {
   watchUrl: string
@@ -37,15 +42,40 @@ interface Setup {
   preview: { state: 'idle' | 'loading' | 'ok' | 'error'; message?: string; title?: string | null; lines?: number; feedUrl?: string | null }
 }
 
-interface Result { host: string; status: string; message: string; funderLinks: string; websiteSaved: number; notes?: string[] }
+interface Result { host: string; status: string; message: string; funderLinks: string; websiteSaved: number; notes?: string[]; firstCheckAt?: string | null }
+
+interface Filters {
+  q: string
+  title: string
+  country: string
+  type: string
+  status: 'LIVE' | 'ANY' | 'CLOSED'
+  dateField: 'DEADLINE' | 'OPENS' | 'PUBLISHED' | 'ADDED'
+  from: string
+  to: string
+  kinds: string[]
+  areas: string[]
+  stages: string[]
+  minAward: string
+  unwatched: boolean
+  oneOff: boolean
+  sort: 'LIVE' | 'DEADLINE' | 'RECENT' | 'CALLS' | 'NAME'
+}
+
+const EMPTY_FILTERS: Filters = { q: '', title: '', country: '', type: '', status: 'LIVE', dateField: 'DEADLINE', from: '', to: '', kinds: [], areas: [], stages: [], minAward: '', unwatched: true, oneOff: false, sort: 'LIVE' }
+const PAGE = 25
+/** Matches the server's BULK_IMPORT_CAP. */
+const BULK_CAP = 500
+const PICK_CAP = 200
 
 const FREQUENCIES = [
   [1440, 'Every day'],
   [4320, 'Every 3 days'],
   [10080, 'Every week'],
 ] as const
-const COUNTRIES = [['', 'All countries'], ['US', 'United States'], ['GB', 'United Kingdom'], ['IN', 'India'], ['DE', 'Germany'], ['FR', 'France'], ['SE', 'Sweden'], ['NO', 'Norway'], ['DK', 'Denmark'], ['NL', 'Netherlands'], ['CH', 'Switzerland'], ['CA', 'Canada'], ['AU', 'Australia'], ['JP', 'Japan'], ['BE', 'Belgium']]
-const TYPES = [['', 'All funder types'], ['GOVERNMENT', 'Government'], ['FOUNDATION', 'Foundation'], ['INTERGOVERNMENTAL', 'Intergovernmental'], ['CORPORATE', 'Corporate'], ['UNIVERSITY', 'University']]
+const DATE_FIELDS = [['DEADLINE', 'Deadline'], ['OPENS', 'Opens'], ['PUBLISHED', 'Published'], ['ADDED', 'Added to database']] as const
+const SORTS = [['LIVE', 'Most live calls'], ['DEADLINE', 'Soonest deadline'], ['RECENT', 'Newest calls'], ['CALLS', 'Most matching calls'], ['NAME', 'Website A–Z']] as const
+const TYPE_LABEL: Record<string, string> = { GOVERNMENT: 'Government', FOUNDATION: 'Foundation', INTERGOVERNMENTAL: 'Intergovernmental', CORPORATE: 'Corporate', UNIVERSITY: 'University', VENTURE: 'Venture' }
 const WARNING_TONE: Record<string, string> = {
   FILE_HOST: 'border-red-200 bg-red-50 text-red-800',
   FUNDER_MISMATCH: 'border-red-200 bg-red-50 text-red-800',
@@ -61,16 +91,55 @@ const WARNING_LABEL: Record<string, string> = {
   FEW_CALLS: 'Few calls',
 }
 
+let regionNames: Intl.DisplayNames | null = null
+function countryName(code: string) {
+  try {
+    regionNames ??= new Intl.DisplayNames(['en'], { type: 'region' })
+    return regionNames.of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+const isoDay = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+const daysFromToday = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d) }
+const shortDate = (value: string) => new Date(value.length === 10 ? `${value}T00:00:00` : value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+
+const DATE_PRESETS: Array<{ label: string; apply: () => Pick<Filters, 'dateField' | 'from' | 'to'> }> = [
+  { label: 'Deadline in the next 30 days', apply: () => ({ dateField: 'DEADLINE', from: daysFromToday(0), to: daysFromToday(30) }) },
+  { label: 'Deadline in the next 90 days', apply: () => ({ dateField: 'DEADLINE', from: daysFromToday(0), to: daysFromToday(90) }) },
+  { label: 'Opened in the last 90 days', apply: () => ({ dateField: 'OPENS', from: daysFromToday(-90), to: daysFromToday(0) }) },
+  { label: 'Added in the last 30 days', apply: () => ({ dateField: 'ADDED', from: daysFromToday(-30), to: daysFromToday(0) }) },
+]
+
+/** The filters as query parameters; the bulk import sends the same string. */
+function queryFor(f: Filters, offset = 0) {
+  const p = new URLSearchParams({ status: f.status, sort: f.sort, unwatched: f.unwatched ? '1' : '0', oneOff: f.oneOff ? '1' : '0', offset: String(offset) })
+  if (f.q.trim()) p.set('q', f.q.trim())
+  if (f.title.trim()) p.set('title', f.title.trim())
+  if (f.country) p.set('country', f.country)
+  if (f.type) p.set('type', f.type)
+  if (f.from || f.to) p.set('dateField', f.dateField)
+  if (f.from) p.set('from', f.from)
+  if (f.to) p.set('to', f.to)
+  if (f.kinds.length) p.set('kinds', f.kinds.join('|'))
+  if (f.areas.length) p.set('areas', f.areas.join('|'))
+  if (f.stages.length) p.set('stages', f.stages.join('|'))
+  if (Number(f.minAward) > 0) p.set('minAward', String(Number(f.minAward)))
+  return p.toString()
+}
+
+function activeFilterCount(f: Filters) {
+  return [f.title.trim(), f.country, f.type, f.from || f.to, f.minAward].filter(Boolean).length + f.kinds.length + f.areas.length + f.stages.length + (f.status !== 'LIVE' ? 1 : 0)
+}
+
 function defaultSetup(site: Website): Setup {
-  const shared = site.funders.length >= 5
-  // A funder from another country than the main one is likely a wrong link; leave it unticked.
-  const mainCountry = site.funders[0]?.country ?? null
-  const plausible = site.funders.filter((f) => !mainCountry || !f.country || f.country === mainCountry)
   return {
     watchUrl: site.suggestions[0]?.url ?? `https://${site.host}/`,
     customUrl: '',
     pageKind: 'PAGE',
-    funderIds: (shared ? site.funders.slice(0, 1) : plausible).map((f) => f.id),
+    // Funders in the catalogue are vetted: link every funder publishing here.
+    funderIds: site.funders.slice(0, 40).map((f) => f.id),
     officialWebsite: false,
     frequencyMinutes: site.suggested.frequencyMinutes,
     priority: site.suggested.priority,
@@ -87,38 +156,77 @@ function defaultSetup(site: Website): Setup {
 
 const hosts = (value: string) => value.split(/[,\s]+/).map((h) => h.trim().toLowerCase()).filter(Boolean)
 
+/** A filter that takes several values: a menu of checkboxes with call counts. */
+function MultiFilter({ label, options, value, onChange, format = (v) => v }: { label: string; options: Facet[]; value: string[]; onChange: (next: string[]) => void; format?: (v: string) => string }) {
+  const [open, setOpen] = useState(false)
+  const [find, setFind] = useState('')
+  const shown = options.filter((o) => !find || format(o.value).toLowerCase().includes(find.toLowerCase()))
+  return (
+    <div className="relative">
+      <button type="button" className={`cb-chip ${value.length ? 'cb-chip-active' : ''}`} onClick={() => setOpen(!open)} aria-expanded={open}>
+        {label}{value.length ? ` · ${value.length}` : ''} <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <>
+          <button type="button" className="fixed inset-0 z-10 cursor-default" aria-label="Close" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-20 mt-1 w-72 rounded-xl border border-hairline bg-ground p-2 shadow-lg">
+            {options.length > 8 && <input className="cb-input mb-2 py-1.5 text-[12.5px]" placeholder={`Find ${label.toLowerCase()}`} value={find} onChange={(e) => setFind(e.target.value)} autoFocus />}
+            <div className="max-h-64 space-y-0.5 overflow-y-auto">
+              {shown.length === 0 && <p className="px-2 py-1.5 text-[12px] text-nickel-500">Nothing in the database.</p>}
+              {shown.map((o) => (
+                <label key={o.value} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-ink-soft hover:bg-nickel-50">
+                  <input type="checkbox" checked={value.includes(o.value)} onChange={(e) => onChange(e.target.checked ? [...value, o.value] : value.filter((v) => v !== o.value))} />
+                  <span className="min-w-0 flex-1 truncate">{format(o.value)}</span>
+                  <span className="shrink-0 tabular-nums text-[11px] text-nickel-500">{o.calls.toLocaleString()}</span>
+                </label>
+              ))}
+            </div>
+            {value.length > 0 && <button type="button" className="cb-btn-ghost cb-btn-xs mt-1 w-full justify-center" onClick={() => onChange([])}>Clear</button>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /**
- * Sources → Add from funding database. Search the calls already in the
- * catalog, grouped by website; pick websites; confirm a short setup for each;
- * add them approved, with their first check due at once.
+ * Sources → Add from funding database. Filter the calls already in the
+ * catalogue (dates, title, category, area, country…), grouped by website; tick
+ * websites, a page, or every match; add them at once with suggested settings,
+ * or review each one first.
  */
 export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdded }: { authedFetch: AuthedFetch; isSuperAdmin: boolean; onAdded: () => void }) {
-  const [q, setQ] = useState('')
-  const [country, setCountry] = useState('')
-  const [type, setType] = useState('')
-  const [status, setStatus] = useState<'LIVE' | 'ANY' | 'CLOSED'>('LIVE')
-  const [unwatched, setUnwatched] = useState(true)
-  const [oneOff, setOneOff] = useState(false)
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
+  const [showMore, setShowMore] = useState(false)
+  const [facets, setFacets] = useState<Facets | null>(null)
   const [offset, setOffset] = useState(0)
   const [websites, setWebsites] = useState<Website[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [picked, setPicked] = useState<Map<string, Website>>(new Map())
+  /** "Every matching website", minus the ones unticked. */
+  const [allMode, setAllMode] = useState(false)
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [step, setStep] = useState<'pick' | 'setup' | 'done'>('pick')
   const [setups, setSetups] = useState<Record<string, Setup>>({})
   const [defaults, setDefaults] = useState<{ frequencyMinutes: number | null; priority: 'SUGGESTED' | 'HIGH' | 'NORMAL' | 'LOW' }>({ frequencyMinutes: null, priority: 'SUGGESTED' })
   const [saving, setSaving] = useState(false)
   const [results, setResults] = useState<Result[]>([])
+  const [summary, setSummary] = useState<{ matched: number; capped: boolean } | null>(null)
+
+  const set = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }))
+  const query = useMemo(() => queryFor(filters), [filters])
+
+  useEffect(() => {
+    void authedFetch('/api/funding/monitor/catalog-import?facets=1').then((r) => (r.ok ? r.json() : null)).then((data) => data && setFacets(data)).catch(() => undefined)
+  }, [authedFetch])
 
   const search = useCallback(async (from: number) => {
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams({ q, status, unwatched: unwatched ? '1' : '0', oneOff: oneOff ? '1' : '0', offset: String(from) })
-      if (country) params.set('country', country)
-      if (type) params.set('type', type)
-      const response = await authedFetch(`/api/funding/monitor/catalog-import?${params}`)
+      const response = await authedFetch(`/api/funding/monitor/catalog-import?${queryFor(filters, from)}`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.message ?? 'Search failed')
       setWebsites(data.websites)
@@ -129,32 +237,64 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
     } finally {
       setLoading(false)
     }
-  }, [authedFetch, q, status, unwatched, oneOff, country, type])
+  }, [authedFetch, filters])
 
   useEffect(() => {
     const timer = setTimeout(() => void search(0), 300)
     return () => clearTimeout(timer)
   }, [search])
 
+  // "Every match" means every match of these filters; a new search starts over.
+  useEffect(() => { setAllMode(false); setExcluded(new Set()) }, [query])
+
+  const selectable = (site: Website) => site.watched?.status !== 'ACTIVE'
+  const isOn = (site: Website) => (allMode ? !excluded.has(site.host) : picked.has(site.host))
+  const selectedCount = allMode ? Math.min(BULK_CAP, Math.max(0, total - excluded.size)) : picked.size
+
   function togglePick(site: Website) {
+    if (allMode) {
+      setExcluded((old) => { const next = new Set(old); if (next.has(site.host)) next.delete(site.host); else next.add(site.host); return next })
+      return
+    }
     setPicked((old) => {
       const next = new Map(old)
       if (next.has(site.host)) next.delete(site.host)
-      else if (next.size < 25) next.set(site.host, site)
+      else if (next.size < PICK_CAP) next.set(site.host, site)
       return next
     })
   }
 
+  function pickPage() {
+    setAllMode(false)
+    setPicked((old) => {
+      const next = new Map(old)
+      const page = websites.filter(selectable)
+      const allOn = page.every((s) => next.has(s.host))
+      for (const site of page) {
+        if (allOn) next.delete(site.host)
+        else if (next.size < PICK_CAP) next.set(site.host, site)
+      }
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setAllMode(false)
+    setExcluded(new Set())
+    setPicked(new Map())
+  }
+
+  function applyDefaults(setup: Setup): Setup {
+    return {
+      ...setup,
+      ...(defaults.frequencyMinutes ? { frequencyMinutes: defaults.frequencyMinutes } : {}),
+      ...(defaults.priority !== 'SUGGESTED' ? { priority: defaults.priority } : {}),
+    }
+  }
+
   function startSetup() {
     const next: Record<string, Setup> = {}
-    for (const site of picked.values()) {
-      const base = setups[site.host] ?? defaultSetup(site)
-      next[site.host] = {
-        ...base,
-        ...(defaults.frequencyMinutes ? { frequencyMinutes: defaults.frequencyMinutes } : {}),
-        ...(defaults.priority !== 'SUGGESTED' ? { priority: defaults.priority } : {}),
-      }
-    }
+    for (const site of picked.values()) next[site.host] = applyDefaults(setups[site.host] ?? defaultSetup(site))
     setSetups(next)
     setStep('setup')
   }
@@ -192,34 +332,68 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
     return out
   }, [setups])
 
+  function finish(data: { results: Result[]; matched?: number; capped?: boolean }) {
+    setResults(data.results)
+    setSummary(typeof data.matched === 'number' ? { matched: data.matched, capped: Boolean(data.capped) } : null)
+    setStep('done')
+    clearSelection()
+    onAdded()
+  }
+
+  async function post(body: unknown) {
+    const response = await authedFetch('/api/funding/monitor/catalog-import', { method: 'POST', body: JSON.stringify(body) })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.message ?? 'Could not add the websites')
+    return data
+  }
+
+  const payloadFor = (entries: Array<[string, Setup]>) => entries.map(([host, s]) => ({
+    host,
+    watchUrl: s.watchUrl === 'custom' ? s.customUrl : s.watchUrl,
+    pageKind: s.pageKind,
+    funderIds: s.funderIds,
+    officialWebsite: s.officialWebsite,
+    frequencyMinutes: s.frequencyMinutes,
+    priority: s.priority,
+    relatedHosts: hosts(s.relatedHosts),
+    documentHosts: hosts(s.documentHosts),
+    keywords: s.keywords,
+    excludeKeywords: s.excludeKeywords,
+    fetchMode: s.fetchMode,
+    dailyBudgetUsd: s.dailyBudgetUsd ? Number(s.dailyBudgetUsd) : null,
+    note: s.note || null,
+  }))
+
   async function submit() {
     if (Object.keys(problems).length) return
     setSaving(true)
     setError('')
     try {
-      const payload = Object.entries(setups).map(([host, s]) => ({
-        host,
-        watchUrl: s.watchUrl === 'custom' ? s.customUrl : s.watchUrl,
-        pageKind: s.pageKind,
-        funderIds: s.funderIds,
-        officialWebsite: s.officialWebsite,
-        frequencyMinutes: s.frequencyMinutes,
-        priority: s.priority,
-        relatedHosts: hosts(s.relatedHosts),
-        documentHosts: hosts(s.documentHosts),
-        keywords: s.keywords,
-        excludeKeywords: s.excludeKeywords,
-        fetchMode: s.fetchMode,
-        dailyBudgetUsd: s.dailyBudgetUsd ? Number(s.dailyBudgetUsd) : null,
-        note: s.note || null,
-      }))
-      const response = await authedFetch('/api/funding/monitor/catalog-import', { method: 'POST', body: JSON.stringify({ websites: payload }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.message ?? 'Could not add the websites')
-      setResults(data.results)
-      setStep('done')
-      setPicked(new Map())
-      onAdded()
+      finish(await post({ websites: payloadFor(Object.entries(setups)) }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not add the websites')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Add the selection straight away with each website's suggested settings. */
+  async function quickAdd() {
+    if (!selectedCount) return
+    if (selectedCount > 25 && !window.confirm(`${isSuperAdmin ? 'Add' : 'Send'} ${selectedCount} websites ${isSuperAdmin ? 'to the pipeline' : 'for approval'} with suggested settings? First checks are spread out so the crawler takes them steadily.`)) return
+    setSaving(true)
+    setError('')
+    try {
+      const chosenDefaults = { frequencyMinutes: defaults.frequencyMinutes, priority: defaults.priority === 'SUGGESTED' ? null : defaults.priority, excludeKeywords: '' }
+      if (allMode) {
+        finish(await post({ all: { query, defaults: chosenDefaults, excludeHosts: [...excluded] } }))
+      } else {
+        const sites = [...picked.values()]
+        const files = sites.filter((s) => s.warnings.some((w) => w.code === 'FILE_HOST'))
+        const entries = sites.filter((s) => !files.includes(s)).map((s): [string, Setup] => [s.host, applyDefaults(defaultSetup(s))])
+        const data = entries.length ? await post({ websites: payloadFor(entries) }) : { results: [] }
+        finish({ results: [...data.results, ...files.map((s) => ({ host: s.host, status: 'SKIPPED', message: 'Mostly files, not pages: add it as a document host on the website that links to these files', funderLinks: 'NONE', websiteSaved: 0 }))] })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not add the websites')
     } finally {
@@ -230,7 +404,9 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
   if (step === 'done') {
     const added = results.filter((r) => r.status === 'ADDED' || r.status === 'ALREADY_WATCHED')
     const pending = results.filter((r) => r.status === 'PENDING_APPROVAL')
+    const skipped = results.filter((r) => !['ADDED', 'ALREADY_WATCHED', 'PENDING_APPROVAL'].includes(r.status))
     const notes = [...new Set(results.flatMap((r) => r.notes ?? []))]
+    const lastStart = results.map((r) => r.firstCheckAt).filter((v): v is string => Boolean(v)).sort().pop()
     return (
       <section className="space-y-4">
         {added.length > 0 && (
@@ -238,26 +414,35 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
             <p className="flex items-center gap-2 text-[15px] font-semibold text-green-900">
               <CheckCircle2 className="h-5 w-5" /> {added.length} website{added.length === 1 ? '' : 's'} added to the pipeline
             </p>
-            <p className="mt-1 text-[13px] text-green-800">Approved, and the first check is due now. New pages will appear in Crawl, and funding calls in Review.</p>
+            <p className="mt-1 text-[13px] text-green-800">
+              Approved, with every funder publishing there linked. {lastStart ? `First checks are spread out until ${new Date(lastStart).toLocaleString()} so the crawler and AI budget take them steadily.` : 'The first check is due now.'} New pages will appear in Crawl, and funding calls in Review.
+            </p>
           </div>
         )}
         {pending.length > 0 && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
             <p className="text-[15px] font-semibold text-amber-900">{pending.length} website{pending.length === 1 ? '' : 's'} sent to a super admin for approval</p>
-            <p className="mt-1 text-[13px] text-amber-800">Your choices are saved on each website. A super admin approves them under Sources → Watched websites; nothing new is fetched until then.</p>
+            <p className="mt-1 text-[13px] text-amber-800">A super admin approves them together under Sources → Watched websites (“Approve all”); nothing new is fetched until then.</p>
           </div>
+        )}
+        {summary?.capped && (
+          <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {summary.matched.toLocaleString()} websites matched; one run adds at most {BULK_CAP}. Run the same search again to add the next batch.
+          </p>
         )}
         {notes.map((note) => (
           <p key={note} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {note}
           </p>
         ))}
-        <ul className="divide-y divide-hairline rounded-xl border border-hairline bg-ground">
+        {skipped.length > 0 && <p className="text-[12.5px] text-nickel-600">{skipped.length} not added; the reason is shown beside each one below.</p>}
+        <ul className="max-h-[28rem] divide-y divide-hairline overflow-y-auto rounded-xl border border-hairline bg-ground">
           {results.map((r) => (
             <li key={r.host} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13px]">
               <span className="font-mono font-medium text-ink">{r.host}</span>
-              <span className={r.status === 'ADDED' || r.status === 'ALREADY_WATCHED' ? 'text-green-800' : r.status === 'PENDING_APPROVAL' ? 'text-amber-800' : 'text-red-700'}>{r.message}</span>
-              {r.funderLinks === 'SUGGESTED' && <span className="text-nickel-500">Funder links saved as suggestions for a super admin</span>}
+              <span className={r.status === 'ADDED' || r.status === 'ALREADY_WATCHED' ? 'text-green-800' : r.status === 'PENDING_APPROVAL' ? 'text-amber-800' : r.status === 'SKIPPED' ? 'text-nickel-600' : 'text-red-700'}>{r.message}</span>
+              {r.firstCheckAt && <span className="text-nickel-500">First check {new Date(r.firstCheckAt).toLocaleString()}</span>}
+              {r.funderLinks === 'SUGGESTED' && <span className="text-nickel-500">Funder links applied on approval</span>}
               {r.websiteSaved > 0 && <span className="text-nickel-500">Website saved on {r.websiteSaved} funder{r.websiteSaved === 1 ? '' : 's'}</span>}
             </li>
           ))}
@@ -338,7 +523,7 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
 
               <div className="grid gap-4 md:grid-cols-2">
                 <fieldset className="space-y-1.5">
-                  <legend className="cb-label">Funder <span className="font-normal text-nickel-500">· confirm</span></legend>
+                  <legend className="cb-label">Funders <span className="font-normal text-nickel-500">· all publishing here are linked</span></legend>
                   <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-hairline p-2">
                     {site.funders.length === 0 && <p className="text-[12px] text-nickel-500">No funder is linked to these calls.</p>}
                     {site.funders.map((f) => (
@@ -417,39 +602,97 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
     )
   }
 
+  const filterCount = activeFilterCount(filters)
+  const pageSelectable = websites.filter(selectable)
+  const pageAllOn = !allMode && pageSelectable.length > 0 && pageSelectable.every((s) => picked.has(s.host))
   return (
-    <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
+    <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="min-w-0 space-y-3">
         <label className="relative block">
           <span className="sr-only">Search funders, programmes, countries or websites</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-nickel-400" />
-          <input className="cb-input h-11 pl-9 text-[14px]" placeholder="Search funders, programmes or websites: NIH, Horizon Europe, ukri.org" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="cb-input h-11 pl-9 text-[14px]" placeholder="Search funders, programmes or websites: NIH, Horizon Europe, ukri.org" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
         </label>
-        <div className="flex flex-wrap items-center gap-2">
-          <select className="cb-select w-auto text-[12.5px]" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country">
-            {COUNTRIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          <select className="cb-select w-auto text-[12.5px]" value={type} onChange={(e) => setType(e.target.value)} aria-label="Funder type">
-            {TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          <select className="cb-select w-auto text-[12.5px]" value={status} onChange={(e) => setStatus(e.target.value as typeof status)} aria-label="Call status">
-            <option value="LIVE">Has live calls</option>
-            <option value="ANY">Any call status</option>
-            <option value="CLOSED">Only closed calls</option>
-          </select>
-          <label className="flex items-center gap-1.5 text-[12.5px] text-ink-soft"><input type="checkbox" checked={unwatched} onChange={(e) => setUnwatched(e.target.checked)} /> Not yet watched</label>
-          <label className="flex items-center gap-1.5 text-[12.5px] text-ink-soft"><input type="checkbox" checked={oneOff} onChange={(e) => setOneOff(e.target.checked)} /> Include one-call websites</label>
+
+        <div className="space-y-2.5 rounded-xl border border-hairline bg-inset p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input className="cb-input h-8 w-56 py-1 text-[12.5px]" placeholder="Call title contains…" aria-label="Call title contains" value={filters.title} onChange={(e) => set({ title: e.target.value })} />
+            <MultiFilter label="Grant category" options={facets?.kinds ?? []} value={filters.kinds} onChange={(kinds) => set({ kinds })} />
+            <MultiFilter label="Research area" options={facets?.areas ?? []} value={filters.areas} onChange={(areas) => set({ areas })} />
+            <select className="cb-select h-8 w-auto py-1 text-[12.5px]" value={filters.country} onChange={(e) => set({ country: e.target.value })} aria-label="Country">
+              <option value="">All countries</option>
+              {(facets?.countries ?? []).map((c) => <option key={c.value} value={c.value}>{countryName(c.value)} ({c.calls.toLocaleString()})</option>)}
+            </select>
+            <select className="cb-select h-8 w-auto py-1 text-[12.5px]" value={filters.status} onChange={(e) => set({ status: e.target.value as Filters['status'] })} aria-label="Call status">
+              <option value="LIVE">Has live calls</option>
+              <option value="ANY">Any call status</option>
+              <option value="CLOSED">Only closed calls</option>
+            </select>
+            <button type="button" className={`cb-chip ${showMore ? 'border-cobalt-300 bg-cobalt-50 text-cobalt-700' : ''}`} onClick={() => setShowMore(!showMore)} aria-expanded={showMore}>
+              <SlidersHorizontal className="h-3.5 w-3.5" /> More filters
+            </button>
+            {filterCount > 0 && <button type="button" className="cb-btn-ghost cb-btn-xs" onClick={() => setFilters({ ...EMPTY_FILTERS, q: filters.q })}><X className="h-3 w-3" /> Clear {filterCount} filter{filterCount === 1 ? '' : 's'}</button>}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <CalendarRange className="h-4 w-4 text-nickel-500" />
+            <select className="cb-select h-8 w-auto py-1 text-[12.5px]" value={filters.dateField} onChange={(e) => set({ dateField: e.target.value as Filters['dateField'] })} aria-label="Date of the call">
+              {DATE_FIELDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <input type="date" className="cb-input h-8 w-auto py-1 text-[12.5px]" value={filters.from} max={filters.to || undefined} onChange={(e) => set({ from: e.target.value })} aria-label="From date" />
+            <span className="text-[12px] text-nickel-500">to</span>
+            <input type="date" className="cb-input h-8 w-auto py-1 text-[12.5px]" value={filters.to} min={filters.from || undefined} onChange={(e) => set({ to: e.target.value })} aria-label="To date" />
+            {DATE_PRESETS.map((preset) => (
+              <button key={preset.label} type="button" className="cb-btn-ghost cb-btn-xs" onClick={() => set(preset.apply())}>{preset.label}</button>
+            ))}
+            {(filters.from || filters.to) && <button type="button" className="cb-btn-ghost cb-btn-xs" onClick={() => set({ from: '', to: '' })}><X className="h-3 w-3" /> Any date</button>}
+          </div>
+
+          {showMore && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-hairline pt-2.5">
+              <MultiFilter label="Career stage" options={facets?.careerStages ?? []} value={filters.stages} onChange={(stages) => set({ stages })} />
+              <select className="cb-select h-8 w-auto py-1 text-[12.5px]" value={filters.type} onChange={(e) => set({ type: e.target.value })} aria-label="Funder type">
+                <option value="">All funder types</option>
+                {(facets?.funderTypes ?? []).map((t) => <option key={t.value} value={t.value}>{TYPE_LABEL[t.value] ?? t.value} ({t.calls.toLocaleString()})</option>)}
+              </select>
+              <label className="flex items-center gap-1.5 text-[12.5px] text-ink-soft">Largest award at least
+                <input className="cb-input h-8 w-28 py-1 text-[12.5px]" inputMode="numeric" placeholder="USD" value={filters.minAward} onChange={(e) => set({ minAward: e.target.value.replace(/[^0-9]/g, '') })} aria-label="Minimum award in USD" />
+              </label>
+              <label className="flex items-center gap-1.5 text-[12.5px] text-ink-soft"><input type="checkbox" checked={filters.unwatched} onChange={(e) => set({ unwatched: e.target.checked })} /> Not yet watched</label>
+              <label className="flex items-center gap-1.5 text-[12.5px] text-ink-soft"><input type="checkbox" checked={filters.oneOff} onChange={(e) => set({ oneOff: e.target.checked })} /> Include one-call websites</label>
+            </div>
+          )}
         </div>
-        <p className="flex items-center gap-2 text-[12.5px] text-nickel-500">
+
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-nickel-500">
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Database className="h-3.5 w-3.5" />}
-          {loading ? 'Searching the funding database…' : `${total.toLocaleString()} website${total === 1 ? '' : 's'} match · showing ${websites.length ? offset + 1 : 0}–${offset + websites.length}`}
-        </p>
+          <span>{loading ? 'Searching the funding database…' : `${total.toLocaleString()} website${total === 1 ? '' : 's'} match · showing ${websites.length ? offset + 1 : 0}–${offset + websites.length}`}</span>
+          <span className="ml-auto flex items-center gap-2">
+            <select className="cb-select h-8 w-auto py-1 text-[12.5px]" value={filters.sort} onChange={(e) => set({ sort: e.target.value as Filters['sort'] })} aria-label="Sort by">
+              {SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </span>
+        </div>
+
+        {total > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-hairline bg-ground px-3 py-2 text-[12.5px]">
+            <button type="button" className="cb-btn-secondary cb-btn-xs" onClick={pickPage} disabled={!pageSelectable.length}>{pageAllOn ? 'Untick this page' : `Tick this page (${pageSelectable.length})`}</button>
+            {!allMode ? (
+              <button type="button" className="cb-btn-secondary cb-btn-xs" onClick={() => { setPicked(new Map()); setExcluded(new Set()); setAllMode(true) }}>
+                Tick all {Math.min(total, BULK_CAP).toLocaleString()} matching{total > BULK_CAP ? ` (of ${total.toLocaleString()})` : ''}
+              </button>
+            ) : (
+              <span className="font-medium text-cobalt-700">All {selectedCount.toLocaleString()} matching websites are ticked{excluded.size ? ` (${excluded.size} unticked)` : ''}. Untick any you do not want.</span>
+            )}
+            {selectedCount > 0 && <button type="button" className="cb-btn-ghost cb-btn-xs" onClick={clearSelection}>Clear selection</button>}
+          </div>
+        )}
         {error && <p role="alert" className="text-[13px] text-red-700">{error}</p>}
 
         <ul className="divide-y divide-hairline overflow-hidden rounded-xl border border-hairline bg-ground">
-          {!loading && websites.length === 0 && <li className="p-6 text-center text-[13px] text-nickel-500">No websites match. Try a funder name or a country, or include closed calls.</li>}
+          {!loading && websites.length === 0 && <li className="p-6 text-center text-[13px] text-nickel-500">No websites match. Widen the dates, clear a category, or include closed calls.</li>}
           {websites.map((site) => {
-            const on = picked.has(site.host)
+            const on = selectable(site) && isOn(site)
             const active = site.watched?.status === 'ACTIVE'
             return (
               <li key={site.host}>
@@ -468,7 +711,11 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
                       {site.funders.slice(0, 3).map((f) => f.name).join(' · ') || 'No funder linked'}
                       {site.funders.length > 3 ? ` · +${site.funders.length - 3} more` : ''}
                     </p>
-                    <p className="truncate font-mono text-[11.5px] text-nickel-500">Watch: {site.suggestions[0]?.url.replace(/^https?:\/\//, '')}</p>
+                    <p className="flex flex-wrap gap-x-3 text-[11.5px] text-nickel-500">
+                      <span className="truncate font-mono">Watch: {site.suggestions[0]?.url.replace(/^https?:\/\//, '')}</span>
+                      {site.nextDeadline && <span>Next deadline {shortDate(site.nextDeadline)}</span>}
+                      {site.latestAdded && <span>Newest call added {shortDate(site.latestAdded)}</span>}
+                    </p>
                     {site.warnings.length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-0.5">
                         {site.warnings.map((w) => (
@@ -480,8 +727,8 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
                     )}
                   </div>
                   <div className="shrink-0 text-right">
-                    <p className="text-[15px] font-semibold tabular-nums text-ink">{site.calls}</p>
-                    <p className="text-[11px] text-nickel-500">calls</p>
+                    <p className="text-[15px] font-semibold tabular-nums text-ink">{site.matchedCalls}</p>
+                    <p className="text-[11px] text-nickel-500">{site.matchedCalls === site.calls ? 'calls' : `matching of ${site.calls}`}</p>
                     <p className={`mt-1 text-[12px] font-medium tabular-nums ${site.liveCalls ? 'text-green-700' : 'text-nickel-400'}`}>{site.liveCalls} live</p>
                   </div>
                 </label>
@@ -489,20 +736,22 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
             )
           })}
         </ul>
-        {total > 25 && (
+        {total > PAGE && (
           <div className="flex items-center justify-between">
-            <button type="button" className="cb-btn-secondary cb-btn-sm" disabled={offset === 0 || loading} onClick={() => void search(Math.max(0, offset - 25))}>Previous</button>
-            <button type="button" className="cb-btn-secondary cb-btn-sm" disabled={offset + 25 >= total || loading} onClick={() => void search(offset + 25)}>Next</button>
+            <button type="button" className="cb-btn-secondary cb-btn-sm" disabled={offset === 0 || loading} onClick={() => void search(Math.max(0, offset - PAGE))}>Previous</button>
+            <button type="button" className="cb-btn-secondary cb-btn-sm" disabled={offset + PAGE >= total || loading} onClick={() => void search(offset + PAGE)}>Next</button>
           </div>
         )}
       </div>
 
       <aside className="h-fit space-y-3 rounded-xl border border-hairline bg-inset p-4 lg:sticky lg:top-4" aria-label="Selected websites">
-        <p className="text-[13px] font-semibold text-ink">{picked.size} selected</p>
-        {picked.size === 0 ? (
-          <p className="text-[12.5px] text-nickel-500">Tick the websites to watch. You confirm the details for each one next.</p>
+        <p className="text-[13px] font-semibold text-ink">{selectedCount.toLocaleString()} selected</p>
+        {selectedCount === 0 ? (
+          <p className="text-[12.5px] text-nickel-500">Tick websites, a page, or every match. Funders in the database are already vetted, so they can go in together with suggested settings.</p>
+        ) : allMode ? (
+          <p className="text-[12.5px] text-ink-soft">Every website matching the filters{excluded.size ? `, except ${excluded.size}` : ''}. File stores and blocked sites are skipped and reported.</p>
         ) : (
-          <ul className="space-y-1">
+          <ul className="max-h-48 space-y-1 overflow-y-auto">
             {[...picked.values()].map((site) => (
               <li key={site.host} className="flex items-center justify-between gap-2 rounded-md bg-ground px-2 py-1">
                 <span className="truncate font-mono text-[12px] text-ink">{site.host}</span>
@@ -527,10 +776,16 @@ export default function MonitorCatalogImport({ authedFetch, isSuperAdmin, onAdde
             <option value="LOW">Low</option>
           </select>
         </label>
-        <p className="text-[11.5px] text-nickel-500">Alerts for new finds go to you.</p>
-        <button type="button" className="cb-btn-primary w-full justify-center" disabled={!picked.size} onClick={startSetup}>
-          Review and add {picked.size || ''}
+        {error && <p role="alert" className="text-[12.5px] text-red-700">{error}</p>}
+        <button type="button" className="cb-btn-primary w-full justify-center" disabled={!selectedCount || saving} onClick={() => void quickAdd()}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />} {isSuperAdmin ? 'Add' : 'Send'} {selectedCount ? selectedCount.toLocaleString() : ''} {isSuperAdmin ? 'now' : 'for approval'}
         </button>
+        <button type="button" className="cb-btn-secondary w-full justify-center" disabled={allMode || !picked.size || picked.size > 50 || saving} onClick={startSetup} title={allMode || picked.size > 50 ? 'Review one by one works for up to 50 ticked websites' : undefined}>
+          Review each first
+        </button>
+        <p className="text-[11.5px] text-nickel-500">
+          {isSuperAdmin ? 'Adding approves the sites and links their funders.' : 'A super admin approves your requests together.'} Batches of more than 10 start checking a few minutes apart. Alerts for new finds go to you.
+        </p>
       </aside>
     </section>
   )

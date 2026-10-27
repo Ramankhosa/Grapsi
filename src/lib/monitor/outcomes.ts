@@ -51,6 +51,9 @@ export function classifyOpportunity(o: AssessedOpportunity, resource?: { last_va
   if (!o.triage_verdict && o.relevance_outcome === 'STRONG_NEGATIVE') return { outcome: 'NOT_FUNDING', detail: 'Filtered out by keyword screening' }
   if (reason.startsWith(WAITING_LOCAL_PREFIX)) return { outcome: 'WAITING_LOCAL', detail: 'Waiting for the laptop’s first-pass analysis' }
   if (o.processing_state === 'NEEDS_EVIDENCE') {
+    if (resource?.last_validation_status === 'BOT_PROTECTED' || /does not get around bot checks/.test(reason)) {
+      return { outcome: 'UNREADABLE', detail: 'A bot check answered instead of the page; check it by hand' }
+    }
     if (resource?.last_validation_status === 'UNREACHABLE' || UNREADABLE_REASONS.some((pattern) => pattern.test(reason))) {
       return { outcome: 'UNREADABLE', detail: 'The page or its documents could not be read' }
     }

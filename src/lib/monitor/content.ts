@@ -13,6 +13,9 @@ import { identifyUrl } from './urlIdentity'
 import { adaptiveRevisitDays, revisitDays } from './revisit'
 import { loadSkipRules, reconcileSkipRules, skipRuleFor, skippedPageError } from './skipRules'
 import { assertContentCapacity, MonitorCapacityError } from './capacity'
+import type { Renderer } from './browser'
+import { isMonitorFetchError } from './errors'
+import { botChallenge, botChallengeError, frameLinks, jsonToText, looksLikeAppShell, officeKindOf, officeText, structuredText } from './pageText'
 
 export interface ContentResult { segments: EvidenceSegment[]; links: Array<{ url: string; title: string }>; changed: boolean }
 function rememberedLinks(version:{text:string|null;page_statuses:unknown}):ContentResult['links']{
@@ -24,8 +27,29 @@ function rememberedLinks(version:{text:string|null;page_statuses:unknown}):Conte
   for(const match of [...text.matchAll(/\[(https?:\/\/[^\]\s]+)\]/g)].slice(0,500)){const id=identifyUrl(match[1]);if(id&&!links.has(id.canonical))links.set(id.canonical,{url:id.canonical,title:text.slice(Math.max(0,match.index!-200),match.index).split('\n').pop()?.trim()??''})}
   return [...links.values()]
 }
-/** Fetch each selected resource once; parsing is local and has no OCR side effects. */
-export async function readResource(resource: MonitorResource, site: MonitorSite, lease: Lease, fetch: SafeFetch, signal?: AbortSignal): Promise<ContentResult> {
+/** Main-content text of an HTML page, with each link's address kept beside its words. */
+function htmlText(html: string, baseUrl: string): { text: string; links: ContentResult['links'] } {
+  const links: ContentResult['links'] = []
+  const $ = cheerio.load(html)
+  $('script,style,noscript,nav,header,footer,svg').remove()
+  const main = $('main,article,[role="main"]').first()
+  const scope = main.length ? main : $('body')
+  scope.find('a[href]').each((_, el) => {
+    const id = identifyUrl($(el).attr('href') ?? '', baseUrl)
+    if (id) links.push({ url: id.canonical, title: $(el).text().trim().slice(0, 250) })
+    if (id) $(el).append(` [${id.canonical}]`)
+  })
+  // Preserve paragraph boundaries, including table rows.
+  scope.find('p,div,li,tr,h1,h2,h3,br').append('\n')
+  return { text: scope.text().replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim(), links }
+}
+
+/**
+ * Fetch each selected resource once; parsing is local and has no OCR side
+ * effects. `renderer` (the browser tier, when enabled) is used only for a page
+ * whose plain HTML is a script-built shell.
+ */
+export async function readResource(resource: MonitorResource, site: MonitorSite, lease: Lease, fetch: SafeFetch, signal?: AbortSignal, renderer: Renderer | null = null): Promise<ContentResult> {
   if (!resource.canonical_url) throw new Error('Resource has no fetchable URL')
   if (skipRuleFor(await loadSkipRules(prisma, site.id), resource.canonical_url)) throw skippedPageError(resource.canonical_url)
   const previous = resource.current_version_id ? await prisma.monitorResourceVersion.findUnique({ where: { id: resource.current_version_id } }) : null
@@ -37,7 +61,8 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   let result
   try { result = await fetch(resource.canonical_url, { headers, inScope: siteScope(site), tlsInsecureHosts: tlsExceptionHosts(site), minDelayMs: site.min_delay_ms, maxBytes: 12 * 1024 * 1024, signal }) }
   catch (error) {
-    await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { last_validated_at: new Date(), last_validation_status: 'UNREACHABLE' } }))
+    const status = isMonitorFetchError(error) && error.code === 'BOT_PROTECTED' ? 'BOT_PROTECTED' : 'UNREACHABLE'
+    await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { last_validated_at: new Date(), last_validation_status: status } }))
     throw error
   }
   if (result.notModified && previous) {
@@ -53,6 +78,8 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   let links: ContentResult['links'] = []
   let partial = result.truncated
   const kind = documentKindOf(result.contentKind, result.finalUrl)
+  const office = kind ? null : officeKindOf(result.contentType, result.finalUrl, result.body)
+  let parser = kind ? DOC_PARSER_VERSION : 'html-1'
   let storedPath: string | null = null
   if (kind) {
     const usage = await prisma.monitorResourceVersion.aggregate({ where: { resource: { site_id: site.id }, file_path: { not: null } }, _sum: { byte_length: true } })
@@ -65,22 +92,49 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
     pages = parsed.pages.map(p => ({ page: p.page, text: p.text, status: p.status }))
     // Parsing coverage is per page. Unreadable or unselected pages do not
     // invalidate complete text on another page, and never imply a truncated fetch.
+  } else if (office) {
+    let read: Array<{ page: number | null; text: string }> = []
+    try { read = officeText(result.body, office) } catch { /* unreadable file: recorded as a failed page below */ }
+    pages = read.length ? read.map(p => ({ page: p.page, text: p.text, status: p.text.length >= 40 ? 'OK' : 'PARSE_FAILED' })) : [{ page: null, text: '', status: 'PARSE_FAILED' }]
+    partial ||= !read.length
+    parser = `office-1:${office}`
   } else if (result.contentKind === 'html' || result.contentKind === 'text') {
-    const $ = cheerio.load(decodeBody(result))
-    $('script,style,noscript,nav,header,footer,svg').remove()
-    const main = $('main,article,[role="main"]').first()
-    const scope = main.length ? main : $('body')
-    scope.find('a[href]').each((_, el) => {
-      const id = identifyUrl($(el).attr('href') ?? '', result.finalUrl)
-      if (id) links.push({ url: id.canonical, title: $(el).text().trim().slice(0, 250) })
-      if (id) $(el).append(` [${id.canonical}]`)
-    })
-    // Preserve paragraph boundaries, including table rows.
-    scope.find('p,div,li,tr,h1,h2,h3,br').append('\n')
-    const text = scope.text().replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim()
+    let html = decodeBody(result)
+    const vendor = result.contentKind === 'html' ? botChallenge(result.status, result.headers, html) : null
+    if (vendor) {
+      await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { last_validated_at: new Date(), last_validation_status: 'BOT_PROTECTED' } }))
+      throw botChallengeError(result.finalUrl, vendor, result.status)
+    }
+    let read = htmlText(html, result.finalUrl)
+    // A script-built page: render it when the browser tier is on, and fall
+    // back to the data the page carries (JSON-LD, framework state, metadata).
+    // Pages that already read well are untouched, so their hashes stay put.
+    if (result.contentKind === 'html' && read.text.length < 400 && renderer && looksLikeAppShell(html, read.text)) {
+      try {
+        const rendered = await renderer.render(result.finalUrl, { inScope: siteScope(site), minDelayMs: site.min_delay_ms, signal })
+        const again = htmlText(rendered.html, rendered.finalUrl)
+        if (again.text.length > read.text.length) { read = again; html = rendered.html; partial ||= rendered.truncated; parser = 'html-rendered-1' }
+      } catch { /* the plain read stands */ }
+    }
+    if (result.contentKind === 'html' && read.text.length < 400) {
+      const data = structuredText(html)
+      if (data.length >= 40) { read = { ...read, text: [read.text, '[Page data]', data].filter(Boolean).join('\n') }; parser = parser === 'html-1' ? 'html-data-1' : parser }
+    }
+    links = read.links
+    for (const url of frameLinks(html, result.finalUrl, siteScope(site))) if (!links.some(l => l.url === url)) links.push({ url, title: 'Embedded frame' })
+    const text = read.text
     partial ||= text.length > 120_000 || text.length < 40
     pages = [{ page: null, text: text.slice(0, 120_000), status: text.length >= 40 ? 'OK' : 'PARSE_FAILED' }]
-  } else throw new Error(`Unsupported evidence content: ${result.contentKind}`)
+  } else if (result.contentKind === 'json' || result.contentKind === 'xml') {
+    // Data endpoints and XML documents: their readable strings, not their markup.
+    let text = ''
+    try {
+      text = result.contentKind === 'json' ? jsonToText(JSON.parse(decodeBody(result))) : cheerio.load(decodeBody(result), { xml: true }).root().text().replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim()
+    } catch { /* malformed: recorded as a failed page */ }
+    partial ||= text.length < 40
+    pages = [{ page: null, text: text.slice(0, 120_000), status: text.length >= 40 ? 'OK' : 'PARSE_FAILED' }]
+    parser = `${result.contentKind}-1`
+  } else throw new Error(`Unsupported evidence content: ${result.contentType || result.contentKind}`)
   const text = pages.map(p => p.text).join('\n')
   const hash = meaningfulHash(text)
   const version = await withFence(lease, async tx => {
@@ -96,7 +150,7 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
       where: { resource_id_raw_hash: { resource_id: resource.id, raw_hash: rawHash } },
       create: { resource_id: resource.id, raw_hash: rawHash, meaningful_hash: hash, text, final_url: result.finalUrl,
         mime_type: result.contentType, http_status: result.status, byte_length: storedBytes, truncated: partial,
-        parser_version: kind ? DOC_PARSER_VERSION : 'html-1', page_count: pages.length,
+        parser_version: parser, page_count: pages.length,
         file_path: storedPath,
         page_statuses: pages.map((p, i) => ({ page: p.page, status: p.status, text: p.text, ...(i === 0 ? { links } : {}) })), tls_exception_used: result.tlsExceptionUsed },
       update: {},
@@ -119,7 +173,7 @@ export function segmentsFromVersion(resource: Pick<MonitorResource, 'id' | 'cano
 }
 
 /** A revisit is a recurring fetch, never a cached decision pretending to be a fetch. */
-export async function revisitResource(lease: Lease, fetch: SafeFetch, signal?: AbortSignal) {
+export async function revisitResource(lease: Lease, fetch: SafeFetch, signal?: AbortSignal, renderer: Renderer | null = null) {
   const resource = await prisma.monitorResource.findUniqueOrThrow({ where: { id: lease.resourceId ?? String(lease.payload.resourceId) }, include: { site: true, opportunities: { orderBy: { created_at: 'desc' }, take: 1 }, evidence: { include: { opportunity: true }, take: 1 } } })
   const opportunity = resource.opportunities[0] ?? resource.evidence[0]?.opportunity
   const closeDate = (opportunity?.field_evidence as { payload?: { fields?: { close_date?: { value?: string } } } } | null)?.payload?.fields?.close_date?.value
@@ -133,7 +187,7 @@ export async function revisitResource(lease: Lease, fetch: SafeFetch, signal?: A
     })
     return
   }
-  const result = await readResource(resource, resource.site, lease, fetch, signal)
+  const result = await readResource(resource, resource.site, lease, fetch, signal, renderer)
   await withFence(lease, async tx => {
     const unchanged = result.changed ? 0 : resource.unchanged_revisits + 1
     const notFunding = opportunity?.triage_verdict === 'NOT_FUNDING' || opportunity?.review_state === 'REJECTED'

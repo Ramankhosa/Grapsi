@@ -5,6 +5,8 @@ import zlib from 'node:zlib'
 import { Agent, request } from 'undici'
 
 import { MonitorFetchError, isMonitorFetchError } from './errors'
+import { botChallenge, botChallengeError } from './pageText'
+import { MISSING_ISSUER_CODES, caWith, completeChain, knownIntermediates } from './tlsChain'
 import { databaseHostPacer, parseRetryAfter, type HostPacer } from './hostPacing'
 import {
   DEFAULT_ALLOWED_PORTS,
@@ -115,12 +117,32 @@ export function sourceWatchUserAgent(): string {
   return site ? `GrapsiSourceWatch/1.0 (+${site})` : 'GrapsiSourceWatch/1.0'
 }
 
-/** undici transport whose connection is pinned to the validated addresses. */
+/**
+ * undici transport whose connection is pinned to the validated addresses. A
+ * server that leaves its intermediate certificate out is retried once with
+ * the chain completed from the certificate's own issuer URL (see tlsChain).
+ */
 export const undiciTransport: FetchTransport = async (req) => {
+  const host = req.url.hostname
+  const known = req.tlsInsecure ? null : knownIntermediates(host)
+  try {
+    return await pinnedRequest(req, known)
+  } catch (error) {
+    const code = (error as { code?: string; cause?: { code?: string } })?.code || (error as { cause?: { code?: string } })?.cause?.code || ''
+    if (req.tlsInsecure || known || !MISSING_ISSUER_CODES.has(code) || req.signal?.aborted) throw error
+    const port = Number(req.url.port) || 443
+    const intermediates = await completeChain(host, req.addresses[0], port)
+    if (!intermediates) throw error
+    return pinnedRequest(req, intermediates)
+  }
+}
+
+async function pinnedRequest(req: TransportRequest, intermediates: string[] | null): Promise<TransportResponse> {
   const pinned = req.addresses.map((address) => ({ address, family: isIP(address) === 6 ? 6 : 4 }))
   const agent = new Agent({
     connect: {
       rejectUnauthorized: !req.tlsInsecure,
+      ...(intermediates ? { ca: caWith(intermediates) } : {}),
       timeout: 15_000,
       // net/tls call this instead of DNS: the socket can only reach the
       // addresses resolvePublicAddresses already approved.
@@ -258,7 +280,22 @@ export function detectContentKind(contentType: string, body: Buffer, url: string
 
 /** Decode a text body using the declared or sniffed charset (UTF-8 default). */
 export function decodeBody(result: Pick<SafeFetchResult, 'body' | 'contentType' | 'contentKind'>): string {
+  const body = result.body
+  // A byte-order mark is the strongest signal there is.
+  if (body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) return new TextDecoder('utf-8').decode(body.subarray(3))
+  if (body[0] === 0xff && body[1] === 0xfe) return new TextDecoder('utf-16le').decode(body.subarray(2))
+  if (body[0] === 0xfe && body[1] === 0xff) return new TextDecoder('utf-16be').decode(body.subarray(2))
   let charset = /charset=["']?([\w-]+)/i.exec(result.contentType)?.[1]
+  if (!charset && result.contentKind === 'xml') charset = /^<\?xml[^>]+encoding=["']([\w-]+)/i.exec(body.subarray(0, 200).toString('latin1'))?.[1]
+  // Servers often label UTF-8 pages as Latin-1: bytes that are valid UTF-8
+  // and contain multi-byte characters are UTF-8, whatever the label says.
+  if (charset && /^(iso-8859-1|latin-?1|windows-1252|us-ascii|ascii)$/i.test(charset) && body.subarray(0, 65536).some((b) => b >= 0x80)) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(body)
+    } catch {
+      // really a single-byte encoding
+    }
+  }
   if (!charset && result.contentKind === 'html') {
     const head = result.body.subarray(0, 4096).toString('latin1')
     charset =
@@ -462,6 +499,9 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}): SafeFetch {
         }
 
         if (response.status >= 400 && throwOnHttpError) {
+          // A bot check is not an outage: say so, and do not retry it as one.
+          const vendor = read.buffer.length ? botChallenge(response.status, response.headers, read.buffer.subarray(0, 200_000).toString('utf8')) : null
+          if (vendor) throw botChallengeError(current.href, vendor, response.status)
           throw new MonitorFetchError('HTTP_STATUS', `${current.href} answered HTTP ${response.status}`, {
             retryable: response.status >= 500,
             httpStatus: response.status,

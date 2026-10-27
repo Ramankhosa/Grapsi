@@ -2,12 +2,15 @@
 import { useCallback, useEffect, useState } from 'react'
 interface ImportRequest { watchUrl: string; relatedHosts: string[]; documentHosts: string[]; dailyBudgetUsd: number | null; priority: string; funderIds: string[]; officialWebsite: boolean; requestedAt: string }
 interface Site { id: string; host: string; status: string; origin: string; related_hosts: string[]; attachment_hosts: string[]; pending_scope: ImportRequest | null; sources: unknown[]; frontier: Array<{ id: string; url: string }>; _count: { resources: number } }
-export default function MonitorSites({ authedFetch, canApprove }: { authedFetch: (path: string, init?: RequestInit) => Promise<Response>; canApprove: boolean }) {
+export default function MonitorSites({ authedFetch, canApprove, onChanged }: { authedFetch: (path: string, init?: RequestInit) => Promise<Response>; canApprove: boolean; onChanged?: () => void }) {
   const [sites, setSites] = useState<Site[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [suggested, setSuggested] = useState(false)
+  const [pendingOnly, setPendingOnly] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+  const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
   const [cursor, setCursor] = useState<string | null>(null)
   const [seedCursor, setSeedCursor] = useState<string | null>(null)
@@ -15,15 +18,19 @@ export default function MonitorSites({ authedFetch, canApprove }: { authedFetch:
   const [funders, setFunders] = useState<Array<{ id: string; name: string; country_code: string | null }>>([])
   useEffect(() => { const timer = setTimeout(() => { void authedFetch(`/api/funding/monitor/sites?funders=${encodeURIComponent(funderQuery)}`).then(r => r.ok ? r.json() : null).then(data => { if (data) setFunders(data.funders) }).catch(() => undefined) }, 300); return () => clearTimeout(timer) }, [authedFetch, funderQuery])
   const load = useCallback(async (after?: string) => {
-    try { const r = await authedFetch(`/api/funding/monitor/sites?search=${encodeURIComponent(search)}${suggested ? '&status=SUGGESTED' : ''}${after ? `&cursor=${encodeURIComponent(after)}` : ''}`); const d = await r.json(); if (!r.ok) throw new Error(d.message ?? 'Could not load sites'); setSites(old => after ? [...old, ...d.sites] : d.sites); setCursor(d.next) } catch (e) { setError(e instanceof Error ? e.message : 'Could not load sites') }
-  }, [authedFetch, suggested, search])
+    try { const r = await authedFetch(`/api/funding/monitor/sites?search=${encodeURIComponent(search)}${suggested ? '&status=SUGGESTED' : ''}${pendingOnly ? '&pending=1' : ''}${after ? `&cursor=${encodeURIComponent(after)}` : ''}`); const d = await r.json(); if (!r.ok) throw new Error(d.message ?? 'Could not load sites'); setSites(old => after ? [...old, ...d.sites] : d.sites); setCursor(d.next); setPendingCount(d.pendingCount ?? 0) } catch (e) { setError(e instanceof Error ? e.message : 'Could not load sites') }
+  }, [authedFetch, suggested, pendingOnly, search])
   useEffect(() => { void load() }, [load])
   async function act(action: string, ids = selected, extras: Record<string, unknown> = {}) {
-    setBusy(true); setError('')
-    try { const r = await authedFetch('/api/funding/monitor/sites', { method: 'POST', body: JSON.stringify({ action, ids, ...extras }) }); const d = await r.json(); if (!r.ok) throw new Error(d.message ?? 'Site action failed'); if (action === 'seed') { setSeedCursor(d.next); setSuggested(true) } setSelected([]); await load() } catch (e) { setError(e instanceof Error ? e.message : 'Site action failed') } finally { setBusy(false) }
+    setBusy(true); setError(''); setNotice('')
+    try { const r = await authedFetch('/api/funding/monitor/sites', { method: 'POST', body: JSON.stringify({ action, ids, ...extras }) }); const d = await r.json(); if (!r.ok) throw new Error(d.message ?? 'Site action failed'); if (action === 'seed') { setSeedCursor(d.next); setSuggested(true) } if (typeof d.approved === 'number') setNotice(approvalNotice(d)); if (typeof d.rejected === 'number') setNotice(`${d.rejected} request${d.rejected === 1 ? '' : 's'} rejected`); setSelected([]); await load(); onChanged?.() } catch (e) { setError(e instanceof Error ? e.message : 'Site action failed') } finally { setBusy(false) }
   }
-  return <section className="space-y-4"><p className="cb-hint">Approved sites can be explored from a single starting page. Catalog suggestions stay inactive until a super admin approves them. Exploration is bounded; Evidence shows what was actually checked.</p>
-    <div className="flex flex-wrap gap-2"><button className="cb-btn-secondary cb-btn-sm" onClick={() => setSuggested(!suggested)}>{suggested ? 'Show all sites' : 'Suggested sites'}</button>{canApprove && <><button disabled={busy || !selected.length} className="cb-btn-primary cb-btn-sm" onClick={() => void act('activate')}>Approve selected</button><button disabled={busy || !selected.length} className="cb-btn-secondary cb-btn-sm" onClick={() => void act('pause')}>Pause selected</button><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act('seed', [], seedCursor ? { cursor: seedCursor } : {})}>{seedCursor ? 'Read next catalog batch' : 'Suggest sites from catalog'}</button></>}</div>
+  const pendingShown = sites.filter(s => s.pending_scope).map(s => s.id)
+  return <section className="space-y-4">
+    {canApprove && pendingCount > 0 && <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"><span className="font-semibold">{pendingCount} import request{pendingCount === 1 ? '' : 's'} waiting for approval</span><span className="text-amber-800">Funders in the database are already vetted; approve them together.</span><span className="ml-auto flex flex-wrap gap-2"><button disabled={busy} className="cb-btn-primary cb-btn-sm" onClick={() => void act('approve_all_imports', [])}>Approve all {pendingCount}</button><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => { setPendingOnly(true); setSuggested(false) }}>Review the list</button><button disabled={busy} className="cb-btn-ghost cb-btn-sm" onClick={() => { if (window.confirm(`Reject all ${pendingCount} import requests?`)) void act('reject_all_imports', []) }}>Reject all</button></span></div>}
+    {notice && <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-[12.5px] text-green-900">{notice}</p>}
+    <p className="cb-hint">Approved sites can be explored from a single starting page. Catalog suggestions stay inactive until a super admin approves them. Exploration is bounded; Evidence shows what was actually checked.</p>
+    <div className="flex flex-wrap gap-2"><button className="cb-btn-secondary cb-btn-sm" onClick={() => setSuggested(!suggested)}>{suggested ? 'Show all sites' : 'Suggested sites'}</button><button className={`cb-btn-sm ${pendingOnly ? 'cb-btn-primary' : 'cb-btn-secondary'}`} onClick={() => setPendingOnly(!pendingOnly)}>Waiting for approval{pendingCount ? ` (${pendingCount})` : ''}</button>{canApprove && sites.length > 0 && <button className="cb-btn-ghost cb-btn-sm" onClick={() => setSelected(selected.length === sites.length ? [] : sites.map(s => s.id))}>{selected.length === sites.length ? 'Clear selection' : `Select all ${sites.length} shown`}</button>}{canApprove && selected.some(id => pendingShown.includes(id)) && <button disabled={busy} className="cb-btn-primary cb-btn-sm" onClick={() => void act('approve_import', selected.filter(id => pendingShown.includes(id)))}>Approve {selected.filter(id => pendingShown.includes(id)).length} selected request{selected.filter(id => pendingShown.includes(id)).length === 1 ? '' : 's'}</button>}{canApprove && <><button disabled={busy || !selected.length} className="cb-btn-primary cb-btn-sm" onClick={() => void act('activate')}>Approve selected</button><button disabled={busy || !selected.length} className="cb-btn-secondary cb-btn-sm" onClick={() => void act('pause')}>Pause selected</button><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act('seed', [], seedCursor ? { cursor: seedCursor } : {})}>{seedCursor ? 'Read next catalog batch' : 'Suggest sites from catalog'}</button></>}</div>
     {canApprove && <input className="rounded border px-2 py-1 text-sm" placeholder="Find a funder by name" aria-label="Find a funder" value={funderQuery} onChange={e => setFunderQuery(e.target.value)} />}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     <input className="rounded border px-2 py-1 text-sm" aria-label="Find sites" placeholder="Find sites by host" value={search} onChange={e => setSearch(e.target.value)} />
@@ -34,4 +41,11 @@ export default function MonitorSites({ authedFetch, canApprove }: { authedFetch:
     {cursor && <button className="cb-btn-secondary cb-btn-sm" onClick={() => void load(cursor)}>Load more sites</button>}
     {!sites.length && <p className="cb-hint">No sites in this view yet.</p>}
   </section>
+}
+
+function approvalNotice(d: { approved: number; failed?: Array<{ host: string | null; message: string }>; lastFirstCheckAt?: string | null }) {
+  const parts = [`${d.approved} website${d.approved === 1 ? '' : 's'} approved`]
+  if (d.lastFirstCheckAt) parts.push(`first checks are spread out until ${new Date(d.lastFirstCheckAt).toLocaleString()} so the crawler and AI budget take them steadily`)
+  if (d.failed?.length) parts.push(`${d.failed.length} not approved: ${d.failed.slice(0, 3).map(f => `${f.host ?? 'site'} (${f.message})`).join('; ')}`)
+  return parts.join(' · ')
 }

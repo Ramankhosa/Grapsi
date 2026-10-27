@@ -51,7 +51,7 @@ export async function executeTask(lease: Lease, deps: ExecuteDeps): Promise<void
         await triageCandidates(lease, deps)
         return
       case 'REVISIT':
-        await revisitResource(lease, deps.fetch, deps.signal)
+        await revisitResource(lease, deps.fetch, deps.signal, deps.renderer)
         return
       case 'EXTRACT':
         await extractOpportunity(lease, deps)

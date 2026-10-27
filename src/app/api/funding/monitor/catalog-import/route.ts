@@ -3,29 +3,22 @@ import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { MIN_FREQUENCY_MINUTES } from '@/lib/monitor/checker'
-import { importWebsites, searchCatalogWebsites } from '@/lib/monitor/catalogImport'
+import { catalogFacets, importAllMatching, importWebsites, parseCatalogSearch, searchCatalogWebsites } from '@/lib/monitor/catalogImport'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** GET /api/funding/monitor/catalog-import — websites behind the calls in the funding database. Operators only. */
+/**
+ * GET /api/funding/monitor/catalog-import — websites behind the calls in the
+ * funding database. `?facets=1` returns the categories that exist instead.
+ * Operators only.
+ */
 export async function GET(request: NextRequest) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) return auth.response
-  const p = request.nextUrl.searchParams
-  const status = p.get('status')
-  const country = (p.get('country') ?? '').toUpperCase()
-  const result = await searchCatalogWebsites({
-    q: p.get('q') ?? '',
-    country: /^[A-Z]{2}$/.test(country) ? country : null,
-    funderType: p.get('type') || null,
-    status: status === 'ANY' || status === 'CLOSED' ? status : 'LIVE',
-    unwatchedOnly: p.get('unwatched') !== '0',
-    includeOneOff: p.get('oneOff') === '1',
-    offset: Math.max(0, Math.min(5000, Number(p.get('offset')) || 0)),
-    limit: 25,
-  })
-  return NextResponse.json(result, { headers: { 'Cache-Control': 'private, no-store' } })
+  const headers = { 'Cache-Control': 'private, no-store' }
+  if (request.nextUrl.searchParams.get('facets') === '1') return NextResponse.json(await catalogFacets(), { headers })
+  return NextResponse.json(await searchCatalogWebsites(parseCatalogSearch(request.nextUrl.searchParams)), { headers })
 }
 
 const host = z.string().min(3).max(253).regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i)
@@ -45,9 +38,23 @@ const website = z.object({
   dailyBudgetUsd: z.number().min(0).max(100).nullable().default(null),
   note: z.string().trim().max(2000).nullable().default(null),
 })
-const body = z.object({ websites: z.array(website).min(1).max(25) })
+const body = z.union([
+  z.object({ websites: z.array(website).min(1).max(200) }),
+  // Every website matching a search, with suggested settings.
+  z.object({
+    all: z.object({
+      query: z.string().max(4000),
+      defaults: z.object({
+        frequencyMinutes: z.number().int().min(MIN_FREQUENCY_MINUTES).max(20160).nullable().default(null),
+        priority: z.enum(['HIGH', 'NORMAL', 'LOW']).nullable().default(null),
+        excludeKeywords: z.string().max(1000).default(''),
+      }).default({}),
+      excludeHosts: z.array(host).max(2000).default([]),
+    }),
+  }),
+])
 
-/** POST — add the chosen websites to the pipeline, approved and due for a first check. */
+/** POST — add websites to the pipeline: the chosen ones, or every match of a search. */
 export async function POST(request: NextRequest) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) return auth.response
@@ -56,9 +63,10 @@ export async function POST(request: NextRequest) {
     const issue = parsed.error.issues[0]
     return NextResponse.json({ message: issue ? `${issue.path.join('.')}: ${issue.message}` : 'Invalid input' }, { status: 400 })
   }
-  const results = await importWebsites(parsed.data.websites, {
-    userId: auth.operator.userId,
-    superAdmin: auth.actor.roles.includes('SUPER_ADMIN'),
-  })
-  return NextResponse.json({ results })
+  const actor = { userId: auth.operator.userId, superAdmin: auth.actor.roles.includes('SUPER_ADMIN') }
+  if ('all' in parsed.data) {
+    const { query, defaults, excludeHosts } = parsed.data.all
+    return NextResponse.json(await importAllMatching(parseCatalogSearch(new URLSearchParams(query)), defaults, excludeHosts, actor))
+  }
+  return NextResponse.json({ results: await importWebsites(parsed.data.websites, actor) })
 }
