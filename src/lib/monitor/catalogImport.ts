@@ -508,7 +508,7 @@ export async function importWebsites(requested: ImportWebsite[], actor: { userId
   }
   const items = [...byBareHost.values()]
   const laptopNote = process.env.MONITOR_LOCAL_SCREENING_REQUIRED === 'true'
-    ? 'Laptop-first screening is on: add this host to the laptop worker’s allowed hosts, or its pages will wait for analysis.'
+    ? 'Laptop-first screening is on: new pages wait for the laptop’s first pass before paid screening. Approved websites are handed to the laptop automatically.'
     : null
   for (const [index, item] of items.entries()) {
     // Many sites at once: spread their first checks so the queue, the network

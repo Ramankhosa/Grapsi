@@ -10,12 +10,21 @@ class ProtocolError extends Error {constructor(code,message){super(message);this
 const check=(condition,code,message)=>{if(!condition)throw new ProtocolError(code,message);};
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 class Broker {
-  constructor(db,options={}){this.db=db;this.enabled=options.enabled!==false;this.allowedHosts=options.allowedHosts??['anrfonline.in','onlinedst.gov.in'];this.reload=options.reload;this.worker=null;this.legacy=false;this.closed=false;this.lastScan=0;this.skipTable=false;}
+  constructor(db,options={}){this.db=db;this.enabled=options.enabled!==false;this.allowedHosts=options.allowedHosts??['anrfonline.in','onlinedst.gov.in'];this.allowApprovedSites=options.allowApprovedSites===true;this.reload=options.reload;this.worker=null;this.legacy=false;this.closed=false;this.lastScan=0;this.skipTable=false;}
   async rules(db=this.db){
     const present=await db.$queryRawUnsafe("SELECT to_regclass('public.monitor_skip_rules')::text AS name");this.skipTable=Boolean(present[0]?.name);
     return this.skipTable?db.$queryRawUnsafe('SELECT site_id,dedup_key,match FROM monitor_skip_rules WHERE expires_at IS NULL OR expires_at>now()'):[];
   }
-  refresh(){if(this.reload){const config=this.reload();this.enabled=config.enabled!==false;if(config.allowedHosts)this.allowedHosts=config.allowedHosts;}}
+  refresh(){if(this.reload){const config=this.reload();this.enabled=config.enabled!==false;if(config.allowedHosts)this.allowedHosts=config.allowedHosts;if('allowApprovedSites' in config)this.allowApprovedSites=config.allowApprovedSites!==false;}}
+  // Hosts whose queued jobs this laptop may take. With allowApprovedSites, every
+  // site a super admin approved (ACTIVE) is included, so a page that Source Watch
+  // queued for laptop-first screening can never wait for a host-list edit. The
+  // background sweep of stored pages (scan) stays limited to allowedHosts.
+  async approvedHosts(){
+    if(!this.allowApprovedSites)return this.allowedHosts;
+    const rows=await this.db.$queryRawUnsafe("SELECT host FROM monitor_sites WHERE status='ACTIVE' ORDER BY host LIMIT 5000");
+    return [...new Set([...this.allowedHosts,...rows.map(r=>r.host)])];
+  }
   async hello(input){
     this.refresh();check([1,P.PROTOCOL].includes(input.protocol),'UPGRADE_REQUIRED','This worker requires a compatible application version.');
     this.legacy=input.protocol===1||input.appVersion!==P.APP_VERSION;
@@ -26,7 +35,7 @@ class Broker {
     const name=String(input.displayName??'Windows worker').slice(0,120).replace(/[\x00-\x1f]/g,'');
     await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_workers(id,display_name,app_version,model_sha256,state) VALUES($1,$2,$3,$4,'IDLE') ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,app_version=excluded.app_version,model_sha256=excluded.model_sha256,last_seen_at=now(),state='IDLE'`,input.workerId,name,String(input.appVersion??'unknown').slice(0,40),input.modelSha256);
     this.worker=input.workerId;
-    return {protocol:input.protocol,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:clientPolicy.POLICY_HASH,model:P.MODEL,promptTemplate:clientPolicy.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:this.allowedHosts};
+    return {protocol:input.protocol,server:'Grapsi Source Watch',serverTime:new Date().toISOString(),mode:'SHADOW',enabled:this.enabled,policyHash:clientPolicy.POLICY_HASH,model:P.MODEL,promptTemplate:clientPolicy.TEMPLATE,types:P.TYPES,leaseSeconds:LEASE_SECONDS,pollSeconds:15,approvedHosts:await this.approvedHosts()};
   }
   async touch(state='IDLE'){
     check(this.worker,'NOT_REGISTERED','Connect this worker first.');
@@ -83,7 +92,7 @@ class Broker {
       const rows=await tx.$queryRawUnsafe(`WITH candidate AS (
         SELECT j.id FROM monitor_local_analysis_jobs j JOIN monitor_resources r ON r.id=j.resource_id JOIN monitor_sites s ON s.id=r.site_id JOIN monitor_resource_versions v ON v.id=r.current_version_id
         WHERE ((j.state='QUEUED' AND j.available_at<=now()) OR (j.state='RUNNING' AND j.lease_until<now())) AND j.attempts<$1
-          AND j.policy_hash=$2 AND s.status='ACTIVE' AND s.host=ANY($3::text[]) AND r.current_version_id=j.version_id
+          AND j.policy_hash=$2 AND s.status='ACTIVE' AND (s.host=ANY($3::text[]) OR $7::boolean) AND r.current_version_id=j.version_id
           AND NOT ${hasReusableGeneral('r','v','$2','$6')}
           ${skipGuard}
         ORDER BY CASE WHEN coalesce((j.payload->>'queuePriority')::int,100)<10 THEN 0
@@ -91,7 +100,7 @@ class Broker {
           WHEN coalesce((j.payload->>'queuePriority')::int,100)<=20 THEN 20
           WHEN j.created_at<now()-interval '6 hours' THEN 30 WHEN j.payload->'page'->>'text' ~* 'deadline|closes|extension|corrigendum' THEN 40 ELSE 100 END,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED)
         UPDATE monitor_local_analysis_jobs j SET state='RUNNING',owner=$4,lease_token=$5,lease_until=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
-        FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token,P.MODEL.sha256);
+        FROM candidate c WHERE j.id=c.id RETURNING j.id,j.input_hash,j.payload,j.lease_token,j.lease_until`,MAX_ATTEMPTS,P.POLICY_HASH,this.allowedHosts,this.worker,token,P.MODEL.sha256,this.allowApprovedSites);
       if(!rows.length)return {job:null};
       const row=rows[0];
       // A laptop may return days after discovery. Judge deadlines as of claim time,
@@ -132,7 +141,7 @@ class Broker {
         return {accepted:true,duplicate:true,mode:'SHADOW',details};
       }
       check(job.state==='RUNNING'&&new Date(job.lease_until)>new Date(),'LEASE_LOST','The job lease expired; it can be retried.');
-      if(job.current_version_id!==job.version_id||job.site_status!=='ACTIVE'||!this.allowedHosts.includes(job.host)||P.sha256(job.current_text??'')!==job.payload.fullTextHash||job.current_raw_hash!==job.payload.sourceHash){
+      if(job.current_version_id!==job.version_id||job.site_status!=='ACTIVE'||!(this.allowApprovedSites||this.allowedHosts.includes(job.host))||P.sha256(job.current_text??'')!==job.payload.fullTextHash||job.current_raw_hash!==job.payload.sourceHash){
         await tx.$executeRawUnsafe("UPDATE monitor_local_analysis_jobs SET state='SUPERSEDED',lease_until=NULL,updated_at=now() WHERE id=$1",job.id);
         return {accepted:false,stale:true};
       }
@@ -216,7 +225,7 @@ async function main(){
       console.log(JSON.stringify({mode:'SHADOW',jobs,results},null,2));return;
     }
     check(process.argv.includes('--stdio'),'INVALID_REQUEST','Use --stdio, --init or --status.');
-    await stdio(new Broker(db,{enabled:config.enabled!==false,allowedHosts:config.allowedHosts,reload:()=>fs.existsSync(configPath)?JSON.parse(fs.readFileSync(configPath,'utf8')):config}));
+    await stdio(new Broker(db,{enabled:config.enabled!==false,allowedHosts:config.allowedHosts,allowApprovedSites:config.allowApprovedSites!==false,reload:()=>fs.existsSync(configPath)?JSON.parse(fs.readFileSync(configPath,'utf8')):config}));
   }finally{await db.$disconnect();}
 }
 if(require.main===module)main().catch(error=>{process.stderr.write('Local worker broker could not start: '+(error instanceof ProtocolError?error.message:error.code??error.name)+'\n');process.exitCode=1;});

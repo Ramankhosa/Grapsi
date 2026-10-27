@@ -14,7 +14,7 @@ chown -R root:root "$release"
 find "$release" -type d -exec chmod 0755 {} +
 find "$release" -type f -exec chmod 0644 {} +
 if [[ ! -e /etc/grapsi-local-worker.json ]]; then
-  printf '%s\n' '{"enabled":true,"appRoot":"/var/www/granter/Grapsi","allowedHosts":["anrfonline.in","onlinedst.gov.in"]}' > /etc/grapsi-local-worker.json
+  printf '%s\n' '{"enabled":true,"appRoot":"/var/www/granter/Grapsi","allowedHosts":["anrfonline.in","onlinedst.gov.in"],"allowApprovedSites":true}' > /etc/grapsi-local-worker.json
   chmod 0644 /etc/grapsi-local-worker.json
 fi
 sudo -n -u ramankhosa /usr/bin/node "$release/install.cjs"

@@ -227,3 +227,41 @@ test('legacy queued submissions can be acknowledged after the worker upgrade',as
  await page();const broker=await connect();const {job}=await broker.claim();await db.$executeRawUnsafe('UPDATE monitor_local_analysis_jobs SET policy_hash=$1 WHERE id=$2',P.LEGACY_POLICY_HASH,job.id)
  const ack=await broker.complete({...completion(job),policyHash:P.LEGACY_POLICY_HASH});assert(ack.accepted)
 })
+
+async function importedPage(host){
+  const id='imp-'+host,text='Applications invited for the imported research fellowship until March 2027.';
+  await db.$executeRawUnsafe("INSERT INTO monitor_sites VALUES($1,$2,'ACTIVE') ON CONFLICT DO NOTHING",'site-'+host,host);
+  await db.$executeRawUnsafe("INSERT INTO monitor_resources(id,site_id,current_version_id,title,canonical_url,dedup_key) VALUES($1,$2,$3,'Imported call',$4,$4) ON CONFLICT DO NOTHING",id,'site-'+host,id+'-v1','https://'+host+'/call');
+  await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) VALUES($1,$2,$3,$4,$4) ON CONFLICT DO NOTHING",id+'-v1',id,text,P.sha256(text));
+  // Source Watch queues the job (laptop-first screening); the host is not on the configured list.
+  assert.equal(await new Broker(db,{allowedHosts:[host]}).scan(),1);
+}
+test('jobs Source Watch queued for any approved site reach the laptop without a host-list edit',async()=>{
+  await importedPage('imported.invalid');
+  const strict=await connect();
+  assert.equal((await strict.claim()).job,null,'the configured list alone does not include the imported site');
+  const broker=await connect({allowApprovedSites:true});
+  const hello=await broker.hello({protocol:P.PROTOCOL,workerId:broker.worker,displayName:'test laptop',appVersion:P.APP_VERSION,modelSha256:P.MODEL.sha256});
+  assert(hello.approvedHosts.includes('imported.invalid')&&hello.approvedHosts.includes('unit-test.invalid'));
+  const {job}=await broker.claim();
+  assert.equal(job.payload.page.url,'https://imported.invalid/call');
+  assert.equal((await broker.complete(completion(job))).accepted,true);
+  assert.equal((await db.$queryRawUnsafe('SELECT state FROM monitor_local_analysis_jobs'))[0].state,'DONE');
+});
+test('approved-site access never covers paused sites and never widens the background sweep',async()=>{
+  await importedPage('paused.invalid');
+  await db.$executeRawUnsafe("UPDATE monitor_sites SET status='PAUSED' WHERE host='paused.invalid'");
+  const broker=await connect({allowApprovedSites:true});
+  assert.equal((await broker.claim()).job,null);
+  await db.$executeRawUnsafe("TRUNCATE monitor_local_analysis_jobs CASCADE");
+  await db.$executeRawUnsafe("UPDATE monitor_sites SET status='ACTIVE' WHERE host='paused.invalid'");
+  assert.equal(await new Broker(db,{allowedHosts:['unit-test.invalid'],allowApprovedSites:true}).scan(),0);
+});
+test('the server config can switch approved-site access off again',async()=>{
+  await importedPage('imported.invalid');
+  let config={enabled:true,allowedHosts:['unit-test.invalid'],allowApprovedSites:false};
+  const broker=await connect({allowApprovedSites:true,reload:()=>config});
+  assert.equal((await broker.claim()).job,null);
+  config={...config,allowApprovedSites:true};
+  assert((await broker.claim()).job);
+});

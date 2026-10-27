@@ -561,7 +561,7 @@ export default function SourceMonitorPage() {
         {activeView === 'screen' && (summary?.stages.screen.laptopMissingHosts.length ?? 0) > 0 && (
           <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-[13px] text-red-800">
             <p className="font-semibold">The laptop has never analysed pages from {summary!.stages.screen.laptopMissingHosts.join(', ')}</p>
-            <p className="mt-0.5">Their pages have waited for hours. Add these hosts to the laptop worker&apos;s allowed hosts (its broker configuration on the server); the site list here does not change that setting.</p>
+            <p className="mt-0.5">Their pages have waited for hours. Approved websites are handed to the laptop automatically, so check that the laptop worker is running and up to date, and that its broker configuration on the server has not set allowApprovedSites to false. The site list here does not change that setting.</p>
           </div>
         )}
         {activeView === 'screen' && (
