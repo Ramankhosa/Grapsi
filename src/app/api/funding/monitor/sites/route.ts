@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingReadOperatorRequest, requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@/lib/prisma-generated'
+import { approveImportRequest, type ImportRequest } from '@/lib/monitor/catalogImport'
 import { z } from 'zod'
 import { seedCatalogSuggestions } from '@/lib/monitor/discovery'
 import { enqueueTask } from '@/lib/monitor/queue'
@@ -48,7 +50,7 @@ export async function GET(request: NextRequest) {
 }
 
 const host = z.string().min(3).max(253).regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i)
-const change = z.object({ action: z.enum(['activate', 'pause', 'discover', 'configure', 'seed', 'approve_feed', 'confirm_website']), ids: z.array(z.string()).max(100).default([]), cursor: z.string().optional(), feedId: z.string().optional(), relatedHosts: z.array(host).max(20).optional(), attachmentHosts: z.array(host).max(20).optional(), funderId: z.string().optional(), confirmWebsite: z.boolean().optional(), tlsException: z.object({ reason: z.string().min(20).max(1000), expiresAt: z.string().datetime() }).nullable().optional() })
+const change = z.object({ action: z.enum(['activate', 'pause', 'discover', 'configure', 'seed', 'approve_feed', 'confirm_website', 'approve_import', 'reject_import']), ids: z.array(z.string()).max(100).default([]), cursor: z.string().optional(), feedId: z.string().optional(), relatedHosts: z.array(host).max(20).optional(), attachmentHosts: z.array(host).max(20).optional(), funderId: z.string().optional(), confirmWebsite: z.boolean().optional(), tlsException: z.object({ reason: z.string().min(20).max(1000), expiresAt: z.string().datetime() }).nullable().optional() })
 export async function POST(request: NextRequest) {
   const auth = await requireFundingOperatorRequest(request)
   if ('response' in auth) return auth.response
@@ -62,6 +64,16 @@ export async function POST(request: NextRequest) {
   if (body.tlsException && (Date.parse(body.tlsException.expiresAt) <= Date.now() || Date.parse(body.tlsException.expiresAt) > Date.now() + 7 * 86400_000)) return NextResponse.json({ message: 'A TLS exception must expire within seven days' }, { status: 400 })
   await prisma.$transaction(async tx => {
     for (const id of body.ids) {
+      if (body.action === 'approve_import' || body.action === 'reject_import') {
+        // An operator's catalogue-import request: scope, budget, priority and
+        // funder links are applied only here, by a super admin.
+        const site = await tx.monitorSite.findUniqueOrThrow({ where: { id } })
+        const request = site.pending_scope as unknown as ImportRequest | null
+        if (!request) throw new Error('This site has no import request waiting')
+        if (body.action === 'approve_import') await approveImportRequest(tx, id, request, auth.actor.id)
+        else await tx.monitorSite.update({ where: { id }, data: { pending_scope: Prisma.DbNull } })
+        continue
+      }
       if (body.action === 'approve_feed') {
         const site = await tx.monitorSite.findUniqueOrThrow({ where: { id } })
         const feed = await tx.monitorCrawlFrontier.findFirst({ where: { id: body.feedId, site_id: id, state: 'SUGGESTED_FEED' } })

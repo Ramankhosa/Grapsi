@@ -12,6 +12,7 @@ import { decodeBody, gunzipCapped, type SafeFetch } from './safeFetch'
 import { SITE_AUTO_PAUSE_FAILURES, siteScope, tlsExceptionHosts } from './sites'
 import { identifyUrl, type UrlIdentityOptions } from './urlIdentity'
 import { queueCandidates } from './candidates'
+import { loadSkipRules, skipRuleFor, type SkipRuleLike } from './skipRules'
 import { assertContentCapacity, assertResourceCapacity } from './capacity'
 
 /**
@@ -74,7 +75,7 @@ export interface PageCursor {
 }
 
 export interface CheckOutcome {
-  status: 'COMPLETE' | 'PARTIAL' | 'NOT_MODIFIED' | 'CANCELED'
+  status: 'COMPLETE' | 'PARTIAL' | 'NOT_MODIFIED' | 'CANCELED' | 'SKIPPED'
   complete: boolean
   pagesVisited: number
   itemsObserved: number
@@ -258,6 +259,8 @@ interface PersistContext {
   now: Date
   lineRules: string[]
   urlRules: string[]
+  /** Site-wide "don't visit" marks; matching items are never recorded. */
+  skipRules: SkipRuleLike[]
 }
 
 function itemContextHash(item: ListingItem, lineRules: string[]): string {
@@ -272,12 +275,14 @@ async function persistPage(
   tx: Prisma.TransactionClient,
   ctx: PersistContext,
   page: FetchedPage
-): Promise<{ itemsObserved: number; newResources: number }> {
+): Promise<{ itemsObserved: number; newResources: number; itemsChanged: number }> {
   const { source, site, now } = ctx
   const listingIdentity = identifyUrl(page.finalUrl, undefined, identityOptions(site)) ?? identifyUrl(page.url)
-  if (!listingIdentity) return { itemsObserved: 0, newResources: 0 }
+  if (!listingIdentity) return { itemsObserved: 0, newResources: 0, itemsChanged: 0 }
 
-  const items = page.items.filter((item) => !ctx.urlRules.some((prefix) => item.url.startsWith(prefix)))
+  const items = page.items.filter(
+    (item) => !ctx.urlRules.some((prefix) => item.url.startsWith(prefix)) && !skipRuleFor(ctx.skipRules, item.url, now)
+  )
   await assertResourceCapacity(tx, site.id, [listingIdentity.dedupKey, ...items.map(item => item.dedupKey)])
 
   // The listing page itself.
@@ -336,7 +341,7 @@ async function persistPage(
     },
   })
 
-  if (items.length === 0) return { itemsObserved: 0, newResources: 0 }
+  if (items.length === 0) return { itemsObserved: 0, newResources: 0, itemsChanged: 0 }
 
   // Alias-aware identity: an observed redirect or confirmed canonical maps a
   // key onto the resource it already names.
@@ -431,13 +436,22 @@ async function persistPage(
       data: { last_seen_at: now, last_check_generation: ctx.generation, missing_since: null },
     })
   }
-  if (process.env.MONITOR_PIPELINE_ENABLED === 'true' && resourceIds.length) {
-    await queueCandidates(tx, site.id, resourceIds, ctx.generation === 1, fingerprint({
+  // Screen only what this listing changed: new entries, entries whose words
+  // changed, and entries never screened. An unchanged page is not fetched
+  // again just because a neighbour on the same listing changed.
+  const screened = new Set((await tx.monitorOpportunity.findMany({
+    where: { primary_resource_id: { in: resourceIds } },
+    select: { primary_resource_id: true },
+    distinct: ['primary_resource_id'],
+  })).map((row) => row.primary_resource_id))
+  const toScreen = [...new Set([...changedResources, ...resourceIds.filter((id) => !screened.has(id))])]
+  if (process.env.MONITOR_PIPELINE_ENABLED === 'true' && toScreen.length) {
+    await queueCandidates(tx, site.id, toScreen, ctx.generation === 1, fingerprint({
       items: items.map(i => [i.dedupKey, itemContextHash(i, ctx.lineRules)]).sort(),
       keywords: source.keywords, excludes: source.exclude_keywords, languages: site.language_profile,
     }))
   }
-  return { itemsObserved: seenResource.size, newResources: created.count }
+  return { itemsObserved: seenResource.size, newResources: created.count, itemsChanged: changedResources.length }
 }
 
 async function loadSource(sourceId: string): Promise<SourceWithSite | null> {
@@ -486,6 +500,23 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
     return { status: 'CANCELED', complete: false, pagesVisited: 0, itemsObserved: 0, newResources: 0, fetchModeUsed: null, message: reason }
   }
   const site = source.site
+  const skipRules = await loadSkipRules(prisma, site.id, now)
+  const watched = source.kind === 'FEED' ? source.feed_url || source.url : source.url
+  if (skipRuleFor(skipRules, watched, now)) {
+    // Marked "don't visit": no request, and not a failure. The run is recorded
+    // as SKIPPED so the check log says why nothing was read; nothing is marked
+    // missing and the site's failure streak is untouched.
+    const message = `${watched} is marked don't visit; the check made no request.`
+    await withFence(lease, async (tx) => {
+      await tx.monitorCheckRun.upsert({
+        where: { source_id_check_generation: { source_id: source.id, check_generation: generation } },
+        create: { source_id: source.id, site_id: source.site_id, check_generation: generation, task_id: lease.taskId, status: 'SKIPPED', error_message: message, finished_at: new Date() },
+        update: { task_id: lease.taskId, status: 'SKIPPED', complete: false, error_class: null, error_message: message, finished_at: new Date() },
+      })
+      await completeTaskInTx(tx, lease, { status: 'SKIPPED', reason: 'SKIPPED_BY_ADMIN' })
+    })
+    return { status: 'SKIPPED', complete: false, pagesVisited: 0, itemsObserved: 0, newResources: 0, fetchModeUsed: null, message }
+  }
   await withFence(lease, (tx) => startCheckRun(tx, lease, source, generation))
 
   const ctx: PersistContext = {
@@ -495,6 +526,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
     now,
     lineRules: lineIgnorePatterns(source, now),
     urlRules: urlPrefixRules(source, now),
+    skipRules,
   }
 
   const cursor: PageCursor = (source.cursor as PageCursor | null) ?? {}
@@ -503,6 +535,10 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
   let pagesVisited = 0
   let itemsObserved = 0
   let newResources = 0
+  let itemsChanged = 0
+  // Pages a "don't visit" mark kept us from reading. Such a pass is never
+  // complete, so nothing listed only there is ever marked missing.
+  let skippedPages = 0
   let truncated = false
   let passComplete = false
   let notModifiedHead = false
@@ -532,6 +568,11 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
         break
       }
       visited.add(key)
+      if (skipRuleFor(skipRules, url, now)) {
+        skippedPages += 1
+        url = null
+        break
+      }
 
       const page = await fetchListingPage(source, site, url, deps, {
         // Only a single-page listing may be validated by a 304 on page one.
@@ -566,6 +607,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
         const written = await withFence(lease, (tx) => persistPage(tx, ctx, page))
         itemsObserved += written.itemsObserved
         newResources += written.newResources
+        itemsChanged += written.itemsChanged
 
         // A listing that shows nothing is suspect, never a clean pass: a
         // script-built page read without a browser, a challenge page, or a
@@ -643,6 +685,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
     const written = await withFence(lease, (tx) => persistPage(tx, ctx, page))
     itemsObserved = written.itemsObserved
     newResources = written.newResources
+    itemsChanged = written.itemsChanged
     if (items.length === 0) {
       errorClass = 'NO_ITEMS'
       message = `${feedUrl} returned a feed with no items; nothing is marked missing until it does.`
@@ -671,6 +714,13 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
       const sitemapUrl = queue[0]
       if (offset === 0 && visitedSitemaps.has(sitemapKey(sitemapUrl))) {
         queue.shift()
+        continue
+      }
+      if (skipRuleFor(skipRules, sitemapUrl, now)) {
+        queue.shift()
+        visitedSitemaps.add(sitemapKey(sitemapUrl))
+        offset = 0
+        skippedPages += 1
         continue
       }
       const result = await deps.fetch(sitemapUrl, {
@@ -744,6 +794,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
         const written = await withFence(lease, (tx) => persistPage(tx, ctx, page))
         itemsObserved += written.itemsObserved
         newResources += written.newResources
+        itemsChanged += written.itemsChanged
         entriesThisCheck += slice.length
         passEntries += slice.length
 
@@ -784,7 +835,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
         errorClass = 'SITEMAP_TOO_LARGE'
         message = `${source.url} lists more sitemap documents than one pass can remember; nothing is marked missing.`
       }
-      passComplete = !truncated && !errorClass
+      passComplete = !truncated && !errorClass && skippedPages === 0
     } else {
       nextCursor = {
         sitemapQueue: queue,
@@ -800,6 +851,7 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
     message = `Watch point kind ${source.kind} is not supported yet`
   }
 
+  if (skippedPages > 0) passComplete = false
   const fetchModeUsed = modes.size === 0 ? null : modes.size > 1 ? 'MIXED' : [...modes][0]
   const status: CheckOutcome['status'] =
     notModifiedHead && itemsObserved === 0 && !cursor.nextUrl ? 'NOT_MODIFIED' : passComplete && !errorClass ? 'COMPLETE' : 'PARTIAL'
@@ -853,6 +905,9 @@ export async function runSourceCheck(lease: Lease, deps: CheckDeps): Promise<Che
         fail_count: errorClass ? { increment: 1 } : 0,
         last_error: message ?? null,
         cursor: cursorValue,
+        // Nothing new and nothing changed counts toward a quiet streak; any
+        // change resets it. Errors leave it as it was.
+        ...(errorClass ? {} : status === 'NOT_MODIFIED' || (newResources === 0 && itemsChanged === 0) ? { quiet_streak: { increment: 1 } } : { quiet_streak: 0 }),
         ...(complete ? { last_complete_check_at: now } : {}),
         ...validators,
         ...(promoteTo ? { fetch_mode: promoteTo } : {}),

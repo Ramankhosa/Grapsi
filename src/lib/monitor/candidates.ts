@@ -17,8 +17,34 @@ import { addFrontier,discoveryScope,watch } from './discovery'
 import { identifyUrl } from './urlIdentity'
 import { retainCoverageGap } from './coverage'
 import { lifecycleAt,normalQuote } from './evidence'
+import { loadSkipRules, skipRuleFor } from './skipRules'
 
 export const TRIAGE_VERSION = 'triage-2'
+export const UNCHANGED_NEGATIVE_PREFIX = 'Unchanged since it was judged not funding; not analysed again.'
+
+/**
+ * True when the latest assessment of a page was negative — screened NOT_FUNDING
+ * or rejected by a reviewer — and the page is the same as when it was judged:
+ * same full-text fingerprint, same listed title, same screening policy.
+ * Decisions recorded before the title was stored never match, so they are
+ * screened once more and then gated.
+ */
+export function unchangedNegative(
+  prior: { triage_verdict: string | null; review_state: string; decision_versions: unknown },
+  page: { fullHash: string; title: string | null; settings: string },
+): boolean {
+  const negative = prior.triage_verdict === 'NOT_FUNDING' || prior.review_state === 'REJECTED'
+  const versions = prior.decision_versions as { policy?: string; prompt?: string; fullHash?: string; title?: string | null; settings?: string } | null
+  if (!negative || !versions || !page.fullHash || !('title' in versions) || !versions.settings) return false
+  return versions.fullHash === page.fullHash && (versions.title ?? null) === (page.title ?? null) && versions.settings === page.settings
+    && versions.policy === RELEVANCE_VERSION && versions.prompt === TRIAGE_VERSION
+}
+
+/** Fingerprint of the site settings a screening judgement depended on. */
+export function screeningSettingsKey(config: { include?: string[]; exclude?: string[]; languages?: string[] }, funders: Array<{ funder_id: string }>): string {
+  return fingerprint({ include: config.include ?? [], exclude: config.exclude ?? [], languages: config.languages ?? [], funders: funders.map((f) => f.funder_id).sort() })
+}
+
 export type TriageVerdict = 'NOT_FUNDING' | 'NEW_OPPORTUNITY' | 'UPDATE_TO_EXISTING' | 'UNSURE' | 'NEEDS_EVIDENCE'
 export interface ItemDecision { id: string; verdict: TriageVerdict; confidence: number; reason: string; type: string }
 const VERDICTS = ['NOT_FUNDING', 'NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING', 'UNSURE', 'NEEDS_EVIDENCE']
@@ -59,7 +85,11 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
   const resources = await prisma.monitorResource.findMany({ where: { id: { in: ids }, site: { status: 'ACTIVE' } }, include: { site: { include: { funders: { where: { status: 'CONFIRMED' } } } }, observations: { include: { source: true }, orderBy: { last_seen_at: 'desc' }, take: 5 } } })
   const pending: Array<{ resource: typeof resources[number]; cacheKey: string; negativeKey: string | null; fullHash: string; opportunityId: string; prompt: Record<string, unknown> }> = []
   let waitingForLocal=0
+  const skipRules = new Map<string, Awaited<ReturnType<typeof loadSkipRules>>>()
   for (const r of resources) {
+    // Pages marked "don't visit" are neither read nor triaged.
+    if (!skipRules.has(r.site_id)) skipRules.set(r.site_id, await loadSkipRules(prisma, r.site_id))
+    if (skipRuleFor(skipRules.get(r.site_id)!, r.canonical_url)) continue
     const observation = r.observations[0]
     const config = { include: observation?.source.keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), exclude: observation?.source.exclude_keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), languages: r.site.language_profile }
     let score = scoreRelevance(r.title ?? observation?.anchor_text ?? '', observation?.context_text ?? '', r.canonical_url ?? '', config)
@@ -126,6 +156,21 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       }
     }
     const local=process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'?await localSuggestion(r.id):null
+    // A page whose not-funding judgement is settled — a reviewer rejected it,
+    // screening was confident, the laptop has already given its opinion, or
+    // laptop screening is off — is not analysed again until its text, listed
+    // title, the site's screening settings or the policy change. It is still
+    // fetched (conditionally) so a change is noticed.
+    if (opportunity.id === prior?.id && prior) {
+      const settled = prior.review_state === 'REJECTED' || (prior.triage_confidence ?? 0) >= 0.9 || process.env.MONITOR_LOCAL_SCREENING_REQUIRED !== 'true' || local !== null
+      if (settled && unchangedNegative(prior, { fullHash, title: r.title, settings: screeningSettingsKey(config, r.site.funders) })) {
+        await withFence(lease, tx => tx.monitorOpportunity.update({ where: { id: opportunity.id }, data: {
+          processing_state: 'DONE',
+          triage_reason: `${UNCHANGED_NEGATIVE_PREFIX} ${(prior.triage_reason ?? '').replace(UNCHANGED_NEGATIVE_PREFIX, '').trim()}`.trim().slice(0, 600),
+        } }))
+        continue
+      }
+    }
     if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
       const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx,early.type==='UPDATE_OF'?20:100);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
       if(queued)waitingForLocal++;continue
@@ -207,6 +252,13 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
 async function applyDecision(lease: Lease, opportunityId: string, resourceId: string, decision: ItemDecision, model: string, inputKey: string, fullHash: string, proposedTitle?:string) {
   const resource = await prisma.monitorResource.findUniqueOrThrow({ where: { id: resourceId } })
   const funders = await prisma.monitorSiteFunder.findMany({ where: { site_id: resource.site_id, status: 'CONFIRMED' } })
+  const settingsSource = await prisma.monitorResource.findUniqueOrThrow({ where: { id: resourceId }, select: { site: { select: { language_profile: true } }, observations: { include: { source: true }, orderBy: { last_seen_at: 'desc' }, take: 1 } } })
+  const observed = settingsSource.observations[0]?.source
+  const settings = screeningSettingsKey({
+    include: observed?.keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+    exclude: observed?.exclude_keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+    languages: settingsSource.site.language_profile,
+  }, funders)
   const funderId = funders.length === 1 ? funders[0].funder_id : null
   // Catalog association is recomputed, even on a triage cache hit.
   const match = await matchCatalog(resource.canonical_url ?? '', proposedTitle??resource.title ?? '', funderId,prisma,null,resource.final_url?[resource.final_url]:[])
@@ -223,7 +275,7 @@ async function applyDecision(lease: Lease, opportunityId: string, resourceId: st
       opportunity_type: decision.type, funder_id: funderId, processing_state: decision.verdict === 'NEEDS_EVIDENCE' ? 'NEEDS_EVIDENCE' : 'TRIAGED',
       review_state: reviewed ? current.review_state : decision.verdict === 'NOT_FUNDING' ? 'NONE' : match.type === 'UPDATE_OF' ? 'UPDATE_PROPOSED' : 'PENDING',
       match_type: match.type, match_confidence: match.confidence, funding_call_id: match.callId,
-      conflicts: match.candidates.map(c => ({ id: c.id, title: c.title })), decision_versions: { policy: RELEVANCE_VERSION, prompt: TRIAGE_VERSION, routing: ROUTING_POLICY_VERSION, model, input: inputKey, fullHash },
+      conflicts: match.candidates.map(c => ({ id: c.id, title: c.title })), decision_versions: { policy: RELEVANCE_VERSION, prompt: TRIAGE_VERSION, routing: ROUTING_POLICY_VERSION, model, input: inputKey, fullHash, title: resource.title ?? null, settings },
       ...(changed ? { review_revision: { increment: 1 }, stale_evidence: true } : {}),
     } })
     if (!reviewed && decision.verdict !== 'NOT_FUNDING') await emitEvent(tx, { kind: 'NEW_DISCOVERY', eventKey: `discovery:${opportunityId}:${inputKey}`, payload: { title: resource.title ?? 'Funding announcement' } })
@@ -232,6 +284,9 @@ async function applyDecision(lease: Lease, opportunityId: string, resourceId: st
       await enqueueTask(tx, { kind: 'EXTRACT', operationKey: `extract-auto:${opportunityId}:${inputKey}:${fullHash}`, siteId: resource.site_id, opportunityId,
         payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: match.type==='UPDATE_OF'?30:80 })
     }
-    await tx.monitorResource.update({ where: { id: resourceId }, data: { revisit_policy: 'ACTIVE', next_revisit_at: new Date(Date.now() + 3 * 86400_000) } })
+    // A page screened as not funding is only re-read monthly (and less as it
+    // stays unchanged); funding pages keep the three-day rhythm.
+    const notFunding = decision.verdict === 'NOT_FUNDING'
+    await tx.monitorResource.update({ where: { id: resourceId }, data: { revisit_policy: notFunding ? 'LONG_TERM' : 'ACTIVE', next_revisit_at: new Date(Date.now() + (notFunding ? 30 : 3) * 86400_000), unchanged_revisits: 0 } })
   })
 }

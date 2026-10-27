@@ -9,6 +9,7 @@ import type { MonitorSite } from '@/lib/prisma-generated'
 import { tlsExceptionHosts } from './sites'
 import { isMonitorFetchError } from './errors'
 import { retainCoverageGap } from './coverage'
+import { loadSkipRules, reconcileSkipRules, skipRuleFor } from './skipRules'
 
 export const DISCOVERY_LIMITS = { requests: 10, frontier: 2000, depth: 4, linksPerPage: 150 }
 export function isCrawlTrap(url: string): boolean {
@@ -32,9 +33,10 @@ export async function addFrontier(db: Db, site: MonitorSite, urls: Array<{ url: 
     if(id&&!discoveryScope(site)(id.host)&&/fund|grant|call|proposal|appl|fellow|scholar|अनुदान/i.test(`${input.title??''} ${id.canonical}`))await retainCoverageGap(db,site.id,id.canonical,'HOST_APPROVAL','Observed funding link requires related-host approval before fetching.')
     else if(id&&discoveryScope(site)(id.host))await db.monitorCoverageGap.updateMany({where:{site_id:site.id,url:id.canonical,kind:'HOST_APPROVAL',state:'OPEN'},data:{state:'RESOLVED',last_seen_at:new Date()}})
   }
+  const skipRules = await loadSkipRules(db, site.id)
   const candidates = urls.map(input => {
     const id = identifyUrl(input.url)
-    if (!id || !discoveryScope(site)(id.host) || isCrawlTrap(id.canonical) || (input.depth ?? 0) > DISCOVERY_LIMITS.depth || /\.(pdf|docx?|png|zip|jpe?g|gif)([?#]|$)/i.test(id.canonical)) return null
+    if (!id || skipRuleFor(skipRules, id.canonical) || !discoveryScope(site)(id.host) || isCrawlTrap(id.canonical) || (input.depth ?? 0) > DISCOVERY_LIMITS.depth || /\.(pdf|docx?|png|zip|jpe?g|gif)([?#]|$)/i.test(id.canonical)) return null
     const score = scoreRelevance(input.title ?? '', '', id.canonical).score
     return { site_id: site.id, dedup_key: id.dedupKey, url: id.canonical, depth: input.depth ?? 0, discovered_from: input.from, score }
   }).filter((v): v is NonNullable<typeof v> => v !== null).sort((a, b) => b.score - a.score)
@@ -77,7 +79,15 @@ export async function discoverSite(lease: Lease, fetch: SafeFetch, signal?: Abor
   }
   const frontier = await prisma.monitorCrawlFrontier.findMany({ where: { site_id: site.id, state: { in: ['PENDING', 'VISITED', 'FAILED'] }, OR: [{ next_visit_at: null }, { next_visit_at: { lte: new Date() } }] }, orderBy: [{ score: 'desc' }, { created_at: 'asc' }], take: DISCOVERY_LIMITS.requests - initializationRequests })
   let visited = 0
+  // Marks may have expired since the last run: parked pages come back first.
+  await withFence(lease, tx => reconcileSkipRules(tx, site.id))
+  const skipRules = await loadSkipRules(prisma, site.id)
   for (const entry of frontier) {
+    // Marked "don't visit" after it was queued: park it without a request.
+    if (skipRuleFor(skipRules, entry.url)) {
+      await withFence(lease, tx => tx.monitorCrawlFrontier.update({ where: { id: entry.id }, data: { state: 'SKIPPED_BY_ADMIN', next_visit_at: null } }))
+      continue
+    }
     let result
     try { result = await fetch(entry.url, { inScope: scope, signal, minDelayMs: site.min_delay_ms, tlsInsecureHosts: tlsExceptionHosts(site), maxBytes: 2_500_000 }) }
     catch (error) {

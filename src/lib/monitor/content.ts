@@ -10,7 +10,8 @@ import { completeTaskInTx, withFence, type Lease } from './queue'
 import { decodeBody, type SafeFetch } from './safeFetch'
 import { siteScope, tlsExceptionHosts } from './sites'
 import { identifyUrl } from './urlIdentity'
-import { revisitDays } from './revisit'
+import { adaptiveRevisitDays, revisitDays } from './revisit'
+import { loadSkipRules, reconcileSkipRules, skipRuleFor, skippedPageError } from './skipRules'
 import { assertContentCapacity, MonitorCapacityError } from './capacity'
 
 export interface ContentResult { segments: EvidenceSegment[]; links: Array<{ url: string; title: string }>; changed: boolean }
@@ -26,6 +27,7 @@ function rememberedLinks(version:{text:string|null;page_statuses:unknown}):Conte
 /** Fetch each selected resource once; parsing is local and has no OCR side effects. */
 export async function readResource(resource: MonitorResource, site: MonitorSite, lease: Lease, fetch: SafeFetch, signal?: AbortSignal): Promise<ContentResult> {
   if (!resource.canonical_url) throw new Error('Resource has no fetchable URL')
+  if (skipRuleFor(await loadSkipRules(prisma, site.id), resource.canonical_url)) throw skippedPageError(resource.canonical_url)
   const previous = resource.current_version_id ? await prisma.monitorResourceVersion.findUnique({ where: { id: resource.current_version_id } }) : null
   const headers: Record<string, string> = {}
   if (previous && !previous.truncated) {
@@ -122,9 +124,21 @@ export async function revisitResource(lease: Lease, fetch: SafeFetch, signal?: A
   const opportunity = resource.opportunities[0] ?? resource.evidence[0]?.opportunity
   const closeDate = (opportunity?.field_evidence as { payload?: { fields?: { close_date?: { value?: string } } } } | null)?.payload?.fields?.close_date?.value
   const days = revisitDays({ lifecycle: opportunity?.lifecycle ?? 'UNKNOWN', deadline: closeDate, firstSeen: resource.first_seen_at })
+  if (skipRuleFor(await loadSkipRules(prisma, resource.site_id), resource.canonical_url)) {
+    // An admin stopped visits to this page: pause its revisits, remembering
+    // the policy so that removing or expiring the mark restores them.
+    await withFence(lease, async tx => {
+      await reconcileSkipRules(tx, resource.site_id)
+      await completeTaskInTx(tx, lease, { skipped: 'SKIPPED_BY_ADMIN' })
+    })
+    return
+  }
   const result = await readResource(resource, resource.site, lease, fetch, signal)
   await withFence(lease, async tx => {
-    await tx.monitorResource.update({ where: { id: resource.id }, data: { next_revisit_at: new Date(Date.now() + days * 86400_000) } })
+    const unchanged = result.changed ? 0 : resource.unchanged_revisits + 1
+    const notFunding = opportunity?.triage_verdict === 'NOT_FUNDING' || opportunity?.review_state === 'REJECTED'
+    const next = adaptiveRevisitDays(days, unchanged, notFunding)
+    await tx.monitorResource.update({ where: { id: resource.id }, data: { next_revisit_at: new Date(Date.now() + next * 86400_000), unchanged_revisits: unchanged } })
     if (result.changed) {
       const { queueCandidates } = await import('./candidates')
       const impacted = await tx.monitorOpportunity.findMany({ where: { OR: [{ primary_resource_id: resource.id }, { evidence: { some: { resource_id: resource.id } } }] }, select: { id: true, primary_resource_id: true } })

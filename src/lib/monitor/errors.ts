@@ -20,6 +20,8 @@ export type MonitorFetchErrorCode =
   | 'TLS_ERROR'
   | 'NETWORK'
   | 'BROWSER'
+  /** An admin marked the page "don't visit"; not a failure of the site. */
+  | 'SKIPPED_BY_ADMIN'
 
 export class MonitorFetchError extends Error {
   readonly code: MonitorFetchErrorCode

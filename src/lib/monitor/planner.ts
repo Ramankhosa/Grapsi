@@ -3,11 +3,12 @@ import { prisma } from '@/lib/prisma'
 import { EXECUTABLE_KINDS, executeTask } from './execute'
 import { PRIORITY, claimNextTask, enqueueTask, operationKeys } from './queue'
 import { defaultSafeFetch } from './safeFetch'
-import { cadenceDays, nextCheckAt, startOfIstDay } from './schedule'
+import { adaptiveCadenceDays, cadenceDays, nextCheckAt, startOfIstDay } from './schedule'
 import { ensureSiteForUrl } from './sites'
 import { utc } from './sqlTime'
 import { recoverAttempts } from './budget'
 import { reconcileHandoffs } from './handoff'
+import { reconcileParkedSites } from './skipRules'
 
 /**
  * Turning due watch points into queued checks.
@@ -48,13 +49,13 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
       OR: [{ next_check_at: null }, { next_check_at: { lte: now } }],
     },
     orderBy: { next_check_at: { sort: 'asc', nulls: 'first' } },
-    select: { id: true, site_id: true, frequency_minutes: true, priority: true },
+    select: { id: true, site_id: true, frequency_minutes: true, priority: true, quiet_streak: true },
     take: limit,
   })
   counts.due = due.length
 
   for (const source of due) {
-    const next = nextCheckAt(now, cadenceDays(source.frequency_minutes), source.id)
+    const next = nextCheckAt(now, adaptiveCadenceDays(cadenceDays(source.frequency_minutes), source.quiet_streak, source.priority), source.id)
     const enqueued = await prisma.$transaction(async (tx) => {
       const advanced = await tx.$queryRaw<Array<{ check_generation: number }>>`
         UPDATE "monitored_sources"
@@ -77,6 +78,9 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
     })
     if (enqueued) counts.enqueued += 1
   }
+
+  // Don't-visit marks that expired: give back the visits they paused.
+  await reconcileParkedSites(prisma, now)
 
   // Hourly URL-key refresh; one full re-read a day at 02:00 IST.
   const hourSlot = now.toISOString().slice(0, 13)

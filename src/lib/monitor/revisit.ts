@@ -8,3 +8,15 @@ export function revisitDays(input: { lifecycle: string; deadline?: string | null
   if (['UNKNOWN', 'ROLLING'].includes(input.lifecycle) && age > 90) return 30
   return 3
 }
+
+/**
+ * Space out revisits that keep finding the same page: x2, x4, x8 after one,
+ * two and three unchanged revisits in a row, capped at 90 days. A page already
+ * screened as not funding starts from 30 days. A deadline within two weeks
+ * (a one-day base) is never stretched, and any change resets the streak.
+ */
+export function adaptiveRevisitDays(baseDays: number, unchangedRevisits: number, notFunding: boolean): number {
+  if (baseDays <= 1) return baseDays
+  const start = notFunding ? Math.max(30, baseDays) : baseDays
+  return Math.min(90, start * 2 ** Math.min(Math.max(0, unchangedRevisits), 3))
+}

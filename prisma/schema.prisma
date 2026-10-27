@@ -9233,6 +9233,9 @@ model MonitoredSource {
   last_complete_check_at DateTime?
   discovery_score        Float?
   discovery_evidence     Json?
+  /// Consecutive checks that found nothing new. The planner stretches a quiet
+  /// listing's interval (never past MAX_STRETCH) and resets on any change.
+  quiet_streak           Int       @default(0)
 
   tenant       Tenant?               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   owner        User?                 @relation("MonitoredSourceOwner", fields: [owner_user_id], references: [id], onDelete: SetNull)
@@ -9353,6 +9356,9 @@ model MonitorSite {
   /// Per-site daily paid-work budget override, in micro-USD.
   daily_budget_micros        BigInt?
   storage_quota_bytes        BigInt?
+  /// A delegated operator's catalogue-import request (status, scope, budget,
+  /// funder links) awaiting super-admin approval. Nothing in it is applied yet.
+  pending_scope              Json?
   consecutive_fetch_failures Int       @default(0)
   last_fetch_error           String?
   last_fetch_error_at        DateTime?
@@ -9366,9 +9372,35 @@ model MonitorSite {
   opportunities MonitorOpportunity[]
   frontier      MonitorCrawlFrontier[]
   verified      MonitorVerifiedAnnouncement[]
+  skip_rules    MonitorSkipRule[]
 
   @@index([status])
   @@map("monitor_sites")
+}
+
+/// An admin's "don't visit" mark on one page or on everything under a folder.
+/// Every fetch path checks it: listing items, discovery, revisits, evidence
+/// reads. Removing the rule (or letting it expire) makes the pages eligible again.
+model MonitorSkipRule {
+  id                 String    @id @default(cuid())
+  site_id            String
+  /// Canonical URL of the page, or of the folder when match = FOLDER.
+  url                String
+  /// identifyUrl dedup key of `url`; the comparison basis.
+  dedup_key          String
+  /// PAGE (this URL only) | FOLDER (this URL and everything beneath its path)
+  match              String    @default("PAGE")
+  reason             String?
+  /// Null = until an admin removes it.
+  expires_at         DateTime?
+  created_by_user_id String?
+  created_at         DateTime  @default(now())
+
+  site MonitorSite @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@unique([site_id, dedup_key, match])
+  @@index([site_id])
+  @@map("monitor_skip_rules")
 }
 
 /// Evidence-backed site ↔ funder association. Suggestions stay suggestions
@@ -9493,6 +9525,11 @@ model MonitorResource {
   revisit_policy         String    @default("NONE")
   next_revisit_at        DateTime?
   revisit_generation     Int       @default(0)
+  /// The revisit policy a "don't visit" mark paused, restored when no active
+  /// mark covers the page any more. Null when no mark paused this page.
+  skip_paused_policy     String?
+  /// Revisits in a row that found the page unchanged; stretches the next one.
+  unchanged_revisits     Int       @default(0)
   first_seen_at          DateTime  @default(now())
   last_observed_at       DateTime  @default(now())
   created_at             DateTime  @default(now())
@@ -9827,7 +9864,7 @@ model MonitorCrawlFrontier {
   depth           Int       @default(0)
   score           Float     @default(0)
   discovered_from String?
-  /// PENDING | VISITED | SKIPPED_LIMIT | TRAP
+  /// PENDING | VISITED | FAILED | SKIPPED_LIMIT | SKIPPED_BY_ADMIN | TRAP | SUGGESTED_FEED | APPROVED_FEED
   state           String    @default("PENDING")
   next_visit_at   DateTime?
   visited_at      DateTime?

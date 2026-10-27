@@ -31,6 +31,20 @@ export function cadenceDays(frequencyMinutes: number): number {
   return Math.min(7, Math.max(1, Math.round(Math.max(1440, frequencyMinutes) / 1440)))
 }
 
+/**
+ * A listing that keeps showing nothing new is checked less often: twice the
+ * chosen interval after 4 quiet checks, three times after 10, never beyond a
+ * week. HIGH-priority watch points keep their interval, any change resets the
+ * streak, and MONITOR_ADAPTIVE_CADENCE=false turns this off.
+ */
+export const ADAPTIVE_CADENCE = { doubleAfter: 4, tripleAfter: 10, maxDays: 7 }
+
+export function adaptiveCadenceDays(baseDays: number, quietStreak: number, priority: string, enabled = process.env.MONITOR_ADAPTIVE_CADENCE !== 'false'): number {
+  if (!enabled || priority === 'HIGH') return baseDays
+  const stretch = quietStreak >= ADAPTIVE_CADENCE.tripleAfter ? 3 : quietStreak >= ADAPTIVE_CADENCE.doubleAfter ? 2 : 1
+  return Math.max(baseDays, Math.min(ADAPTIVE_CADENCE.maxDays, baseDays * stretch))
+}
+
 export function nextCheckAt(now: Date, everyDays: number, key: string): Date {
   return new Date(startOfIstDay(now).getTime() + Math.max(1, everyDays) * DAY_MS + jitterMs(key))
 }

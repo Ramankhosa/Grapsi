@@ -1,9 +1,15 @@
 'use client'
 import { useCallback, useEffect, useState } from 'react'
+
+import { classifyOpportunity } from '@/lib/monitor/outcomes'
+
+import { OUTCOME_STYLES } from './outcome'
+import SkipPageButton from './SkipPageButton'
 type AuthedFetch = (path: string, init?: RequestInit) => Promise<Response>
 interface Discovery {
   id: string; title: string | null; review_revision: number; evidence_manifest_version: number
   review_state: string; processing_state: string; lifecycle: string; triage_reason: string | null; triage_confidence: number | null
+  triage_verdict: string | null; relevance_outcome: string | null
   match_type: string | null; stale_evidence: boolean; site: { host: string }
   primary_resource: { title:string|null; canonical_url: string | null; last_validation_status: string | null } | null
   funding_call: { id: string; title:string; revision: number; catalog_status: string | null } | null
@@ -11,9 +17,16 @@ interface Discovery {
   local_analysis?: { decision: string; assessedOn: string; details: { candidates: Array<{title:string;titleQuote:string;invitationQuote:string|null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null}>; multipleCalls:boolean;needsMoreEvidence:boolean } } | null
   field_evidence: { quality?: {state:string;reasons:string[]}; warnings?:string[]; payload?: { fields?: Record<string, { value: unknown; status: string; evidence: Array<{ quote: string }> }> }; conflicts?: string[] } | null
 }
-export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish }: { authedFetch: AuthedFetch; canOperate: boolean; canPublish: boolean }) {
+const ALL_LANES: Array<[string, string]> = [['PENDING', 'To review'], ['WAITING_LOCAL', 'Waiting for laptop'], ['NEEDS_EVIDENCE', 'Needs evidence'], ['UPDATE_PROPOSED', 'Updates'], ['PUBLISHED', 'Published'], ['REJECTED', 'Rejected'], ['SNOOZED', 'Snoozed'], ['AUDIT', 'Screened out'], ['ALL', 'All']]
+/** Card accent by where the find stands: green = funding found and moving on. */
+/** The card's colour and label come from the same definition as the page tree. */
+function result(row: Discovery) {
+  const { outcome, detail } = classifyOpportunity(row, row.primary_resource)
+  return { style: OUTCOME_STYLES[outcome], detail }
+}
+export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish, lanes = ALL_LANES, intro }: { authedFetch: AuthedFetch; canOperate: boolean; canPublish: boolean; lanes?: Array<[string, string]>; intro?: string }) {
   const [rows, setRows] = useState<Discovery[]>([])
-  const [lane, setLane] = useState('PENDING')
+  const [lane, setLane] = useState(lanes[0][0])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -45,14 +58,14 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
     finally { setBusy(false) }
   }
   return <section className="space-y-4">
-    <p className="cb-hint">New announcements and source changes appear here. Review the quoted evidence before publishing. Drafts are never published automatically.</p>
-    <div className="flex flex-wrap gap-2">{[['PENDING', 'To review'], ['WAITING_LOCAL', 'Waiting for laptop'], ['NEEDS_EVIDENCE', 'Needs evidence'], ['UPDATE_PROPOSED', 'Updates'], ['PUBLISHED', 'Published'], ['REJECTED', 'Rejected'], ['SNOOZED', 'Snoozed'], ['AUDIT', 'Screened out'], ['ALL', 'All']].map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button></div>
+    {intro !== '' && <p className="cb-hint">{intro ?? 'New announcements and source changes appear here. Review the quoted evidence before publishing. Drafts are never published automatically.'}</p>}
+    <div className="flex flex-wrap gap-2">{lanes.map(([value, label]) => <button key={value} className={`cb-chip ${lane === value ? 'cb-chip-active' : ''}`} onClick={() => setLane(value)}>{label}</button>)}<button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()}>Refresh</button></div>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}{notice && <p role="status" className="text-sm text-green-700">{notice}</p>}
-    {!rows.length && <p className="cb-hint">No discoveries in this view yet. Check Health to see whether sources are being checked.</p>}
-    {rows.map(row => <article key={row.id} className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-      <div className="flex justify-between gap-3"><h3 className="font-semibold">{row.title ?? 'Announcement awaiting details'}</h3><span className="cb-badge">{row.lifecycle.toLowerCase().replace(/_/g, ' ')}</span></div>
+    {!rows.length && <p className="cb-hint">Nothing in this view yet. The Crawl stage shows whether websites are being checked.</p>}
+    {rows.map(row => { const shown = result(row); return <article key={row.id} className={`space-y-3 rounded-xl border border-l-4 border-gray-200 bg-white p-4 ${shown.style.row.split(' ')[0]}`}>
+      <div className="flex justify-between gap-3"><h3 className="font-semibold">{row.title ?? 'Announcement awaiting details'}</h3><span className="flex shrink-0 items-start gap-1.5">{row.lifecycle !== 'UNKNOWN' && <span className="cb-badge">{row.lifecycle.toLowerCase().replace(/_/g, ' ')}</span>}<span title={shown.detail} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${shown.style.chip}`}><span className={`h-1.5 w-1.5 rounded-full ${shown.style.dot}`} />{shown.style.label}</span></span></div>
       <p className="cb-hint">{row.site.host} · {row.processing_state.toLowerCase().replace(/_/g, ' ')}{row.triage_confidence !== null ? ` · ${Math.round(row.triage_confidence * 100)}% screening confidence` : ''}</p>
-      {row.primary_resource?.canonical_url && <a className="text-sm text-blue-700 underline" href={row.primary_resource.canonical_url} target="_blank" rel="noreferrer">Official source</a>}
+      {row.primary_resource?.canonical_url && <div className="flex flex-wrap items-center gap-3"><a className="text-sm text-blue-700 underline" href={row.primary_resource.canonical_url} target="_blank" rel="noreferrer">Official source</a>{canOperate && <SkipPageButton compact authedFetch={authedFetch} url={row.primary_resource.canonical_url} onChanged={message => setNotice(message)} />}</div>}
       <p className="text-sm">{row.triage_reason}</p>
       {row.primary_resource?.title&&<p className="text-sm">Page heading: {row.primary_resource.title}</p>}
       {row.funding_call&&<p className="text-sm">Catalogue title: {row.funding_call.title}</p>}
@@ -75,7 +88,7 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
         {canOperate && <><input aria-label="Reason for rejection" className="rounded border px-2 text-sm" placeholder="Reason for rejection" value={reasons[row.id] ?? ''} onChange={e => setReasons(old => ({ ...old, [row.id]: e.target.value }))} /><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act(row, 'reject')}>Reject</button></>}
       </div>}
       {canOperate && <div className="flex flex-wrap items-center gap-2 text-sm"><span>Screening feedback:</span><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act(row, 'label', 'RELEVANT')}>Funding opportunity</button><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act(row, 'label', 'IRRELEVANT')}>Not funding</button><button disabled={busy} className="cb-btn-secondary cb-btn-sm" onClick={() => void act(row, 'label', 'UNSURE')}>Unsure</button></div>}
-    </article>)}
+    </article> })}
     {cursor && <button className="cb-btn-secondary" onClick={() => void load(cursor)}>Load more</button>}
   </section>
 }
