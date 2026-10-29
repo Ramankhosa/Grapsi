@@ -6,7 +6,7 @@ import { fingerprint, meaningfulText } from './hashing'
 import { matchCatalog } from './matching'
 import { estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
 import { completeTaskInTx, deferTask, enqueueTask, withFence, type Db, type Lease } from './queue'
-import { RELEVANCE_VERSION, scoreRelevance } from './relevance'
+import { RELEVANCE_VERSION, scoreShortlist } from './relevance'
 import type { SafeFetch } from './safeFetch'
 import type { Renderer } from './browser'
 import { emitEvent } from './events'
@@ -93,7 +93,9 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     if (skipRuleFor(skipRules.get(r.site_id)!, r.canonical_url)) continue
     const observation = r.observations[0]
     const config = { include: observation?.source.keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), exclude: observation?.source.exclude_keywords.split(/[,\n]/).map(s => s.trim()).filter(Boolean), languages: r.site.language_profile }
-    let score = scoreRelevance(r.title ?? observation?.anchor_text ?? '', observation?.context_text ?? '', r.canonical_url ?? '', config)
+    // Seen only in sitemaps: no listing put it in context, so its address must look like funding.
+    const onlyInSitemaps = r.observations.length > 0 && r.observations.every(o => o.source.kind === 'SITEMAP')
+    let score = scoreShortlist(r.title ?? observation?.anchor_text ?? '', observation?.context_text ?? '', r.canonical_url ?? '', config, onlyInSitemaps)
     const prior = await prisma.monitorOpportunity.findFirst({ where: { primary_resource_id: r.id }, orderBy: { created_at: 'desc' } })
     const oldYear = prior?.title?.match(/\b20\d{2}\b/)?.[0]
     const newYear = r.title?.match(/\b20\d{2}\b/)?.[0]
@@ -121,7 +123,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       if(fetched.links.length)await withFence(lease,tx=>addFrontier(tx,r.site,fetched.links.map(l=>({url:l.url,title:l.title,from:r.canonical_url!}))))
       fullHash = fingerprint(fetched.segments.map(s => ({ page: s.page, text: normalQuote(s.text),complete:s.complete })))
       contentHash = fingerprint(meaningfulText(content.slice(0, 2000)))
-      score = scoreRelevance(r.title ?? '', `${observation?.context_text ?? ''}\n${content.slice(0, 4000)}`, r.canonical_url, config)
+      score = scoreShortlist(r.title ?? '', `${observation?.context_text ?? ''}\n${content.slice(0, 4000)}`, r.canonical_url, config, onlyInSitemaps)
     }
     const funderId=r.site.funders.length===1?r.site.funders[0].funder_id:null
     const current=await prisma.monitorResource.findUniqueOrThrow({where:{id:r.id},select:{final_url:true}})
@@ -173,7 +175,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       }
     }
     if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
-      const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx,early.type==='UPDATE_OF'?20:100);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
+      const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx,early.type==='UPDATE_OF'||score.outcome==='STRONG_POSITIVE'?20:100);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
       if(queued)waitingForLocal++;continue
     }
     const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title
