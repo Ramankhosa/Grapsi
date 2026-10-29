@@ -35,6 +35,8 @@ describe('shortlist rules', () => {
     expect(outcome('New call for proposals opens', 'https://www.ukri.org/news/new-call-opens/')).toBe('STRONG_POSITIVE')
     expect(outcome('Info session', 'https://www.nsf.gov/events/info-session', false, 'Learn how to apply for the fellowship')).toBe('STRONG_POSITIVE')
     expect(outcome('Open day', 'https://example.org/events/open-day', false, '', ['open day'])).toBe('STRONG_POSITIVE')
+    expect(outcome('Over 7 million awarded to help AI boost growth', 'https://www.ukri.org/news/over-7-million-awarded/')).toBe('UNCERTAIN')
+    expect(outcome('Nu kan du ansøge om støtte', 'https://novonordiskfonden.dk/nyheder/nu-kan-du-ansoege/')).toBe('UNCERTAIN')
     expect(outcome('Guidelines', 'https://example.org/media/2023-01-10/guidelines.pdf')).toBe('UNCERTAIN')
   })
 

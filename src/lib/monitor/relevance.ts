@@ -36,7 +36,7 @@ export function scoreRelevance(title: string, context: string, url: string, conf
  * a site was queued for the laptop; a sitemap alone gave nsf.gov 4,000 pages of
  * events and award-winner profiles.
  */
-const FUNDING_PATH = /fund|grant|fellow|scholar|bursar|stipend|call|opportunit|programme|program|scheme|award|apply|applica|proposal|solicitation|nofo|rfp|foerder|forder|förder|ausschreib|bourse|subvention|financ|finansi|beca|bidrag|anslag|utlys|anudan|yojana|yojna/i
+const FUNDING_PATH = /fund|grant|fellow|scholar|bursar|stipend|call|opportunit|programme|program|scheme|award|apply|applica|proposal|solicitation|nofo|rfp|foerder|forder|förder|ausschreib|bewerb|bourse|subvention|financ|finansi|beca|bidrag|anslag|utlys|ansøg|ansog|opslag|bevill|anudan|yojana|yojna/i
 const NOISE_SEGMENTS = new Set([
   'event', 'events', 'webinar', 'webinars', 'news', 'nyheder', 'nyheter', 'nieuws', 'aktuelles', 'aktuelt', 'actualites', 'actualités',
   'press', 'press-releases', 'pressreleases', 'pressemitteilungen', 'media', 'blog', 'blogs', 'podcast', 'podcasts', 'video', 'videos', 'gallery',
@@ -66,6 +66,9 @@ export function shortlistSkip(url: string, onlyInSitemaps: boolean, now = new Da
 export function scoreShortlist(title: string, context: string, url: string, config: RelevanceConfig, onlyInSitemaps: boolean, now = new Date()) {
   const score = scoreRelevance(title, context, url, config)
   if (score.outcome !== 'UNCERTAIN') return score
+  // A title with a funding-like stem in any watched language is always read,
+  // so "£7 million awarded" or a Danish "ansøg nu" news item is kept.
+  if (FUNDING_PATH.test(title)) return score
   const skip = shortlistSkip(url, onlyInSitemaps, now)
   return skip ? { ...score, outcome: 'STRONG_NEGATIVE' as RelevanceOutcome, reasons: [SHORTLIST_REASONS[skip]] } : score
 }
