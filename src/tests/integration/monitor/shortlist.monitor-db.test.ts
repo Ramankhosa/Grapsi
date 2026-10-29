@@ -85,3 +85,27 @@ describe('call score v1 (shadow)', () => {
     expect((await db.monitorResource.findUniqueOrThrow({ where: { id: resource.id } })).call_scored_at).toEqual(at)
   })
 })
+
+describe('back to screening after the laptop', () => {
+  it('re-queues a page parked for the laptop once the laptop has judged it, and only once', async () => {
+    const { resource, lease } = await page('PAGE', 'https://www.nsf.invalid/funding/graduate-research-fellowship', 'Graduate Research Fellowship')
+    const { fetch } = spyFetch()
+    await triageCandidates(lease, { fetch, paid: vi.fn() })
+    expect((await db.monitorOpportunity.findFirstOrThrow({ where: { primary_resource_id: resource.id } })).triage_reason).toMatch(/^Waiting for laptop/)
+    const { resumeAfterLaptop } = await import('@/lib/monitor/planner')
+    expect(await resumeAfterLaptop()).toBe(0)
+    const P = require('../../../../tools/local-worker/policy.cjs')
+    const job = await db.monitorLocalAnalysisJob.findFirstOrThrow({ where: { resource_id: resource.id } })
+    const worker = await db.monitorLocalWorker.create({ data: { id: crypto.randomUUID(), display_name: 'fixture', app_version: P.APP_VERSION, model_sha256: P.MODEL.sha256 } })
+    await db.monitorLocalAnalysisResult.create({ data: { job_id: job.id, resource_id: resource.id, version_id: job.version_id, worker_id: worker.id, input_hash: job.input_hash, policy_hash: P.POLICY_HASH, model_sha256: P.MODEL.sha256, decision: 'CALL', elapsed_ms: 1, details: { schemaVersion: 2, candidates: [], multipleCalls: false, needsMoreEvidence: false, warnings: [] } } })
+    // The page's own screening task is still deferring: it will pick the result up itself.
+    expect(await resumeAfterLaptop()).toBe(0)
+    // That task ended another way: the page goes back to screening, once.
+    await db.monitorTask.updateMany({ where: { kind: 'TRIAGE' }, data: { status: 'DEAD' } })
+    expect(await resumeAfterLaptop()).toBe(1)
+    expect(await db.monitorTask.count({ where: { kind: 'TRIAGE', status: 'QUEUED' } })).toBe(1)
+    await db.monitorTask.updateMany({ where: { kind: 'TRIAGE', status: 'QUEUED' }, data: { status: 'DONE' } })
+    await resumeAfterLaptop()
+    expect(await db.monitorTask.count({ where: { kind: 'TRIAGE', status: 'QUEUED' } })).toBe(0)
+  })
+})

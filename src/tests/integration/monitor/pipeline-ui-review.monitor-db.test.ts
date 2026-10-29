@@ -10,6 +10,7 @@ import { queueCandidates, triageCandidates, UNCHANGED_NEGATIVE_PREFIX } from '@/
 import { MonitorFetchError } from '@/lib/monitor/errors'
 import { planDueChecks } from '@/lib/monitor/planner'
 import { claimNextTask } from '@/lib/monitor/queue'
+import { startOfIstDay } from '@/lib/monitor/schedule'
 import type { SafeFetch } from '@/lib/monitor/safeFetch'
 import { reconcileParkedSites, reconcileSkipRules, skipRuleKey } from '@/lib/monitor/skipRules'
 import { runSourceMonitorWorker } from '@/lib/monitor/worker'
@@ -194,7 +195,10 @@ describe('scheduled checks never fetch a marked page', () => {
     const now = new Date()
     await planDueChecks(now)
     const next = (await db.monitoredSource.findUniqueOrThrow({ where: { id: watch.id } })).next_check_at!
-    expect((next.getTime() - now.getTime()) / 86400_000).toBeGreaterThan(2.5)
+    // Checks land on IST day boundaries plus a jitter, so measure from the start of
+    // today (IST): a stretched interval is 3 days, a normal one 1. Measuring from
+    // `now` failed every IST evening.
+    expect((next.getTime() - startOfIstDay(now).getTime()) / 86400_000).toBeGreaterThan(2.5)
   })
 })
 

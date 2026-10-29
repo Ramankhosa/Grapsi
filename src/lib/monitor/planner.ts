@@ -9,6 +9,9 @@ import { utc } from './sqlTime'
 import { recoverAttempts } from './budget'
 import { reconcileHandoffs } from './handoff'
 import { reconcileParkedSites } from './skipRules'
+import { queueCandidates } from './candidates'
+
+const LOCAL_POLICY_HASH = (require('../../../tools/local-worker/policy.cjs') as { POLICY_HASH: string }).POLICY_HASH
 
 /**
  * Turning due watch points into queued checks.
@@ -96,6 +99,7 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
   if (process.env.MONITOR_PIPELINE_ENABLED === 'true') {
     await recoverAttempts(now)
     await reconcileHandoffs()
+    await resumeAfterLaptop()
     await prisma.monitorOpportunity.updateMany({ where: { review_state: 'SNOOZED', snoozed_until: { lte: now } }, data: { review_state: 'PENDING', snoozed_until: null, review_revision: { increment: 1 } } })
     const siteCursor = (await prisma.monitorSyncCursor.findUnique({ where: { name: 'discovery-planner' } }))?.cursor as { after?: string } | undefined
     const sites = await prisma.monitorSite.findMany({ where: { status: 'ACTIVE', ...(siteCursor?.after ? { id: { gt: siteCursor.after } } : {}) }, take: 500, orderBy: { id: 'asc' } })
@@ -124,6 +128,39 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
 }
 
 /** "Check now": a new occurrence of the source, ahead of the scheduled ones. */
+/**
+ * Pages screening parked "waiting for laptop" whose current version the laptop
+ * has since judged go back to screening when no screening task still holds
+ * them. A waiting task defers itself until the laptop answers, but tasks that
+ * ended another way (read errors, long holds) left pages behind: on 29 Oct 2026
+ * 462 judged pages, the oldest from 25 Oct, still sat waiting. Batches are
+ * keyed by the laptop results they carry, so the same results are never re-queued.
+ */
+export async function resumeAfterLaptop(limit = 1000): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ site_id: string; resource_id: string; job_id: string }>>`
+    SELECT r.site_id, r.id AS resource_id, a.job_id
+    FROM monitor_opportunities o
+    JOIN monitor_resources r ON r.id = o.primary_resource_id
+    JOIN monitor_sites s ON s.id = r.site_id AND s.status = 'ACTIVE'
+    JOIN LATERAL (SELECT job_id FROM monitor_local_analysis_results a
+      WHERE a.resource_id = r.id AND a.version_id = r.current_version_id AND a.policy_hash = ${LOCAL_POLICY_HASH}
+      ORDER BY a.created_at DESC LIMIT 1) a ON true
+    WHERE o.triage_reason LIKE 'Waiting for laptop%'
+      -- A screening task still holding the page will pick the result up itself.
+      AND NOT EXISTS (SELECT 1 FROM monitor_tasks t WHERE t.kind = 'TRIAGE'
+        AND t.status IN ('QUEUED', 'RUNNING', 'DEFERRED_BUDGET', 'PAUSED_PROVIDER') AND t.payload->'resourceIds' ? r.id)
+    LIMIT ${limit}`
+  const bySite = new Map<string, typeof rows>()
+  for (const row of rows) bySite.set(row.site_id, [...(bySite.get(row.site_id) ?? []), row])
+  for (const [siteId, group] of bySite) {
+    for (let i = 0; i < group.length; i += 25) {
+      const batch = group.slice(i, i + 25)
+      await queueCandidates(prisma, siteId, batch.map(r => r.resource_id), false, `laptop-done:${batch.map(r => r.job_id).sort().join(',')}`)
+    }
+  }
+  return rows.length
+}
+
 export async function requestCheckNow(sourceId: string): Promise<{ taskId: string | null; generation: number }> {
   return prisma.$transaction(async (tx) => {
     const source = await tx.monitoredSource.findUnique({ where: { id: sourceId }, select: { id: true, url: true, site_id: true } })

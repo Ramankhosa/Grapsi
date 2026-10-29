@@ -6,6 +6,7 @@
  *
  *   node node_modules/tsx/dist/cli.cjs scripts/monitor-call-score.ts            # report only
  *   node node_modules/tsx/dist/cli.cjs scripts/monitor-call-score.ts --apply    # score unscored pages, then report
+ *   node node_modules/tsx/dist/cli.cjs scripts/monitor-call-score.ts --prioritise  # unjudged Likely pages to the laptop first
  */
 import dotenv from 'dotenv'
 dotenv.config()
@@ -51,6 +52,28 @@ async function main() {
         }
       }
       console.log(`Scored ${done} pages with ${CALL_SCORE_VERSION}.`)
+    }
+
+    if (process.argv.includes('--prioritise')) {
+      // Likely calls the laptop has not judged: to the front of its queue, or into
+      // screening when they were never screened (screening then queues the laptop).
+      const { queueLocalAnalysis } = await import('../src/lib/monitor/localAnalysis')
+      const { queueCandidates } = await import('../src/lib/monitor/candidates')
+      const likely = await prisma.$queryRaw<Array<{ id: string; site_id: string; job: string | null; opp: string | null }>>`
+        SELECT r.id, r.site_id, j.state AS job, o.processing_state AS opp
+        FROM monitor_resources r JOIN monitor_sites s ON s.id = r.site_id AND s.status = 'ACTIVE'
+        LEFT JOIN LATERAL (SELECT state FROM monitor_local_analysis_jobs j WHERE j.version_id = r.current_version_id ORDER BY created_at DESC LIMIT 1) j ON true
+        LEFT JOIN LATERAL (SELECT processing_state, triage_verdict FROM monitor_opportunities o WHERE o.primary_resource_id = r.id ORDER BY updated_at DESC LIMIT 1) o ON true
+        WHERE r.call_band = 'LIKELY' AND NOT EXISTS (SELECT 1 FROM monitor_local_analysis_results a WHERE a.resource_id = r.id)
+          AND coalesce(o.triage_verdict, '') NOT IN ('NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING', 'NOT_FUNDING')`
+      let front = 0, screened = 0
+      for (const r of likely) if (r.job === 'QUEUED' || (!r.job && r.opp === 'SCORED')) { if (await queueLocalAnalysis(r.id, prisma, 20)) front++ }
+      const unscreened = likely.filter(r => !r.job && (r.opp === null || r.opp === 'OBSERVED'))
+      const bySite = new Map<string, string[]>()
+      for (const r of unscreened) bySite.set(r.site_id, [...(bySite.get(r.site_id) ?? []), r.id])
+      for (const [siteId, ids] of bySite) await queueCandidates(prisma, siteId, ids, false, `call-score-prioritise:${new Date().toISOString().slice(0, 10)}`)
+      screened = unscreened.length
+      console.log(`Likely calls not yet judged: ${likely.length}; moved to the front of the laptop queue ${front}; sent to screening ${screened}; left as they are ${likely.length - front - screened} (job replaced or awaiting evidence).`)
     }
 
     const rows = await prisma.$queryRaw<Array<{ host: string; score: number; band: string; laptop: string | null; paid: string | null; review: string | null }>>`
