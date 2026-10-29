@@ -10,6 +10,7 @@ import { normalizeDraftInput } from '../fundingIntake/utils';
 import type { EmbeddingServiceHealth } from './embeddingService';
 import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { assertReviewWrite, MonitorConflictError, type ExpectedReview } from '../monitor/writeGuard';
+import { searchCatalogIds, type CatalogOrigin, type CatalogSearch } from '../funding/catalogSearch';
 
 type CatalogMetadata = Record<string, any>;
 
@@ -28,6 +29,10 @@ export interface FundingCatalogSummary {
   published_at: string | null;
   published_by: string | null;
   embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
+  /** Set by searchFundingCalls: where the call came from and who entered it. */
+  origin?: CatalogOrigin;
+  auto_published?: boolean;
+  entered_by?: string | null;
 }
 
 export interface PublishReadiness {
@@ -452,6 +457,46 @@ async function updateStoredEmbedding(
   `;
 }
 
+
+const CATALOG_SUMMARY_SELECT = {
+  id: true,
+  agency_name: true,
+  scheme_title: true,
+  catalog_status: true,
+  is_active: true,
+  source_url: true,
+  intake_job_id: true,
+  close_date: true,
+  is_rolling: true,
+  createdAt: true,
+  updatedAt: true,
+  metadata: true,
+} satisfies Prisma.FundingCallSelect;
+
+async function summarizeCatalogCalls(calls: Array<Prisma.FundingCallGetPayload<{ select: typeof CATALOG_SUMMARY_SELECT }>>): Promise<FundingCatalogSummary[]> {
+  const embeddingMap = await getEmbeddingPresence(calls.map((call) => call.id));
+
+  return calls.map((call) => {
+    const metadata = asMetadata(call.metadata);
+    return {
+      id: call.id,
+      agency_name: call.agency_name || '',
+      scheme_title: call.scheme_title || '',
+      status: call.catalog_status || 'DRAFT',
+      is_active: Boolean(call.is_active),
+      source_url: call.source_url,
+      intake_job_id: call.intake_job_id,
+      close_date: call.close_date,
+      is_rolling: Boolean(call.is_rolling),
+      created_at: call.createdAt,
+      updated_at: call.updatedAt,
+      published_at: typeof metadata.published_at === 'string' ? metadata.published_at : null,
+      published_by: typeof metadata.published_by === 'string' ? metadata.published_by : null,
+      embedding_status: getEmbeddingStatus(call, embeddingMap.get(call.id) || false),
+    };
+  });
+}
+
 export class FundingCatalogService {
   getEmbeddingServiceHealth(): EmbeddingServiceHealth {
     return getFundingCallEmbeddingHealth();
@@ -540,43 +585,27 @@ export class FundingCatalogService {
       orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: Math.min(50, Math.max(1, options.pageSize || 50)),
       skip: (Math.max(1, options.page || 1) - 1) * Math.min(50, Math.max(1, options.pageSize || 50)),
-      select: {
-        id: true,
-        agency_name: true,
-        scheme_title: true,
-        catalog_status: true,
-        is_active: true,
-        source_url: true,
-        intake_job_id: true,
-        close_date: true,
-        is_rolling: true,
-        createdAt: true,
-        updatedAt: true,
-        metadata: true,
-      },
+      select: CATALOG_SUMMARY_SELECT,
     });
 
-    const embeddingMap = await getEmbeddingPresence(calls.map((call) => call.id));
+    return summarizeCatalogCalls(calls);
+  }
 
-    return calls.map((call) => {
-      const metadata = asMetadata(call.metadata);
-      return {
-        id: call.id,
-        agency_name: call.agency_name || '',
-        scheme_title: call.scheme_title || '',
-        status: call.catalog_status || 'DRAFT',
-        is_active: Boolean(call.is_active),
-        source_url: call.source_url,
-        intake_job_id: call.intake_job_id,
-        close_date: call.close_date,
-        is_rolling: Boolean(call.is_rolling),
-        created_at: call.createdAt,
-        updated_at: call.updatedAt,
-        published_at: typeof metadata.published_at === 'string' ? metadata.published_at : null,
-        published_by: typeof metadata.published_by === 'string' ? metadata.published_by : null,
-        embedding_status: getEmbeddingStatus(call, embeddingMap.get(call.id) || false),
-      };
-    });
+  /** Filtered admin catalogue page with each call's origin (see lib/funding/catalogSearch). */
+  async searchFundingCalls(search: CatalogSearch): Promise<{ calls: FundingCatalogSummary[]; total: number }> {
+    const { rows, total } = await searchCatalogIds(search);
+    const found = await prisma.fundingCall.findMany({ where: { id: { in: rows.map((r) => r.id) } }, select: CATALOG_SUMMARY_SELECT });
+    const byId = new Map(found.map((call) => [call.id, call]));
+    const ordered = rows.map((r) => byId.get(r.id)).filter((call): call is NonNullable<typeof call> => Boolean(call));
+    const origins = new Map(rows.map((r) => [r.id, r]));
+    const summaries = await summarizeCatalogCalls(ordered);
+    return {
+      total,
+      calls: summaries.map((call) => {
+        const row = origins.get(call.id)!;
+        return { ...call, origin: row.origin, auto_published: Boolean(row.auto_published), entered_by: row.entered_by };
+      }),
+    };
   }
 
   async backfillPublishedEmbeddings(limit = 25): Promise<FundingEmbeddingBackfillResult> {
