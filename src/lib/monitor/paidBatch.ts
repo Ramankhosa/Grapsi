@@ -5,6 +5,7 @@ import type { Prisma } from '@/lib/prisma-generated'
 import { settleAttempt, type PriceSnapshot } from './budget'
 import { validateBatch } from './candidates'
 import { ROUTING_POLICY_VERSION, actualCost, jsonResponseText } from './paidCall'
+import { PRIORITY } from './queue'
 
 /**
  * Provider batch mode for paid Source Watch work (29 Oct 2026). runPaidStage
@@ -102,7 +103,11 @@ async function fileTriageAnswer(text: string, request: BatchRequest, model: stri
 async function wake(taskIds: Array<string | null>) {
   const ids = [...new Set(taskIds.filter((id): id is string => Boolean(id)))]
   if (!ids.length) return
-  await prisma.monitorTask.updateMany({ where: { id: { in: ids }, status: { in: ['QUEUED', 'DEFERRED_BUDGET', 'PAUSED_PROVIDER'] } }, data: { available_at: new Date() } })
+  const where = { id: { in: ids }, status: { in: ['QUEUED' as const, 'DEFERRED_BUDGET' as const, 'PAUSED_PROVIDER' as const] } }
+  // The task has already waited its turn once; behind a long queue it would wait hours more
+  // for an answer that is paid for and cached, so it goes near the front.
+  await prisma.monitorTask.updateMany({ where: { ...where, priority: { gt: PRIORITY.CHECK_NOW } }, data: { priority: PRIORITY.CHECK_NOW } })
+  await prisma.monitorTask.updateMany({ where, data: { available_at: new Date() } })
 }
 
 async function release(attemptIds: string[], message: string) {

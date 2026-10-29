@@ -7,7 +7,7 @@ import { llmGateway } from '@/lib/metering/gateway'
 import { tokenMicros } from '@/lib/monitor/budget'
 import { BatchPendingError, runPaidStage } from '@/lib/monitor/paidCall'
 import { runPaidBatches, type BatchClient, type BatchJobView } from '@/lib/monitor/paidBatch'
-import { enqueueTask } from '@/lib/monitor/queue'
+import { enqueueTask, PRIORITY } from '@/lib/monitor/queue'
 import { resetMonitorTables, testPrisma as db } from '../helpers/monitorTestPrisma'
 
 /** Provider batch mode (29 Oct 2026): screening requests wait for a half-price Gemini batch. */
@@ -65,7 +65,9 @@ describe('paid batch mode', () => {
     expect(settled.actual_cost_micros).toBe(tokenMicros(1000, 5) + tokenMicros(100, 10))
     const cache = await db.monitorStageCache.findMany({ where: { stage: 'TRIAGE' }, orderBy: { cache_key: 'asc' } })
     expect(cache.map(c => (c.result as { verdict: string }).verdict)).toEqual(['NEW_OPPORTUNITY', 'NEEDS_EVIDENCE'])  // partial evidence cannot settle "not funding"
-    expect((await db.monitorTask.findUniqueOrThrow({ where: { id: task.id } })).available_at.getTime()).toBeLessThanOrEqual(Date.now())
+    const woken = await db.monitorTask.findUniqueOrThrow({ where: { id: task.id } })
+    expect(woken.available_at.getTime()).toBeLessThanOrEqual(Date.now())
+    expect(woken.priority).toBe(PRIORITY.CHECK_NOW)  // the paid-for answer is not left behind the queue
 
     const result = await runPaidStage(input('batch-a'))
     expect(result.text).toBe(answer)
