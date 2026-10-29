@@ -260,10 +260,15 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
   }
   // Compact packing; caches remain per item, independent of batch composition.
   pending.sort((a,b)=>Number((a.prompt.localSuggestion as {decision?:string}|null)?.decision==='GENERAL')-Number((b.prompt.localSuggestion as {decision?:string}|null)?.decision==='GENERAL'))
+  // A batch the model answered only in part keeps its answers; the skipped pages
+  // are asked again at once in batches half the size (29 Oct 2026: about 1 in 10
+  // screening calls skipped some of 25 pages, and the whole call used to fail).
+  let batchCap = 25
+  const reasked = new Set<string>()
   while (pending.length) {
     const batch: typeof pending = []
     let total = estimateTokens(SYSTEM)
-    while (pending.length && batch.length < 25) {
+    while (pending.length && batch.length < batchCap) {
       const size = estimateTokens(JSON.stringify(pending[0].prompt))
       if (batch.length && total + size > 6000) break
       batch.push(pending.shift()!); total += size
@@ -280,7 +285,14 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       await rememberNegative(lease, b.negativeKey, decision, b.cacheKey, result.model)
       await applyDecision(lease, b.opportunityId, b.resource.id, decision, result.model, b.cacheKey, b.fullHash)
     }
-    if (decisions.size !== batch.length) { await recordInvalidOutput(result.attemptId, 'Triage omitted or duplicated item ids'); throw new Error('Triage omitted or duplicated item ids; only unresolved items will be retried') }
+    const skipped = batch.filter(b => !decisions.has(b.resource.id))
+    if (skipped.length) {
+      // Nothing usable, or a page skipped twice: the call failed; the task retries later.
+      if (!decisions.size || skipped.some(b => reasked.has(b.cacheKey))) { await recordInvalidOutput(result.attemptId, 'Triage omitted or duplicated item ids'); throw new Error('Triage omitted or duplicated item ids; only unresolved items will be retried') }
+      for (const b of skipped) reasked.add(b.cacheKey)
+      batchCap = Math.max(1, Math.ceil(batch.length / 2))
+      pending.unshift(...skipped)
+    }
   }
   // Pages waiting for the laptop stay parked ("Waiting for laptop") and the task
   // finishes; resumeAfterLaptop (every 15 minutes) returns each page once the

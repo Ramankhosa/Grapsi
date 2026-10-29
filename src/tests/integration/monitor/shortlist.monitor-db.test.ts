@@ -107,3 +107,50 @@ describe('back to screening after the laptop', () => {
     expect(await db.monitorTask.count({ where: { kind: 'TRIAGE', status: 'QUEUED' } })).toBe(0)
   })
 })
+
+describe('partly answered screening batches', () => {
+  it('keeps the answers and re-asks only the skipped page, in a smaller batch', async () => {
+    delete process.env.MONITOR_LOCAL_SCREENING_REQUIRED
+    const site = await db.monitorSite.create({ data: { host: 'batch.invalid', status: 'ACTIVE', min_delay_ms: 0 } })
+    const ids: string[] = []
+    for (const n of [1, 2, 3]) {
+      const url = `https://batch.invalid/funding/grant-${n}`
+      ids.push((await db.monitorResource.create({ data: { site_id: site.id, dedup_key: url, canonical_url: url, title: `Research grant ${n}` } })).id)
+    }
+    await queueCandidates(db, site.id, ids, false, 'partial-batch')
+    const lease = (await claimNextTask({ owner: 'shortlist', kinds: ['TRIAGE'] }))!
+    const { fetch } = spyFetch()
+    const answer = (only: string[]) => ({ text: JSON.stringify({ items: only.map(id => ({ id, verdict: 'NEW_OPPORTUNITY', confidence: 0.95, reason: 'Open call', type: 'grant' })) }), model: 'fixture', actualMicros: 1n, attemptId: 'fixture', attemptNo: 1 })
+    const sizes: number[] = []
+    const paid = vi.fn(async (input: { prompt: string }) => {
+      const asked = (JSON.parse(input.prompt) as { items: Array<{ id: string }> }).items.map(i => i.id)
+      sizes.push(asked.length)
+      return answer(sizes.length === 1 ? asked.slice(0, asked.length - 1) : asked)
+    })
+    await triageCandidates(lease, { fetch, paid: paid as never })
+    expect(sizes).toEqual([3, 1])
+    const verdicts = await db.monitorOpportunity.findMany({ where: { primary_resource_id: { in: ids } }, select: { triage_verdict: true } })
+    expect(verdicts.map(v => v.triage_verdict)).toEqual(['NEW_OPPORTUNITY', 'NEW_OPPORTUNITY', 'NEW_OPPORTUNITY'])
+    expect((await db.monitorTask.findUniqueOrThrow({ where: { id: lease.taskId } })).status).toBe('DONE')
+  })
+
+  it('still fails the call when a re-asked page is skipped again', async () => {
+    delete process.env.MONITOR_LOCAL_SCREENING_REQUIRED
+    const site = await db.monitorSite.create({ data: { host: 'batch2.invalid', status: 'ACTIVE', min_delay_ms: 0 } })
+    const ids: string[] = []
+    for (const n of [1, 2]) {
+      const url = `https://batch2.invalid/funding/grant-${n}`
+      ids.push((await db.monitorResource.create({ data: { site_id: site.id, dedup_key: url, canonical_url: url, title: `Research grant ${n}` } })).id)
+    }
+    await queueCandidates(db, site.id, ids, false, 'partial-batch-2')
+    const lease = (await claimNextTask({ owner: 'shortlist', kinds: ['TRIAGE'] }))!
+    const { fetch } = spyFetch()
+    const paid = vi.fn(async (input: { prompt: string }) => {
+      const asked = (JSON.parse(input.prompt) as { items: Array<{ id: string }> }).items.map(i => i.id)
+      const keep = asked.filter(id => id !== ids[1])
+      return { text: JSON.stringify({ items: keep.map(id => ({ id, verdict: 'NEW_OPPORTUNITY', confidence: 0.95, reason: 'Open call', type: 'grant' })) }), model: 'fixture', actualMicros: 1n, attemptId: 'fixture', attemptNo: 1 }
+    })
+    await expect(triageCandidates(lease, { fetch, paid: paid as never })).rejects.toThrow(/omitted or duplicated/)
+    expect(paid).toHaveBeenCalledTimes(2)
+  })
+})
