@@ -13,6 +13,7 @@ using Microsoft.Win32;
 namespace Grapsi.LocalWorker {
   internal sealed class WorkerForm : Form {
     readonly Label state=new Label(),detail=new Label(),counts=new Label(),mode=new Label();
+    readonly LinkLabel page=new LinkLabel();
     readonly Button start=new Button(),pause=new Button(),setup=new Button(),logs=new Button();
     readonly CheckBox startup=new CheckBox();
     readonly ListView recent=new ListView();
@@ -23,14 +24,17 @@ namespace Grapsi.LocalWorker {
       autoStart=automatic;Text="Grapsi Local Worker";Icon=SystemIcons.Application;
       Size=new Size(800,590);MinimumSize=new Size(700,500);StartPosition=FormStartPosition.CenterScreen;
       Font=new Font("Segoe UI",10);BackColor=Color.FromArgb(246,248,251);AutoScaleMode=AutoScaleMode.Dpi;
-      var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=8};
+      var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=9};
       layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));
-      layout.RowStyles.Add(new RowStyle(SizeType.Absolute,62));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
       layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));
       layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
       var title=new Label {Text="Grapsi Local Worker",Font=new Font("Segoe UI",19,FontStyle.Bold),Dock=DockStyle.Fill,ForeColor=Color.FromArgb(22,37,61)};
       state.Text="Ready";state.Font=new Font("Segoe UI",15,FontStyle.Bold);state.ForeColor=Color.FromArgb(25,107,83);state.Dock=DockStyle.Fill;
       detail.Text="Start to connect to production and analyse queued funding pages.";detail.Dock=DockStyle.Fill;detail.ForeColor=Color.FromArgb(64,77,97);
+      // The page being analysed, so it can be opened in the browser.
+      page.Dock=DockStyle.Fill;page.AutoEllipsis=true;page.LinkColor=Color.FromArgb(29,78,216);page.Visible=false;
+      page.LinkClicked+=(s,e)=>OpenPage(page.Tag as string);
       counts.Text="Production queue: —     Results sent this session: 0";counts.Dock=DockStyle.Fill;
       var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
       start.Text="Start";start.Width=115;start.Height=36;start.BackColor=Color.FromArgb(22,100,79);start.ForeColor=Color.White;start.FlatStyle=FlatStyle.Flat;
@@ -40,11 +44,17 @@ namespace Grapsi.LocalWorker {
       actions.Controls.AddRange(new Control[]{start,pause,setup,logs});
       mode.Text="Review mode · Results are saved in production for review.";mode.ForeColor=Color.FromArgb(93,105,124);mode.Dock=DockStyle.Fill;
       recent.View=View.Details;recent.FullRowSelect=true;recent.GridLines=false;recent.Dock=DockStyle.Fill;recent.BackColor=Color.White;recent.BorderStyle=BorderStyle.FixedSingle;
-      recent.Columns.Add("Recent page",460);recent.Columns.Add("Result",110);recent.Columns.Add("Time",80);
+      recent.Columns.Add("Recent page",300);recent.Columns.Add("Result",90);recent.Columns.Add("Time",60);recent.Columns.Add("Page address",280);
+      // Double-click a result, or right-click it, to open or copy its page address.
+      var rowMenu=new ContextMenuStrip();
+      rowMenu.Items.Add("Open page",null,(s,e)=>{if(recent.SelectedItems.Count>0)OpenPage(recent.SelectedItems[0].Tag as string);});
+      rowMenu.Items.Add("Copy page address",null,(s,e)=>{var url=recent.SelectedItems.Count>0?recent.SelectedItems[0].Tag as string:null;if(!String.IsNullOrEmpty(url))Clipboard.SetText(url);});
+      recent.ContextMenuStrip=rowMenu;
+      recent.DoubleClick+=(s,e)=>{if(recent.SelectedItems.Count>0)OpenPage(recent.SelectedItems[0].Tag as string);};
       startup.Text="Start when I sign in to Windows";startup.AutoSize=true;startup.Dock=DockStyle.Fill;
       using(var key=Registry.CurrentUser.OpenSubKey(RunKey))startup.Checked=key!=null&&key.GetValue("GrapsiLocalWorker")!=null;
-      layout.Controls.Add(title,0,0);layout.Controls.Add(state,0,1);layout.Controls.Add(detail,0,2);layout.Controls.Add(counts,0,3);
-      layout.Controls.Add(actions,0,4);layout.Controls.Add(mode,0,5);layout.Controls.Add(recent,0,6);layout.Controls.Add(startup,0,7);Controls.Add(layout);
+      layout.Controls.Add(title,0,0);layout.Controls.Add(state,0,1);layout.Controls.Add(detail,0,2);layout.Controls.Add(page,0,3);layout.Controls.Add(counts,0,4);
+      layout.Controls.Add(actions,0,5);layout.Controls.Add(mode,0,6);layout.Controls.Add(recent,0,7);layout.Controls.Add(startup,0,8);Controls.Add(layout);
       start.Click+=async(s,e)=>await Begin();pause.Click+=async(s,e)=>await Halt();
       logs.Click+=(s,e)=>Process.Start(new ProcessStartInfo("notepad.exe",Connection.Quote(Files.LogPath)){UseShellExecute=true});
       setup.Click+=async(s,e)=>await Setup();
@@ -61,10 +71,14 @@ namespace Grapsi.LocalWorker {
     public void UpdateState(string value,string explanation) {Ui(()=>{state.Text=value;detail.Text=explanation;tray.Text=("Grapsi: "+value).Substring(0,Math.Min(63,("Grapsi: "+value).Length));});}
     void UpdateStats(Dictionary<string,object> value) {Ui(()=>{int queued=0,failed=0;foreach(var row in Json.List(value,"jobs")){var item=row as Dictionary<string,object>;if(Json.Text(item,"state")=="QUEUED")queued+=Json.Number(item,"count");if(Json.Text(item,"state")=="FAILED")failed+=Json.Number(item,"count");}counts.Text="Production queue: "+queued+"     Sent this session: "+sent+(failed>0?"     Needs attention: "+failed:"");});}
     int sent;
-    void AddResult(string title,string decision,int milliseconds) {Ui(()=>{sent++;var row=new ListViewItem(title);row.SubItems.Add(decision);row.SubItems.Add((milliseconds/1000.0).ToString("0.0")+" s");recent.Items.Insert(0,row);while(recent.Items.Count>100)recent.Items.RemoveAt(recent.Items.Count-1);});}
+    void AddResult(string title,string decision,int milliseconds,string url) {Ui(()=>{sent++;var row=new ListViewItem(title){Tag=WebAddress(url)};row.SubItems.Add(decision);row.SubItems.Add((milliseconds/1000.0).ToString("0.0")+" s");row.SubItems.Add(WebAddress(url)??"");recent.Items.Insert(0,row);while(recent.Items.Count>100)recent.Items.RemoveAt(recent.Items.Count-1);});}
+    void ShowPage(string url) {Ui(()=>{var address=WebAddress(url);page.Tag=address;page.Text=address??"";page.Visible=address!=null;});}
+    // Only an http(s) address is shown or opened; anything else in a job is ignored.
+    static string WebAddress(string url) {Uri uri;return !String.IsNullOrWhiteSpace(url)&&Uri.TryCreate(url,UriKind.Absolute,out uri)&&(uri.Scheme==Uri.UriSchemeHttp||uri.Scheme==Uri.UriSchemeHttps)?uri.AbsoluteUri:null;}
+    void OpenPage(string url) {var address=WebAddress(url);if(address==null)return;try{Process.Start(new ProcessStartInfo(address){UseShellExecute=true});}catch(Exception error){MessageBox.Show(this,"The browser could not be opened: "+error.Message,"Grapsi");}}
     async Task Begin() {
       if(running!=null&&!running.IsCompleted)return;stop=new CancellationTokenSource();start.Enabled=false;pause.Enabled=true;
-      var engine=new Engine(UpdateState,UpdateStats,AddResult);
+      var engine=new Engine(UpdateState,UpdateStats,AddResult){CurrentPage=ShowPage};
       running=Task.Run(async()=>{try{await engine.Run(0,false,stop.Token);}catch(OperationCanceledException){}catch(Exception error){Files.Log("Worker stopped: "+error.GetType().Name);UpdateState("Needs attention",error.Message);}finally{Ui(()=>{start.Enabled=true;pause.Enabled=false;});}});
       await Task.Yield();
     }
@@ -85,7 +99,8 @@ namespace Grapsi.LocalWorker {
       ShowInTaskbar=false;Location=new Point(-3000,-3000);Show();Application.DoEvents();
       UpdateState("Connected · Waiting for jobs","Queued work stays in production while this laptop is unavailable.");
       counts.Text="Production queue: 12     Results sent this session: 3";start.Enabled=false;pause.Enabled=true;
-      AddResult("Research grant: applications invited","CALL",14900);AddResult("Programme guidelines and eligibility","RELATED",6200);AddResult("Research award ceremony","GENERAL",4800);
+      ShowPage("https://www.example.org/funding/research-grant-2027");
+      AddResult("Research grant: applications invited","CALL",14900,"https://www.example.org/funding/research-grant-2027");AddResult("Programme guidelines and eligibility","RELATED",6200,"https://www.example.org/funding/guidelines");AddResult("Research award ceremony","GENERAL",4800,"https://www.example.org/news/award-ceremony");
       PerformLayout();Application.DoEvents();using(var image=new Bitmap(Width,Height)){DrawToBitmap(image,new Rectangle(0,0,Width,Height));image.Save(filename,System.Drawing.Imaging.ImageFormat.Png);}Close();
     }
     protected override void Dispose(bool disposing) {if(disposing){tray.Dispose();if(stop!=null)stop.Dispose();}base.Dispose(disposing);}
@@ -101,7 +116,7 @@ namespace Grapsi.LocalWorker {
         try {
           if(args.Contains("--headless")) {
             int maximum=3;foreach(var arg in args)if(arg.StartsWith("--max-jobs="))Int32.TryParse(arg.Substring(11),out maximum);
-            var engine=new Engine((s,d)=>Files.Log(s+": "+d),value=>{},(t,d,ms)=>Files.Log("Result: "+d+" ("+ms+" ms)"));
+            var engine=new Engine((s,d)=>Files.Log(s+": "+d),value=>{},(t,d,ms,u)=>Files.Log("Result: "+d+" ("+ms+" ms)"));
             engine.Run(Math.Max(1,maximum),args.Contains("--once"),CancellationToken.None).GetAwaiter().GetResult();return 0;
           }
           Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);

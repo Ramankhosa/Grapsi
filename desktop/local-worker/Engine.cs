@@ -9,9 +9,12 @@ namespace Grapsi.LocalWorker {
   internal sealed class Engine {
     readonly Action<string,string> status;
     readonly Action<Dictionary<string,object>> stats;
-    readonly Action<string,string,int> history;
+    readonly Action<string,string,int,string> history;
     public int Completed {get;private set;}
-    public Engine(Action<string,string> update,Action<Dictionary<string,object>> counts,Action<string,string,int> row) {status=update;stats=counts;history=row;}
+    // The address of the page being analysed; null when none is.
+    public Action<string> CurrentPage {get;set;}
+    public Engine(Action<string,string> update,Action<Dictionary<string,object>> counts,Action<string,string,int,string> row) {status=update;stats=counts;history=row;}
+    void Current(string url) {if(CurrentPage!=null)CurrentPage(url);}
     public async Task Run(int maximum,bool once,CancellationToken token) {
       var assets=new Assets(status);var workerId=Files.DeviceId();int failures=0;
       Connection connection=null;ModelRunner model=null;Dictionary<string,object> active=null;
@@ -34,6 +37,7 @@ namespace Grapsi.LocalWorker {
               var claimed=await connection.Call("claim",new {},token);active=Json.Map(claimed,"job");
               if(active==null) {
                 if(once)return;
+                Current(null);
                 if(DateTime.UtcNow-idleSince>TimeSpan.FromMinutes(5)&&model.Running) {model.Stop();Files.Log("Unloaded the idle model to release memory.");}
                 if(Json.Flag(claimed,"busy"))status("Recovering job","Waiting for the interrupted job lease to clear. Work remains queued.");
                 else status(Json.Flag(claimed,"paused")?"Paused by production":"Waiting for jobs","Connected. Production keeps work queued while this laptop is unavailable.");
@@ -42,7 +46,7 @@ namespace Grapsi.LocalWorker {
               idleSince=DateTime.UtcNow;
               var payload=Json.Map(active,"payload");var page=Json.Map(payload,"page");
               if(Json.Text(payload,"policyHash")!=Json.Text(hello,"policyHash"))throw new RpcException("INVALID_RESULT","The job policy does not match this worker.");
-              status("Analysing",PageTitle(page));
+              status("Analysing",PageTitle(page));Current(Json.Text(page,"url"));
               Dictionary<string,object> result;
               using(var inference=CancellationTokenSource.CreateLinkedTokenSource(token)) {
                 var task=model.Classify(active,Json.Text(hello,"promptTemplate"),inference.Token);
@@ -64,7 +68,7 @@ namespace Grapsi.LocalWorker {
                 {"decision",Json.Text(result,"decision")},{"details",Json.Map(result,"details")},{"elapsedMs",Json.Number(result,"elapsedMs")}
               };
               var outbox=Path.Combine(Files.Outbox,Json.Text(active,"id")+".dat");
-              Files.Protect(outbox,new {submission=submission,title=PageTitle(page)});
+              Files.Protect(outbox,new {submission=submission,title=PageTitle(page),url=Json.Text(page,"url")});
               status("Sending result","Saving the result in production.");
               await SendOutbox(connection,outbox,token);
               active=null;stats(await connection.Call("status",new {},token));lastStats=DateTime.UtcNow;
@@ -113,7 +117,7 @@ namespace Grapsi.LocalWorker {
       try {
         var ack=await connection.Call("complete",submission,token);
         Archive(filename,Json.Flag(ack,"accepted")?"accepted":"stale");
-        if(Json.Flag(ack,"accepted")) {var title=Json.Text(saved,"title");foreach(var candidate in Json.List(Json.Map(ack,"details"),"candidates")){title=Json.Text(candidate as Dictionary<string,object>,"title",title);break;}Completed++;history(title,Json.Text(submission,"decision"),Json.Number(submission,"elapsedMs"));Files.Log("Production acknowledged an analysis result.");}
+        if(Json.Flag(ack,"accepted")) {var title=Json.Text(saved,"title");foreach(var candidate in Json.List(Json.Map(ack,"details"),"candidates")){title=Json.Text(candidate as Dictionary<string,object>,"title",title);break;}Completed++;history(title,Json.Text(submission,"decision"),Json.Number(submission,"elapsedMs"),Json.Text(saved,"url"));Files.Log("Production acknowledged an analysis result.");}
         else Files.Log("Production rejected an outdated page result; it was retained locally.");
       }catch(RpcException error) {
         if(new[]{"LEASE_LOST","NOT_FOUND","INVALID_RESULT","INVALID_REQUEST","RESULT_CONFLICT"}.Contains(error.Code)) {Archive(filename,"stale");Files.Log("A stale saved result was retained locally; current work stays with production.");return;}throw;
