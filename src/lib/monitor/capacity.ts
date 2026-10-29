@@ -2,6 +2,14 @@ import type { Db } from './queue'
 
 export class MonitorCapacityError extends Error {}
 const positive = (value: string | undefined, fallback: number) => Math.max(1, Number(value) || fallback)
+/**
+ * Evidence a site may store unless it has its own quota. 1 GB since 29 Oct 2026:
+ * at 250 MB, large funders (nsf.gov, ukri.org, dfg.de) filled up and every
+ * read on them was deferred, while the 10 GB total was a third used.
+ */
+export function siteStorageLimit(quota: bigint | null): bigint {
+  return quota ?? BigInt(positive(process.env.MONITOR_SITE_STORAGE_LIMIT_BYTES, 1_000_000_000))
+}
 /** Limits stop and retain queued work; they never count as funder-site failures. */
 export async function assertResourceCapacity(db: Db, siteId: string, keys: string[]) {
   const unique = [...new Set(keys)]
@@ -20,5 +28,5 @@ export async function assertContentCapacity(db: Db, siteId: string, incomingByte
     db.monitorResourceVersion.aggregate({ _sum: { byte_length: true } }),
   ])
   const globalLimit = positive(process.env.MONITOR_STORAGE_LIMIT_BYTES, 10_000_000_000)
-  if (BigInt((site._sum.byte_length ?? 0) + incomingBytes) > (siteLimit ?? 250_000_000n) || (total._sum.byte_length ?? 0) + incomingBytes > globalLimit) throw new MonitorCapacityError('Evidence storage limit reached. Retained review evidence is protected; new work is deferred.')
+  if (BigInt((site._sum.byte_length ?? 0) + incomingBytes) > siteStorageLimit(siteLimit) || (total._sum.byte_length ?? 0) + incomingBytes > globalLimit) throw new MonitorCapacityError('Evidence storage limit reached. Retained review evidence is protected; new work is deferred.')
 }

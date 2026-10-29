@@ -12,7 +12,7 @@ import { siteScope, tlsExceptionHosts } from './sites'
 import { identifyUrl } from './urlIdentity'
 import { adaptiveRevisitDays, revisitDays } from './revisit'
 import { loadSkipRules, reconcileSkipRules, skipRuleFor, skippedPageError } from './skipRules'
-import { assertContentCapacity, MonitorCapacityError } from './capacity'
+import { assertContentCapacity, MonitorCapacityError, siteStorageLimit } from './capacity'
 import type { Renderer } from './browser'
 import { isMonitorFetchError } from './errors'
 import { botChallenge, botChallengeError, frameLinks, jsonToText, looksLikeAppShell, officeKindOf, officeText, structuredText } from './pageText'
@@ -83,7 +83,7 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   let storedPath: string | null = null
   if (kind) {
     const usage = await prisma.monitorResourceVersion.aggregate({ where: { resource: { site_id: site.id }, file_path: { not: null } }, _sum: { byte_length: true } })
-    const quota = site.storage_quota_bytes ?? 250_000_000n
+    const quota = siteStorageLimit(site.storage_quota_bytes)
     if (BigInt((usage._sum.byte_length ?? 0) + result.byteLength) > quota) throw new MonitorCapacityError('Site document storage quota reached; evidence fetch deferred for review')
     const directory = path.resolve(process.env.MONITOR_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'source-watch'))
     await fs.mkdir(directory, { recursive: true })
