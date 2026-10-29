@@ -19,6 +19,7 @@ import { identifyUrl } from './urlIdentity'
 import { retainCoverageGap } from './coverage'
 import { lifecycleAt,normalQuote } from './evidence'
 import { loadSkipRules, skipRuleFor } from './skipRules'
+import { scoreCall, siteChrome, stripChrome, type CallScore } from './callScore'
 
 export const TRIAGE_VERSION = 'triage-2'
 export const UNCHANGED_NEGATIVE_PREFIX = 'Unchanged since it was judged not funding; not analysed again.'
@@ -81,6 +82,19 @@ async function rememberNegative(lease: Lease, key: string | null, decision: Item
   }, update: {} }))
 }
 
+/** Score the page's current version once (site chrome removed) and keep the result on the page. */
+async function recordCallScore(lease: Lease, resourceId: string, siteId: string, title: string, content: string, links: Array<{ url: string; title: string }>): Promise<CallScore> {
+  const current = await prisma.monitorResource.findUniqueOrThrow({ where: { id: resourceId }, select: { current_version_id: true, call_scored_version_id: true, call_score: true, call_band: true, call_signals: true } })
+  if (current.current_version_id && current.call_scored_version_id === current.current_version_id && current.call_score !== null && current.call_band) {
+    return { score: current.call_score, band: current.call_band as CallScore['band'], signals: current.call_signals, version: 'stored' }
+  }
+  const scored = scoreCall({ title, text: stripChrome(content, await siteChrome(prisma, siteId)), links })
+  await withFence(lease, tx => tx.monitorResource.update({ where: { id: resourceId }, data: {
+    call_score: scored.score, call_band: scored.band, call_signals: scored.signals, call_scored_version_id: current.current_version_id, call_scored_at: new Date(),
+  } }))
+  return scored
+}
+
 export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
   const ids = Array.isArray(lease.payload.resourceIds) ? lease.payload.resourceIds.filter((id): id is string => typeof id === 'string').slice(0, 25) : []
   const resources = await prisma.monitorResource.findMany({ where: { id: { in: ids }, site: { status: 'ACTIVE' } }, include: { site: { include: { funders: { where: { status: 'CONFIRMED' } } } }, observations: { include: { source: true }, orderBy: { last_seen_at: 'desc' }, take: 5 } } })
@@ -106,6 +120,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     let fullHash = ''
     let completeEvidence=false
     let observedLinks:Array<{url:string;title:string}>=[]
+    let callScore:CallScore|null=null
     if (score.outcome !== 'STRONG_NEGATIVE' && r.canonical_url) {
       let fetched
       try { fetched = await readResource(r, r.site, lease, deps.fetch, deps.signal, deps.renderer ?? null) }
@@ -124,6 +139,8 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       fullHash = fingerprint(fetched.segments.map(s => ({ page: s.page, text: normalQuote(s.text),complete:s.complete })))
       contentHash = fingerprint(meaningfulText(content.slice(0, 2000)))
       score = scoreShortlist(r.title ?? '', `${observation?.context_text ?? ''}\n${content.slice(0, 4000)}`, r.canonical_url, config, onlyInSitemaps)
+      // Call score v1 (shadow): stored with its signals each time the page's text changes.
+      callScore = await recordCallScore(lease, r.id, r.site_id, r.title ?? observation?.anchor_text ?? '', content, fetched.links)
     }
     const funderId=r.site.funders.length===1?r.site.funders[0].funder_id:null
     const current=await prisma.monitorResource.findUniqueOrThrow({where:{id:r.id},select:{final_url:true}})
@@ -175,7 +192,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       }
     }
     if(process.env.MONITOR_LOCAL_SCREENING_REQUIRED==='true'&&!local&&score.outcome!=='STRONG_NEGATIVE'){
-      const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx,early.type==='UPDATE_OF'||score.outcome==='STRONG_POSITIVE'?20:100);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
+      const queued=await withFence(lease,async tx=>{const added=await queueLocalAnalysis(r.id,tx,early.type==='UPDATE_OF'||score.outcome==='STRONG_POSITIVE'||(process.env.MONITOR_CALL_SCORE_ROUTING==='true'&&callScore?.band==='LIKELY')?20:100);await tx.monitorOpportunity.update({where:{id:opportunity.id},data:{processing_state:added?'SCORED':'NEEDS_EVIDENCE',triage_reason:added?'Waiting for laptop first-pass analysis; no paid screening has run.':'Readable source evidence is needed before laptop analysis; select scanned pages for OCR or obtain readable evidence.'}});if(!added)await retainCoverageGap(tx,r.site_id,r.canonical_url??r.id,'UNREADABLE','No readable source version is available for local analysis.');return added})
       if(queued)waitingForLocal++;continue
     }
     const proposed=local?.details.candidates.length===1&&!local.details.multipleCalls?local.details.candidates[0].title:r.title

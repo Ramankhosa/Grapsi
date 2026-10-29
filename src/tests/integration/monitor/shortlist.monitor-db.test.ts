@@ -59,3 +59,29 @@ describe('tightened shortlist', () => {
     expect((job.payload as { queuePriority: number }).queuePriority).toBe(20)
   })
 })
+
+describe('call score v1 (shadow)', () => {
+  it('stores the score and its signals on the page once per version', async () => {
+    const callHtml = '<main><h1>Early Career Research Grant</h1><p>Applications are invited from researchers within five years of their PhD.</p><p>Eligibility: applicants must be based at an Indian institution.</p><p>Funding of up to Rs. 50 lakh per year.</p><p>Last date for submission: 15/12/2026.</p></main>'
+    const fetch: SafeFetch = async (url) => {
+      const body = Buffer.from(callHtml)
+      return { requestedUrl: url, finalUrl: url, status: 200, headers: {}, body, byteLength: body.length, truncated: false, contentKind: 'html', contentType: 'text/html', notModified: false, redirects: [], tlsExceptionUsed: false }
+    }
+    const { resource, lease } = await page('PAGE', 'https://www.nsf.invalid/funding/early-career-research-grant', 'Early Career Research Grant')
+    await triageCandidates(lease, { fetch, paid: vi.fn() })
+    const scored = await db.monitorResource.findUniqueOrThrow({ where: { id: resource.id } })
+    expect(scored.call_band).toBe('LIKELY')
+    expect(scored.call_score).toBeGreaterThanOrEqual(7)
+    expect(scored.call_signals).toEqual(expect.arrayContaining(['Invites applications', 'Eligibility rules', 'Amount on offer']))
+    expect(scored.call_scored_version_id).toBe(scored.current_version_id)
+    // Shadow mode: the laptop job keeps the priority the keyword check gave it.
+    const job = await db.monitorLocalAnalysisJob.findFirstOrThrow({ where: { resource_id: resource.id } })
+    expect((job.payload as { queuePriority: number }).queuePriority).toBe(20)
+    // The same stored copy is not scored again.
+    const at = scored.call_scored_at
+    await queueCandidates(db, scored.site_id, [resource.id], false, 'call-score:again')
+    const again = (await claimNextTask({ owner: 'shortlist', kinds: ['TRIAGE'] }))!
+    await triageCandidates(again, { fetch, paid: vi.fn() })
+    expect((await db.monitorResource.findUniqueOrThrow({ where: { id: resource.id } })).call_scored_at).toEqual(at)
+  })
+})

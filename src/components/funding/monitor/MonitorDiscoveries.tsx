@@ -12,13 +12,24 @@ interface Discovery {
   review_state: string; processing_state: string; lifecycle: string; triage_reason: string | null; triage_confidence: number | null
   triage_verdict: string | null; relevance_outcome: string | null
   match_type: string | null; stale_evidence: boolean; site: { host: string }
-  primary_resource: { title:string|null; canonical_url: string | null; last_validation_status: string | null } | null
+  primary_resource: { title:string|null; canonical_url: string | null; last_validation_status: string | null; call_score?: number | null; call_band?: string | null; call_signals?: string[] } | null
   funding_call: { id: string; title:string; revision: number; catalog_status: string | null } | null
   conflicts: Array<string|{id:string;title:string}>
   local_analysis?: { decision: string; assessedOn: string; details: { candidates: Array<{title:string;titleQuote:string;invitationQuote:string|null;opensOn?:string|null;opensQuote?:string|null;closesOn?:string|null;closesQuote?:string|null}>; multipleCalls:boolean;needsMoreEvidence:boolean } } | null
   field_evidence: { quality?: {state:string;reasons:string[]}; warnings?:string[]; payload?: { fields?: Record<string, { value: unknown; status: string; evidence: Array<{ quote: string }> }> }; conflicts?: string[] } | null
 }
 const ALL_LANES: Array<[string, string]> = [['PENDING', 'To review'], ['WAITING_LOCAL', 'Waiting for laptop'], ['NEEDS_EVIDENCE', 'Needs evidence'], ['UPDATE_PROPOSED', 'Updates'], ['PUBLISHED', 'Published'], ['REJECTED', 'Rejected'], ['SNOOZED', 'Snoozed'], ['AUDIT', 'Screened out'], ['ALL', 'All']]
+const CALL_BANDS: Record<string, { label: string; tone: string }> = {
+  LIKELY: { label: 'Likely call', tone: 'border-emerald-200 bg-emerald-50 text-emerald-800' },
+  POSSIBLE: { label: 'Possible call', tone: 'border-sky-200 bg-sky-50 text-sky-800' },
+  WEAK: { label: 'Weak signals', tone: 'border-amber-200 bg-amber-50 text-amber-800' },
+  UNLIKELY: { label: 'Unlikely', tone: 'border-gray-200 bg-gray-50 text-gray-600' },
+}
+/** The deterministic call score (shadow mode): a reading of the page, not a decision. */
+function CallScoreBadge({ score, band, signals }: { score: number; band: string; signals: string[] }) {
+  const shown = CALL_BANDS[band] ?? CALL_BANDS.UNLIKELY
+  return <p className="flex flex-wrap items-center gap-2 text-sm"><span title="Keyword reading of the page text; it does not decide anything" className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${shown.tone}`}>Call score {score} · {shown.label}</span>{signals.length > 0 && <span className="cb-hint">{signals.join(' · ')}</span>}</p>
+}
 /** Card accent by where the find stands: green = funding found and moving on. */
 /** The card's colour and label come from the same definition as the page tree. */
 function result(row: Discovery) {
@@ -82,6 +93,7 @@ export default function MonitorDiscoveries({ authedFetch, canOperate, canPublish
       {row.primary_resource?.canonical_url && <div className="flex flex-wrap items-center gap-3"><a className="text-sm text-blue-700 underline" href={row.primary_resource.canonical_url} target="_blank" rel="noreferrer">Official source</a>{canOperate && <SkipPageButton compact authedFetch={authedFetch} url={row.primary_resource.canonical_url} onChanged={message => setNotice(message)} />}</div>}
       <p className="text-sm">{row.triage_reason}</p>
       {row.primary_resource?.title&&<p className="text-sm">Page heading: {row.primary_resource.title}</p>}
+      {row.primary_resource?.call_band&&<CallScoreBadge score={row.primary_resource.call_score ?? 0} band={row.primary_resource.call_band} signals={row.primary_resource.call_signals ?? []} />}
       {row.funding_call&&<p className="text-sm">Catalogue title: {row.funding_call.title}</p>}
       {row.conflicts?.some(c=>typeof c==='object')&&<div className="text-sm"><p>Possible catalogue matches · {row.match_type?.toLowerCase().replace(/_/g,' ')}</p>{row.conflicts.filter((c):c is {id:string;title:string}=>typeof c==='object').map(c=><a className="block underline" key={c.id} href={`/admin/funding/catalog/${c.id}`}>{c.title}</a>)}<p>Similar titles require identity and round review.</p></div>}
       {row.local_analysis && <div className="rounded border bg-slate-50 p-3 text-sm space-y-2"><p>Local suggestion · {row.local_analysis.decision} · assessed {row.local_analysis.assessedOn}</p>{row.local_analysis.details.candidates.map((candidate,i)=><div key={i}><strong>Proposed call title: {candidate.title}</strong><blockquote className="ml-3 border-l-2 pl-2">{candidate.titleQuote}</blockquote>{candidate.invitationQuote&&<p>{candidate.invitationQuote}</p>}{candidate.opensOn&&<p>Proposed opening: {candidate.opensOn} · “{candidate.opensQuote}”</p>}{candidate.closesOn&&<p>Proposed deadline: {candidate.closesOn} · “{candidate.closesQuote}”</p>}</div>)}{row.local_analysis.details.multipleCalls&&<p>This page lists several calls. Follow each official call link.</p>}{row.local_analysis.details.needsMoreEvidence&&<p>Further evidence is needed; this suggestion does not establish an open call.</p>}</div>}

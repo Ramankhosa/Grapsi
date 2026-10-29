@@ -9530,6 +9530,13 @@ model MonitorResource {
   skip_paused_policy     String?
   /// Revisits in a row that found the page unchanged; stretches the next one.
   unchanged_revisits     Int       @default(0)
+  /// Call score v1 (src/lib/monitor/callScore.ts): deterministic call-likeness of
+  /// the scored version, its band and the signals behind it. Shadow mode by default.
+  call_score             Int?
+  call_band              String?
+  call_signals           String[]  @default([])
+  call_scored_version_id String?
+  call_scored_at         DateTime?
   first_seen_at          DateTime  @default(now())
   last_observed_at       DateTime  @default(now())
   created_at             DateTime  @default(now())
@@ -9547,6 +9554,7 @@ model MonitorResource {
   @@unique([site_id, dedup_key])
   @@index([revisit_policy, next_revisit_at])
   @@index([site_id, first_seen_at])
+  @@index([site_id, call_band])
   @@map("monitor_resources")
 }
 

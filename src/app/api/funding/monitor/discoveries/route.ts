@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const rows = await prisma.monitorOpportunity.findMany({ where: {
     ...laneWhere(lane),
     ...(cursor ? { id: { lt: cursor } } : {}),
-  }, orderBy: { id: 'desc' }, take: 50, include: { site: { select: { host: true, display_name: true } }, primary_resource: { select: { title:true, canonical_url: true, last_validated_at: true, last_validation_status: true } }, funding_call: { select: { id: true, title:true, revision: true, catalog_status: true } }, evidence: { include: { version: { select: { text: true, truncated: true, fetched_at: true } }, resource: { select: { canonical_url: true } } } } } })
+  }, orderBy: { id: 'desc' }, take: 50, include: { site: { select: { host: true, display_name: true } }, primary_resource: { select: { title:true, canonical_url: true, last_validated_at: true, last_validation_status: true, call_score: true, call_band: true, call_signals: true } }, funding_call: { select: { id: true, title:true, revision: true, catalog_status: true } }, evidence: { include: { version: { select: { text: true, truncated: true, fetched_at: true } }, resource: { select: { canonical_url: true } } } } } })
   return NextResponse.json({ discoveries: await Promise.all(rows.map(async row => {
     const payload = (row.field_evidence as { payload?: { fields?: Record<string, { value: unknown }> } } | null)?.payload
     return { ...row, local_analysis: row.primary_resource_id?await localSuggestion(row.primary_resource_id):null, lifecycle: lifecycleAt(payload?.fields?.close_date?.value as string | null, payload?.fields?.open_date?.value as string | null, row.lifecycle), evidence: row.evidence.map(e => ({ ...e, version: { ...e.version, text: e.version.text?.slice(0, 12000) } })) }

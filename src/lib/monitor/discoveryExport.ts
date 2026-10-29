@@ -1,5 +1,6 @@
 import { writeTables, type ExportTable } from '@/lib/fundingDept/managementExport'
 import { prisma } from '@/lib/prisma'
+import { CALL_BAND_LABELS, type CallBand } from './callScore'
 import type { Prisma } from '@/lib/prisma-generated'
 
 import { OUTCOME_STYLES } from '@/components/funding/monitor/outcome'
@@ -45,7 +46,7 @@ function amount(fields: Fields) {
 
 const COLUMNS = [
   'Result', 'Title', 'Funder', 'Website', 'Call page', 'Deadline', 'Opens', 'Rolling', 'Award', 'Funding kinds', 'Eligible countries',
-  'Lifecycle', 'Review state', 'AI verdict', 'AI confidence', 'AI reason', 'Catalogue call', 'Catalogue status',
+  'Lifecycle', 'Review state', 'AI verdict', 'AI confidence', 'AI reason', 'Call score', 'Call score band', 'Call score signals', 'Catalogue call', 'Catalogue status',
   'Found', 'Updated', 'Page last checked', 'Page status', 'Your decision', 'Reviewer notes', 'Discovery id',
 ]
 
@@ -65,7 +66,7 @@ export async function discoveryWorkbook(lane: string, generatedBy: string, now =
       include: {
         site: { select: { host: true, display_name: true } },
         funder: { select: { name: true } },
-        primary_resource: { select: { canonical_url: true, last_validated_at: true, last_validation_status: true } },
+        primary_resource: { select: { canonical_url: true, last_validated_at: true, last_validation_status: true, call_score: true, call_band: true, call_signals: true } },
         funding_call: { select: { id: true, title: true, catalog_status: true } },
       },
     }),
@@ -94,6 +95,9 @@ export async function discoveryWorkbook(lane: string, generatedBy: string, now =
       (row.triage_verdict ?? '').toLowerCase().replace(/_/g, ' '),
       typeof row.triage_confidence === 'number' ? Math.round(row.triage_confidence * 100) / 100 : '',
       row.triage_reason ?? detail,
+      row.primary_resource?.call_score ?? '',
+      row.primary_resource?.call_band ? CALL_BAND_LABELS[row.primary_resource.call_band as CallBand] ?? row.primary_resource.call_band : '',
+      (row.primary_resource?.call_signals ?? []).join('; '),
       row.funding_call?.title ?? '',
       row.funding_call?.catalog_status ?? '',
       iso(row.created_at),
