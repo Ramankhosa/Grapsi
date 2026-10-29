@@ -7,7 +7,7 @@ import {localSuggestion} from '@/lib/monitor/localAnalysis'
 import type {SafeFetch} from '@/lib/monitor/safeFetch'
 
 beforeEach(async()=>{await resetMonitorTables()})
-afterEach(()=>{delete process.env.MONITOR_LOCAL_SCREENING_REQUIRED})
+afterEach(()=>{delete process.env.MONITOR_LOCAL_SCREENING_REQUIRED;delete process.env.MONITOR_LOCAL_AUDIT_EVERY})
 afterAll(async()=>{await resetMonitorTables();await db.$disconnect()})
 const body='<main><h1>Foundation research news</h1><p>The foundation celebrated its research alumni at an annual reception. This article reports the celebration and thanks past supporters.</p></main>'
 function transport(html=body,truncated=false):SafeFetch{return async url=>({requestedUrl:url,finalUrl:url,status:200,headers:{etag:'"fixture"'},body:Buffer.from(html),byteLength:Buffer.byteLength(html),truncated,contentKind:'html',contentType:'text/html',notModified:false,redirects:[],tlsExceptionUsed:false})}
@@ -22,7 +22,9 @@ async function generalResult(){
 }
 
 describe('unchanged non-funding pages',()=>{
- it('reuses the original local GENERAL hypothesis across identical full text and still runs cloud screening',async()=>{
+ it('reuses the original local GENERAL hypothesis across identical full text and still runs cloud screening when sampled',async()=>{
+  // Only an audit-sampled GENERAL page reaches cloud screening (29 Oct 2026); sample every page here.
+  process.env.MONITOR_LOCAL_AUDIT_EVERY='1'
   const {site,resource}=await fixture(),paid=paidFor(resource.id,'UNSURE');process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true'
   await run(site.id,resource.id,'first',paid);const job=await generalResult()
   await run(site.id,resource.id,'raw-churn',paid,transport('<nav>New counter</nav>'+body))

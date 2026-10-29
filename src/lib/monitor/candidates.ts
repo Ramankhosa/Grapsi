@@ -213,7 +213,24 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       await applyDecision(lease,opportunity.id,r.id,{id:r.id,verdict:'UPDATE_TO_EXISTING',confidence:1,reason:'Official URL and call title match an existing call; changed or unverified evidence requires an update review.',type:'existing-call'},'deterministic-existing-1',key,fullHash,proposed??undefined)
       continue
     }
-    if(local?.decision==='GENERAL'&&parseInt(key.slice(0,8),16)%10===0)await withFence(lease,tx=>tx.monitorAuditSample.create({data:{opportunity_id:opportunity.id,resource_id:r.id,stage:'LOCAL',sampled_outcome:'GENERAL',sampling_weight:10}}))
+    // Only pages the laptop judged CALL or RELATED go to paid screening (29 Oct
+    // 2026: of 477 laptop-GENERAL pages the paid model found no call; of 155
+    // UNSURE pages, one). GENERAL closes as not funding; UNSURE means the laptop
+    // could not read or judge the page, so it waits as needs-evidence rather
+    // than closing. A deterministic 1 in MONITOR_LOCAL_AUDIT_EVERY (default 10)
+    // still goes to the paid model so laptop misses stay measurable.
+    if(local&&(local.decision==='GENERAL'||local.decision==='UNSURE')){
+      const setting=Number(process.env.MONITOR_LOCAL_AUDIT_EVERY??10),every=Number.isFinite(setting)?Math.max(0,Math.floor(setting)):10
+      if(every>0&&parseInt(key.slice(0,8),16)%every===0){
+        await withFence(lease,tx=>tx.monitorAuditSample.create({data:{opportunity_id:opportunity.id,resource_id:r.id,stage:'LOCAL',sampled_outcome:local.decision,sampling_weight:every}}))
+      }else{
+        await applyDecision(lease,opportunity.id,r.id,local.decision==='GENERAL'
+          ?{id:r.id,verdict:'NOT_FUNDING',confidence:0.8,reason:'The laptop judged this page not funding (general); no paid screening was run.',type:'local-general'}
+          :{id:r.id,verdict:'NEEDS_EVIDENCE',confidence:0,reason:'The laptop could not judge this page (unreadable or too little evidence); no paid screening was run. Open the page or add evidence.',type:'local-unsure'},
+          'local-first-pass',key,fullHash)
+        continue
+      }
+    }
     const cached = await prisma.monitorStageCache.findUnique({ where: { cache_key: key } })
     if (cached) {
       await withFence(lease, tx => tx.monitorStageCache.update({ where: { id: cached.id }, data: { hit_count: { increment: 1 }, last_hit_at: new Date() } }))
