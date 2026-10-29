@@ -4,7 +4,7 @@ import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { isV2Engine, monitorEngine } from '@/lib/monitor/engine'
 import { dispatchPendingEvents, emitEvent } from '@/lib/monitor/events'
-import { WORKER_STALE_MS, freshestWorkerAgeMs } from '@/lib/monitor/planner'
+import { WORKER_STALE_MS, freshestWorkerAgeMs, resumeAfterLaptop } from '@/lib/monitor/planner'
 import { prisma } from '@/lib/prisma'
 
 export const runtime = 'nodejs'
@@ -33,7 +33,7 @@ export async function GET() {
  * POST /api/funding/monitor/liveness — the scheduler's 15-minute check. Raises
  * one deduplicated WORKER_OFFLINE alert per hour while the worker is down, and
  * sends any queued Source Watch alerts (the worker normally does, but cannot
- * while it is the thing that is down).
+ * while it is the thing that is down), and returns laptop-judged pages to screening.
  */
 export async function POST(request: NextRequest) {
   const cron = isCronRequest(request)
@@ -61,7 +61,10 @@ export async function POST(request: NextRequest) {
       alerted = true
     }
     const dispatched = await dispatchPendingEvents()
+    // Pages the laptop has judged go back to screening within 15 minutes.
+    const resumedAfterLaptop = process.env.MONITOR_PIPELINE_ENABLED === 'true' ? await resumeAfterLaptop() : 0
     return NextResponse.json({
+      resumedAfterLaptop,
       engine: 'v2',
       workerAgeSeconds: ageMs === null ? null : Math.round(ageMs / 1000),
       offline,

@@ -5,7 +5,7 @@ import { readResource } from './content'
 import { fingerprint, meaningfulText } from './hashing'
 import { matchCatalog } from './matching'
 import { estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
-import { completeTaskInTx, deferTask, enqueueTask, withFence, type Db, type Lease } from './queue'
+import { completeTaskInTx, enqueueTask, withFence, type Db, type Lease } from './queue'
 import { RELEVANCE_VERSION, scoreShortlist } from './relevance'
 import type { SafeFetch } from './safeFetch'
 import type { Renderer } from './browser'
@@ -282,8 +282,12 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
     }
     if (decisions.size !== batch.length) { await recordInvalidOutput(result.attemptId, 'Triage omitted or duplicated item ids'); throw new Error('Triage omitted or duplicated item ids; only unresolved items will be retried') }
   }
-  if(waitingForLocal)await deferTask(lease,new Date(Date.now()+60000),`${waitingForLocal} pages await laptop analysis; paid screening is held.`)
-  else await withFence(lease, tx => completeTaskInTx(tx, lease, { processed: resources.length }))
+  // Pages waiting for the laptop stay parked ("Waiting for laptop") and the task
+  // finishes; resumeAfterLaptop (every 15 minutes) returns each page once the
+  // laptop has judged it. Until 29 Oct 2026 the task re-ran every minute instead,
+  // re-reading up to 25 pages each time: ~490 such loops kept the crawler's two
+  // workers busy while 3,206 screening tasks waited (about 4 finished an hour).
+  await withFence(lease, tx => completeTaskInTx(tx, lease, { processed: resources.length, waitingForLaptop: waitingForLocal }))
 }
 
 async function applyDecision(lease: Lease, opportunityId: string, resourceId: string, decision: ItemDecision, model: string, inputKey: string, fullHash: string, proposedTitle?:string) {

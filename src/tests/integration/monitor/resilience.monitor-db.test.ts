@@ -62,9 +62,12 @@ describe('conservative cost and recovery rules',()=>{
   const {site,r}=await fixture();await db.fundingCall.create({data:{title:'Alpha Research Grant 2025',source_url:r.canonical_url,visibility:'GLOBAL_PUBLISHED',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
   const paid=paidFor(r.id);await run(site.id,r.id,'new-round',paid);expect(paid).toHaveBeenCalledTimes(1);expect((await db.monitorOpportunity.findFirstOrThrow()).match_type).toBe('NEW_ROUND_OF')
  })
- it('holds new paid work while the laptop is unavailable without spending task attempts',async()=>{
+ it('holds new paid work while the laptop is unavailable, parking the page rather than re-running the task',async()=>{
   const {site,r}=await fixture();process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true';const paid=paidFor(r.id);const lease=await run(site.id,r.id,'offline',paid)
-  expect(paid).not.toHaveBeenCalled();expect(await db.monitorLocalAnalysisJob.count()).toBe(1);expect(await db.monitorTask.findUniqueOrThrow({where:{id:lease.taskId}})).toMatchObject({status:'QUEUED',attempts:0})
+  expect(paid).not.toHaveBeenCalled();expect(await db.monitorLocalAnalysisJob.count()).toBe(1)
+  // 29 Oct 2026: the task finishes; resumeAfterLaptop brings the page back when the laptop answers.
+  expect(await db.monitorTask.findUniqueOrThrow({where:{id:lease.taskId}})).toMatchObject({status:'DONE'})
+  expect((await db.monitorOpportunity.findFirstOrThrow()).triage_reason).toMatch(/^Waiting for laptop/)
  })
  // 29 Oct 2026: only laptop CALL/RELATED pages reach paid screening; a 1-in-N sample of GENERAL/UNSURE still does.
  it('keeps a sampled local GENERAL page eligible for cloud review',async()=>{
