@@ -56,7 +56,7 @@ export async function handoffOpportunity(lease: Lease) {
   const current = await tx.monitorOpportunity.findUniqueOrThrow({ where: { id } })
   if (current.review_revision !== revision || current.review_state === 'REJECTED' || current.stale_evidence) throw new Error('Discovery changed before intake handoff')
   const batch = await fundingIntakeService.createBatch({ userId: actor.userId, email: 'source-watch@system.invalid', role: 'CURATOR', tenantId: actor.tenantId }, {
-    label: `Source Watch: ${opportunity.title ?? url}`, jobs: [{ sources: [{ sourceKey: 'source_1', inputType: 'text', sourceText: text, originUrl: url }], detailsSourceKey: 'source_1', autoCreateDraft: true, extractAll: false, autoPublish: false }],
+    label: `Source Watch: ${opportunity.title ?? url}`, jobs: [{ sources: [{ sourceKey: 'source_1', inputType: 'text', sourceText: text, originUrl: url }], detailsSourceKey: 'source_1', autoCreateDraft: true, extractAll: false }],
   }, { handoffKey: handoff.handoff_key, opportunityId: id, funderId: opportunity.funder_id, payload, identity:extracted.identity })
     const job = await tx.fundingIntakeJob.findFirst({ where: { batch_id: batch.id } })
     await tx.monitorHandoff.update({ where: { id: handoff.id }, data: { state: 'LINKED', intake_batch_id: batch.id, intake_job_id: job?.id, funding_call_id: job?.linked_funding_call_id } })

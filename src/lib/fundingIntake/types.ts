@@ -179,8 +179,6 @@ export interface BatchIntakeJobInput {
   templateSourceKey?: string;
   autoCreateDraft?: boolean;
   extractAll?: boolean;
-  /** Publish the call as soon as its draft is complete (bulk bootstrap flows). */
-  autoPublish?: boolean;
 }
 
 export interface BatchIntakeCreateInput {

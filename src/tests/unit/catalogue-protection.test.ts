@@ -20,6 +20,12 @@ describe('catalogue output and extraction controls',()=>{
     expect(safe.value.call.eligibilityText).toBe('full eligibility')
     expect(safe.value.call).not.toHaveProperty('metadata')
   })
+  it('keeps who published a call on the operator catalogue list',()=>{
+    // 29 Oct 2026: the filter dropped published_by, so every row read "Not published".
+    const safe=sanitizeCatalogueResponse({calls:[{id:'c1',title:'Call',catalog_status:'PUBLISHED',published_at:'2026-10-29T05:08:31Z',published_by:'editor@example.org',metadata:{published_by:'editor@example.org'}}]},'summary')
+    expect(safe.value.calls[0]).toMatchObject({published_by:'editor@example.org',published_at:'2026-10-29T05:08:31Z'})
+    expect(safe.value.calls[0].metadata).toBeUndefined()
+  })
   it('stored conversation snapshots cannot bypass list projections',()=>{
     const safe=sanitizeCatalogueResponse({runs:[{result_snapshot_json:[call]}]},'summary')
     expect(JSON.stringify(safe.value)).not.toContain('PRIVATE FULL TEXT');expect(safe.callIds).toContain('call')

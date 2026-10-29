@@ -8,7 +8,7 @@ for(const name of `template_status guideline_status eligible_countries eligible_
 for(const name of `official_urls eligible_countries eligible_regions host_countries institution_types career_stages opportunity_status next_deadline_at final_deadline_at entry_closes_at template_status guideline_status`.split(' ')) common.add(name)
 // Conflict-review DTOs have their own explicit, metered call projection.
 for(const name of `agency eligibility eligibilityTruncated descriptionTruncated deadline amount source countryRequirements imported contentHash`.split(' ')) detail.add(name)
-for(const name of `status is_active created_at updated_at published_at publishedAt intake_job_id embedding_status`.split(' ')) common.add(name)
+for(const name of `status is_active created_at updated_at published_at published_by publishedAt intake_job_id embedding_status`.split(' ')) common.add(name)
 for(const name of `closesAt daysToClose isExpired tier basis source matchedOn alerted`.split(' ')) common.add(name)
 for(const name of `promotedAt promotedBy activeMappings work enrichmentLevel ineligibleFor sourceAvailability funding projectDuration eligibility deliverables focusAreas warning`.split(' ')) detail.add(name)
 detail.add('projectDurationText');detail.add('assets')

@@ -39,14 +39,16 @@ describe('internal Source Watch intake policy', () => {
     const jobs = await db.fundingIntakeJob.findMany({ where: { batch_id: a.id } })
     expect(jobs).toHaveLength(1)
     expect(jobs[0].source_url).toBe('https://funder.example/Call?ID=Alpha')
-    const meta = jobs[0].fetch_metadata_json as { origin: string; batch_intake: { auto_publish: boolean; extract_all: boolean } }
+    const meta = jobs[0].fetch_metadata_json as { origin: string; batch_intake: { extract_all: boolean } }
     expect(meta.origin).toBe('source_watch')
-    expect(meta.batch_intake).toMatchObject({ auto_publish: false, extract_all: false })
+    expect(meta.batch_intake).toMatchObject({ extract_all: false })
+    // The legacy autoPublish flag in the input is ignored: intake never publishes.
+    expect(meta.batch_intake).not.toHaveProperty('auto_publish')
     expect(await db.fundingIntakeJobSource.count({ where: { job_id: jobs[0].id } })).toBe(1)
   })
   it('uses the pre-extracted bundle and makes a global unpublished draft without giving the service user login roles', async () => {
     const batch = await fundingIntakeService.createBatch({ userId, tenantId, email: 'monitor-service-fixture@system.invalid', role: 'CURATOR' }, {
-      jobs: [{ sources: [{ sourceKey: 'source_1', inputType: 'text', sourceText: text, originUrl: 'https://funder.example/second' }], detailsSourceKey: 'source_1', autoPublish: true }],
+      jobs: [{ sources: [{ sourceKey: 'source_1', inputType: 'text', sourceText: text, originUrl: 'https://funder.example/second' }], detailsSourceKey: 'source_1' }],
     }, { handoffKey: 'monitor-fixture:process', opportunityId: 'fixture', funderId: null, payload })
     const job = await db.fundingIntakeJob.findFirstOrThrow({ where: { batch_id: batch.id } })
     await fundingIntakeService.processJob(job.id)
