@@ -5,6 +5,7 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const P=require('./policy.cjs');
 const Previous=require('./policy-1.1.0.cjs');
 const {hasReusableGeneral}=require('./general-reuse.cjs');
+const Shortlist=require('./shortlist-rules.cjs');
 const LEASE_SECONDS=120, MAX_ATTEMPTS=5;
 class ProtocolError extends Error {constructor(code,message){super(message);this.code=code;}}
 const check=(condition,code,message)=>{if(!condition)throw new ProtocolError(code,message);};
@@ -59,6 +60,10 @@ class Broker {
       if(!P.publicUrl(row.url,row.host)||P.skipped(row.dedup_key,rules.filter(r=>r.site_id===row.site_id)))continue;
       const payload=P.makePayload(row);
       const inputHash=P.sha256(JSON.stringify(payload));
+      // The app's shortlist rules (building news, events, staff notices…): recorded as a
+      // closed job so the laptop never gets the page and the sweep does not pick it again.
+      const skip=Shortlist.shortlistSkip(row.url,row.title||'',false);
+      if(skip){await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload,state,last_error) VALUES($1,$2,$3,$4,$5,$6::jsonb,'SUPERSEDED',$7) ON CONFLICT(version_id,policy_hash) DO NOTHING`,crypto.randomUUID(),row.id,row.current_version_id,P.POLICY_HASH,inputHash,JSON.stringify(payload),('Shortlist: '+Shortlist.REASONS[skip]).slice(0,300));continue;}
       added+=await this.db.$executeRawUnsafe(`INSERT INTO monitor_local_analysis_jobs(id,resource_id,version_id,policy_hash,input_hash,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(version_id,policy_hash) DO NOTHING`,crypto.randomUUID(),row.id,row.current_version_id,P.POLICY_HASH,inputHash,JSON.stringify(payload));
     }
     return added;

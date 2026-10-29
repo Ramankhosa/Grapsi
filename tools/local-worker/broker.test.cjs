@@ -265,3 +265,20 @@ test('the server config can switch approved-site access off again',async()=>{
   config={...config,allowApprovedSites:true};
   assert((await broker.claim()).job);
 });
+test('the sweep never sends pages the app shortlist rules out, and does not pick them again',async()=>{
+  // 29 Oct 2026: building news and staff notices were most of the laptop's GENERAL verdicts.
+  const host='noise.invalid',text='Work resumed on the 54-story tower after a crane collapse in the city centre.';
+  await db.$executeRawUnsafe("INSERT INTO monitor_sites VALUES($1,$2,'ACTIVE') ON CONFLICT DO NOTHING",'site-'+host,host);
+  for(const [id,title,url] of [['noise-news','Work resumed after crane collapse','https://'+host+'/news-article/work-resumed-after-crane-collapse/'],['noise-call','Research grant 2027','https://'+host+'/funding/research-grant-2027/']]){
+    await db.$executeRawUnsafe("INSERT INTO monitor_resources(id,site_id,current_version_id,title,canonical_url,dedup_key) VALUES($1,$2,$3,$4,$5,$5)",id,'site-'+host,id+'-v1',title,url);
+    await db.$executeRawUnsafe("INSERT INTO monitor_resource_versions(id,resource_id,text,raw_hash,meaningful_hash) VALUES($1,$2,$3,$4,$4)",id+'-v1',id,text,P.sha256(id+text));
+  }
+  const broker=new Broker(db,{allowedHosts:[host]});
+  assert.equal(await broker.scan(),1);
+  const jobs=await db.$queryRawUnsafe("SELECT resource_id,state,last_error FROM monitor_local_analysis_jobs ORDER BY resource_id");
+  assert.deepEqual(jobs.map(j=>[j.resource_id,j.state]),[['noise-call','QUEUED'],['noise-news','SUPERSEDED']]);
+  assert.match(jobs[1].last_error,/^Shortlist: /);
+  broker.lastScan=0;
+  assert.equal(await broker.scan(),0);
+  assert.equal((await db.$queryRawUnsafe("SELECT count(*)::int n FROM monitor_local_analysis_jobs"))[0].n,2);
+});
