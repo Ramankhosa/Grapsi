@@ -14,7 +14,7 @@ import { ProviderPausedError } from './providers'
 import { extractOpportunity } from './extract'
 import { handoffOpportunity } from './handoff'
 import { discoverSite } from './discovery'
-import { PaidAttemptsExhaustedError, PaidStageFailedError } from './paidCall'
+import { BatchPendingError, PaidAttemptsExhaustedError, PaidStageFailedError } from './paidCall'
 import { embedCall } from './embed'
 import { notifyPublication } from './publicationNotify'
 import { MonitorCapacityError } from './capacity'
@@ -85,6 +85,8 @@ export async function executeTask(lease: Lease, deps: ExecuteDeps): Promise<void
 async function settleFailure(lease: Lease, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error)
   if (error instanceof SharedWorkPendingError) { await deferTask(lease, new Date(Date.now() + 30000), message); return }
+  // Batch mode: woken by runPaidBatches when the answer is filed.
+  if (error instanceof BatchPendingError) { await deferTask(lease, error.retryAt, 'Waiting for a provider batch answer'); return }
   const isCheck = lease.kind === 'CHECK_SOURCE'
   if (error instanceof MonitorCapacityError) {
     await deferTask(lease, new Date(Date.now() + 6 * 3600000), message, 'DEFERRED_BUDGET')

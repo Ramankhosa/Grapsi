@@ -1,4 +1,5 @@
 import { llmGateway } from '@/lib/metering/gateway'
+import type { Prisma } from '@/lib/prisma-generated'
 import { resolveModel } from '@/lib/metering/model-resolver'
 import { getProviderFromModelCode } from '@/lib/metering/providers/llm-provider'
 import type { TaskCode } from '@/lib/metering/types'
@@ -75,6 +76,26 @@ export interface PaidStageInput {
   contentParts?: ContentPart[]
   documentTokenAllowance?: number
   memberKeys?: string[]
+  /** Batch mode only: what the batch collector needs to file each answer (e.g. screening's page ids and cache keys). */
+  batchMembers?: Array<Record<string, unknown>>
+}
+
+/**
+ * Provider batch mode (29 Oct 2026): Gemini screening requests wait for a batch
+ * job at half the price instead of a synchronous call. The task is deferred and
+ * woken when lib/monitor/paidBatch.ts files the answer, which this function then
+ * returns through its saved-receipt check. MONITOR_PAID_BATCH=true turns it on.
+ */
+export const BATCH_STAGES = new Set(['FUNDING_SOURCE_TRIAGE'])
+export const BATCH_PRICE_FACTOR = 0.5
+export class BatchPendingError extends Error {
+  constructor(readonly operationKey: string, readonly retryAt: Date) {
+    super('Waiting for a provider batch answer')
+    this.name = 'BatchPendingError'
+  }
+}
+export function batchModeFor(stage: string, model: string): boolean {
+  return process.env.MONITOR_PAID_BATCH === 'true' && BATCH_STAGES.has(stage) && getProviderFromModelCode(model) === 'gemini'
 }
 
 export interface PaidStageResult {
@@ -86,7 +107,7 @@ export interface PaidStageResult {
 }
 
 /** Accept one fenced JSON value; leave prose and invalid output for stage validation. */
-function jsonResponseText(text: string): string {
+export function jsonResponseText(text: string): string {
   const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   if (fenced) {
     try { JSON.parse(fenced[1]); return fenced[1].trim() } catch { /* Stage validators reject malformed JSON. */ }
@@ -113,7 +134,7 @@ export function reservationFor(price: PriceSnapshot, inputTokens: number, maxOut
   )
 }
 
-function actualCost(price: PriceSnapshot, usage: Record<string, unknown>): bigint {
+export function actualCost(price: PriceSnapshot, usage: Record<string, unknown>): bigint {
   const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   return (
     tokenMicros(n(usage.inputTokens), price.inputCentsPer1M) +
@@ -160,6 +181,31 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
   // and a protocol envelope. The cheap packing estimator is not a spend cap.
   const inputTokens = Buffer.byteLength(fullPrompt + JSON.stringify(input.jsonSchema), 'utf8') + 1024 + (input.documentTokenAllowance ?? 0)
   let attemptNo = previous + 1
+
+  // Batch mode: one batched try per request. While it waits the task is deferred;
+  // if the batch failed or expired, the request falls through to a normal call.
+  if (batchModeFor(input.stage, models[0]) && !input.contentParts?.length) {
+    const batched = await prisma.monitorLlmAttempt.findFirst({ where: { operation_key: input.operationKey, price_snapshot: { path: ['batch'], equals: true } }, select: { status: true } })
+    if (batched && ['BATCH_QUEUED', 'BATCH_SUBMITTED'].includes(batched.status)) throw new BatchPendingError(input.operationKey, new Date(Date.now() + 6 * 3_600_000))
+    if (!batched) {
+      const model = models[0]
+      const full = await priceFor(model)
+      if (full.inputCentsPer1M <= 0 || full.outputCentsPer1M <= 0) throw new MonitorConfigError('MODEL_PRICE_MISSING', `A positive price snapshot is required for ${model}`)
+      const price = { ...full, inputCentsPer1M: full.inputCentsPer1M * BATCH_PRICE_FACTOR, outputCentsPer1M: full.outputCentsPer1M * BATCH_PRICE_FACTOR, batch: true } as PriceSnapshot
+      const attemptId = await reserveAttempt({
+        operationKey: input.operationKey, attemptNo, stage: input.stage, model, provider: getProviderFromModelCode(model), price,
+        reservedMaxMicros: reservationFor(price, inputTokens, input.maxOutputTokens),
+        scopes: [...new Set(['PLATFORM', ...input.scopes, ...(input.lease?.siteId ? [`SITE:${input.lease.siteId}`] : [])])],
+        taskId: input.lease?.taskId ?? null, leaseGeneration: input.lease?.generation ?? null, memberKeys: input.memberKeys, memberAttemptLimit: limit,
+      })
+      await prisma.monitorLlmAttempt.update({ where: { id: attemptId }, data: { status: 'BATCH_QUEUED', batch_request: {
+        // Gemini counts thinking inside the output limit; the reservation already covers this allowance.
+        prompt: fullPrompt, schema: input.jsonSchema.schema, maxOutputTokens: input.maxOutputTokens * OUTPUT_ALLOWANCE, members: input.batchMembers ?? [],
+      } as unknown as Prisma.InputJsonObject } })
+      throw new BatchPendingError(input.operationKey, new Date(Date.now() + 6 * 3_600_000))
+    }
+    attemptNo = Math.max(attemptNo, previous + 1)
+  }
   let lastClass: ProviderErrorClass = 'TRANSIENT'
   let lastMessage = 'no model was available'
   let pausedUntil: Date | null = null

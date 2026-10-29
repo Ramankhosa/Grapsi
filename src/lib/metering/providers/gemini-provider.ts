@@ -6,6 +6,34 @@ import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
 import { allowedProviderAttempts, withErrorDetails, sdkRetryOptions } from './executionPolicy'
 
+/** Configured model codes -> Gemini API model ids (also used by Source Watch batch mode). */
+export const GEMINI_MODEL_ALIASES: Record<string, string> = {
+  // Gemini 1.5 stable variants
+  'gemini-1.5-pro': 'gemini-1.5-pro-002',
+  'gemini-1.5-flash': 'gemini-1.5-flash-002',
+  // Gemini 2.x variants (align to current GA/preview IDs)
+  // Retired 1 Jun 2026 (hard shutdown) — alias onto the 2.5 line so stored
+  // stage configs that still name them keep working.
+  'gemini-2.0-flash': 'gemini-2.5-flash',
+  'gemini-2.0-flash-001': 'gemini-2.5-flash',
+  'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
+  // Experimental models (pass through as-is)
+  'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
+  'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp',
+  'gemini-exp-1206': 'gemini-exp-1206',
+  // Legacy image models (pass through as-is)
+  'gemini-3.0-nano-banana': 'gemini-3.0-nano-banana',
+  'gemini-3.1-flash': 'gemini-3-flash-preview',
+  'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
+  'gemini-3-flash-preview': 'gemini-3-flash-preview',
+  'gemini-3-pro-preview': 'gemini-3-pro-preview',
+  'gemini-3-pro-preview-thinking': 'gemini-3-pro-preview',
+  'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview'
+}
+
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
   supportedModels = [
@@ -38,32 +66,7 @@ export class GeminiProvider implements LLMProvider {
 
   // Map legacy model codes (as saved in plan config) to current Google model IDs
   // This keeps old config working after Google renames/versions.
-  private modelAliasMap: Record<string, string> = {
-    // Gemini 1.5 stable variants
-    'gemini-1.5-pro': 'gemini-1.5-pro-002',
-    'gemini-1.5-flash': 'gemini-1.5-flash-002',
-    // Gemini 2.x variants (align to current GA/preview IDs)
-    // Retired 1 Jun 2026 (hard shutdown) — alias onto the 2.5 line so stored
-    // stage configs that still name them keep working.
-    'gemini-2.0-flash': 'gemini-2.5-flash',
-    'gemini-2.0-flash-001': 'gemini-2.5-flash',
-    'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
-    'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
-    // Experimental models (pass through as-is)
-    'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
-    'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp',
-    'gemini-exp-1206': 'gemini-exp-1206',
-    // Legacy image models (pass through as-is)
-    'gemini-3.0-nano-banana': 'gemini-3.0-nano-banana',
-    'gemini-3.1-flash': 'gemini-3-flash-preview',
-    'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
-    'gemini-3-flash-preview': 'gemini-3-flash-preview',
-    'gemini-3-pro-preview': 'gemini-3-pro-preview',
-    'gemini-3-pro-preview-thinking': 'gemini-3-pro-preview',
-    'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
-    'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
-    'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview'
-  }
+  private modelAliasMap: Record<string, string> = GEMINI_MODEL_ALIASES
 
   private config: ProviderConfig
   private client: any // Google Generative AI client

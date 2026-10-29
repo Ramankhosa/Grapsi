@@ -4,7 +4,7 @@ import type { Prisma } from '@/lib/prisma-generated'
 import { readResource } from './content'
 import { fingerprint, meaningfulText } from './hashing'
 import { matchCatalog } from './matching'
-import { estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
+import { BatchPendingError, estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
 import { completeTaskInTx, enqueueTask, withFence, type Db, type Lease } from './queue'
 import { RELEVANCE_VERSION, scoreShortlist } from './relevance'
 import type { SafeFetch } from './safeFetch'
@@ -265,6 +265,8 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
   // screening calls skipped some of 25 pages, and the whole call used to fail).
   let batchCap = 25
   const reasked = new Set<string>()
+  // Batch mode: every batch is queued before the task waits for the answers.
+  let batchPending: BatchPendingError | null = null
   while (pending.length) {
     const batch: typeof pending = []
     let total = estimateTokens(SYSTEM)
@@ -273,7 +275,9 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       if (batch.length && total + size > 6000) break
       batch.push(pending.shift()!); total += size
     }
-    const result = await (deps.paid ?? runPaidStage)({ stage: 'FUNDING_SOURCE_TRIAGE', operationKey: `triage-batch:${fingerprint(batch.map(b => b.cacheKey).sort())}`, memberKeys: batch.map(b => b.cacheKey), systemPrompt: SYSTEM, prompt: JSON.stringify({ items: batch.map(b => b.prompt) }), jsonSchema: SCHEMA, maxOutputTokens: 2400, scopes: [`SITE:${lease.siteId}`, ...(lease.payload.bootstrap === true ? ['BOOTSTRAP'] : [])], lease })
+    let result: PaidStageResult
+    try { result = await (deps.paid ?? runPaidStage)({ stage: 'FUNDING_SOURCE_TRIAGE', operationKey: `triage-batch:${fingerprint(batch.map(b => b.cacheKey).sort())}`, memberKeys: batch.map(b => b.cacheKey), batchMembers: batch.map(b => ({ id: b.resource.id, cacheKey: b.cacheKey, completeness: b.prompt.completeness })), systemPrompt: SYSTEM, prompt: JSON.stringify({ items: batch.map(b => b.prompt) }), jsonSchema: SCHEMA, maxOutputTokens: 2400, scopes: [`SITE:${lease.siteId}`, ...(lease.payload.bootstrap === true ? ['BOOTSTRAP'] : [])], lease }) }
+    catch (error) { if (error instanceof BatchPendingError) { batchPending = error; continue } throw error }
     let parsed: unknown
     try { parsed = JSON.parse(result.text) } catch { parsed = null }
     const decisions = validateBatch(parsed, batch.map(b => b.resource.id))
@@ -294,6 +298,7 @@ export async function triageCandidates(lease: Lease, deps: CandidateDeps) {
       pending.unshift(...skipped)
     }
   }
+  if (batchPending) throw batchPending
   // Pages waiting for the laptop stay parked ("Waiting for laptop") and the task
   // finishes; resumeAfterLaptop (every 15 minutes) returns each page once the
   // laptop has judged it. Until 29 Oct 2026 the task re-ran every minute instead,

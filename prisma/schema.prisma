@@ -9928,10 +9928,36 @@ model MonitorLlmAttempt {
   dispatched_at       DateTime?
   created_at          DateTime  @default(now())
 
+  /// Provider batch mode: the submitted batch, and the request to submit
+  /// (BATCH_QUEUED / BATCH_SUBMITTED attempts). Null for synchronous calls.
+  batch_id            String?
+  batch_request       Json?
+
   @@unique([operation_key, attempt_no])
   @@index([status, created_at])
   @@index([ledger_day])
+  @@index([batch_id])
   @@map("monitor_llm_attempts")
+}
+
+/// One provider batch job (Gemini batch mode, half price): its attempts in
+/// submitted order, and where it stands. SUBMITTED | DONE | FAILED.
+model MonitorPaidBatch {
+  id             String    @id @default(cuid())
+  provider       String
+  model          String
+  stage          String
+  provider_job   String?
+  state          String    @default("SUBMITTED")
+  attempt_ids    String[]  @default([])
+  submitted_at   DateTime  @default(now())
+  last_polled_at DateTime?
+  completed_at   DateTime?
+  error          String?
+  created_at     DateTime  @default(now())
+
+  @@index([state])
+  @@map("monitor_paid_batches")
 }
 
 /// Stage results keyed by the fingerprint of the complete effective input.
