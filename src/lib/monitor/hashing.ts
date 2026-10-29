@@ -38,6 +38,10 @@ const VOLATILE_LINE_PATTERNS: RegExp[] = [
   /^\s*(last\s+(updated|modified|reviewed)|page\s+last\s+updated)\b.{0,60}$/i,
   /^\s*(©|\(c\)|copyright)\s.*$/i,
   /^\s*(skip\s+to\s+(main\s+)?content|screen\s+reader\s+access)\s*$/i,
+  // The page's own clock: "Messages at time of print 29 October 2026, 03:24
+  // CET", "Page generated on …", "Server time: …". A short line naming the
+  // moment of rendering, never a deadline line (those name no such moment).
+  /^.{0,60}\b(at\s+(the\s+)?time\s+of\s+print(ing)?|printed\s+(on|at)|(page\s+)?generated\s+(on|at)|rendered\s+(on|at)|retrieved\s+(on|at)|accessed\s+(on|at)|current\s+(date|time)|server\s+time|local\s+time|today\s+is)\b.{0,80}$/i,
 ]
 
 /**

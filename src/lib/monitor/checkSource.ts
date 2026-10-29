@@ -330,8 +330,15 @@ async function persistPage(
   const existingVersion = await tx.monitorResourceVersion.findUnique({
     where: { resource_id_raw_hash: { resource_id: listing.id, raw_hash: page.rawHash } },
   })
+  const previousVersion = listing.current_version_id
+    ? await tx.monitorResourceVersion.findUnique({ where: { id: listing.current_version_id }, select: { id: true, meaningful_hash: true, truncated: true } })
+    : null
+  // Same links and context in different bytes: keep the current version
+  // rather than store another copy of an unchanged listing.
+  const sameMeaning = !page.truncated && previousVersion && !previousVersion.truncated && previousVersion.meaningful_hash === meaningful
   const version =
     existingVersion ??
+    (sameMeaning ? previousVersion : null) ??
     (await (async () => {
       const bytes = Buffer.byteLength(page.scopeText.slice(0, CHECK_LIMITS.listingTextChars))
       await assertContentCapacity(tx, site.id, bytes, site.storage_quota_bytes)
@@ -349,9 +356,6 @@ async function persistPage(
         tls_exception_used: page.tlsExceptionUsed,
       },
     }) })())
-  const previousVersion = listing.current_version_id
-    ? await tx.monitorResourceVersion.findUnique({ where: { id: listing.current_version_id }, select: { meaningful_hash: true } })
-    : null
   await tx.monitorResource.update({
     where: { id: listing.id },
     data: {

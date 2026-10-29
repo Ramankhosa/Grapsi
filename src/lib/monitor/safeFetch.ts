@@ -1,5 +1,5 @@
 import { isIP } from 'node:net'
-import { Readable } from 'node:stream'
+import { Readable, pipeline } from 'node:stream'
 import zlib from 'node:zlib'
 
 import { Agent, request } from 'undici'
@@ -226,7 +226,10 @@ export async function readCappedBody(
       : enc.includes('deflate')
         ? zlib.createInflate()
         : null
-  const stream: AsyncIterable<Buffer> = decoder ? source.pipe(decoder) : source
+  // pipeline, not pipe: a timeout or socket error in the compressed body must
+  // reach the loop below. With pipe() it was an unhandled 'error' event on the
+  // source stream, which killed the whole worker process.
+  const stream: AsyncIterable<Buffer> = decoder ? pipeline(source, decoder, () => undefined) : source
 
   const chunks: Buffer[] = []
   let total = 0

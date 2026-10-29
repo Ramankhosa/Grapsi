@@ -10,6 +10,12 @@ describe('meaningful text', () => {
     expect(text).toBe('Call for proposals — last date 31/12/2026')
   })
 
+  it('drops the page clock but keeps a deadline that carries a time', () => {
+    const page = (stamp: string) => meaningfulText(`Funding call\nDeadline: 29 October 2026, 14:00 CET\nMessages at time of print ${stamp} CET\nNo global messages displayed at time of print.\nPage generated on ${stamp}`)
+    expect(page('29 October 2026, 02:30')).toBe(page('29 October 2026, 03:24'))
+    expect(page('29 October 2026, 02:30')).toBe('Funding call\nDeadline: 29 October 2026, 14:00 CET')
+  })
+
   it('applies reviewer ignore rules', () => {
     expect(meaningfulText('Call A\nBanner: Har Ghar Tiranga', ['^Banner:'])).toBe('Call A')
   })

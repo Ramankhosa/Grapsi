@@ -43,7 +43,8 @@ describe('unchanged non-funding pages',()=>{
   process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true'
   await run(site.id,resource.id,'raw-churn',paid,transport('<nav>Changed navigation and counter</nav>'+body))
   const current=await db.monitorResource.findUniqueOrThrow({where:{id:resource.id}}),result=await db.monitorOpportunity.findFirstOrThrow()
-  expect(current.current_version_id).not.toBe(oldVersion);expect(current.last_validated_at).not.toBeNull()
+  // Same words in different bytes keep the version (29 Oct 2026); before, every churn stored a new one.
+  expect(current.current_version_id).toBe(oldVersion);expect(current.last_validated_at).not.toBeNull()
   expect(paid).toHaveBeenCalledTimes(1);expect(await db.monitorLocalAnalysisJob.count()).toBe(0)
   expect(result.review_revision).toBe(prior.review_revision);expect(result.review_state).toBe('NONE');expect(result.triage_reason).toContain('Unchanged page')
   expect((await db.monitorStageCache.findFirstOrThrow({where:{stage:'TRIAGE_NEGATIVE'}})).hit_count).toBe(1)

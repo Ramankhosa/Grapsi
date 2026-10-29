@@ -137,6 +137,21 @@ export async function readResource(resource: MonitorResource, site: MonitorSite,
   } else throw new Error(`Unsupported evidence content: ${result.contentType || result.contentKind}`)
   const text = pages.map(p => p.text).join('\n')
   const hash = meaningfulHash(text)
+  // Same words, different bytes (a rotating token, a clock, reordered markup):
+  // keep the current version. A new version would queue the page for the
+  // laptop and for paid screening again and store another copy of it. The
+  // previous text is re-hashed too, so a newly ignored volatile line does not
+  // make every page that carries it look changed once. The laptop's job is
+  // keyed by version, so a page retitled since the laptop read it still gets a
+  // new version and with it a fresh laptop pass.
+  if (previous && !partial && !previous.truncated && previous.parser_version === parser &&
+      (previous.meaningful_hash === hash || (previous.text != null && meaningfulHash(previous.text) === hash)) &&
+      !(await prisma.$queryRaw<Array<{ one: number }>>`SELECT 1 AS one FROM monitor_local_analysis_jobs WHERE version_id = ${previous.id} AND (payload->'page'->>'title') IS DISTINCT FROM ${resource.title} LIMIT 1`).length) {
+    await withFence(lease, tx => tx.monitorResource.update({ where: { id: resource.id }, data: { final_url: result.finalUrl,
+      etag: result.headers.etag ?? null, last_modified: result.headers['last-modified'] ?? null,
+      last_validated_at: new Date(), last_validation_status: 'OK' } }))
+    return { segments: segmentsFromVersion(resource, previous), links: links.length ? links : rememberedLinks(previous), changed: false }
+  }
   const version = await withFence(lease, async tx => {
     // Count raw document bytes plus a conservative allowance for parsed text
     // and JSON copies. Unchanged versions have already returned above.
