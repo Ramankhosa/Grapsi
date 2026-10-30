@@ -47,4 +47,17 @@ describe('Review duplicate check (30 Oct 2026)', () => {
     expect(twins.get('c')).toBeUndefined()
     expect(twins.get('d')).toBeUndefined()
   })
+  it('ignores site-chrome titles, one-word titles and different call codes', () => {
+    const chrome = ['p1', 'p2', 'p3', 'p4'].map(id => subject({ id, title: 'Skip to main content', urls: [`https://x.org/${id}`] }))
+    const twins = discoveryTwins([
+      ...chrome,
+      subject({ id: 'm1', title: 'More', urls: ['https://a.org/more'] }),
+      subject({ id: 'm2', title: 'More calls', urls: ['https://b.org/more'] }),
+      subject({ id: 'a', title: '2210/A National MSc/MA Scholarship Program', urls: ['https://t.gov.tr/2210a'] }),
+      subject({ id: 'b', title: '2210/D National Industrial MSc/MA Scholarship Program', urls: ['https://t.gov.tr/2210d'] }),
+      subject({ id: 'e1', title: 'Early Career Travel Grant', urls: ['https://tp.org/ecg'] }),
+      subject({ id: 'e2', title: 'Early Career Travel Grant', urls: ['https://tp.org/grants/ecg'] }),
+    ])
+    expect([...twins.keys()].sort()).toEqual(['e1', 'e2'])
+  })
 })

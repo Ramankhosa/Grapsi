@@ -123,6 +123,20 @@ export function checkAgainst(index: Pick<CatalogueIndex, 'calls' | 'byUrl' | 'by
   return [...found.values(), ...ranked.slice(0, 5).map(r => r.twin)].slice(0, 5)
 }
 
+/** Reference codes in a title ("2210/A", "PAR-25-141", "2026"): any word with a digit in it. */
+const codesOf = (title: string) => new Set((title.toLowerCase().match(/[\p{L}\p{N}]*\d[\p{L}\p{N}]*(?:[/-][\p{L}\p{N}]+)*/gu) ?? []))
+/** Both titles name codes and the codes differ: two calls of one programme (2210/A vs 2210/D). */
+function otherCall(a: string, b: string) {
+  const x = codesOf(a), y = codesOf(b)
+  return x.size > 0 && y.size > 0 && ([...x].some(c => !y.has(c)) || [...y].some(c => !x.has(c)))
+}
+/**
+ * A title on more pages than this is site chrome, not a call: 30 Oct 2026
+ * production pages titled "LinkedIn", "RTF" or "Skip to main content" made
+ * 700 of 2,000 review rows look "found twice".
+ */
+const CHROME_TITLE_PAGES = 3
+
 /** Discoveries that are the same call: one page, or one title with the same (or no) deadline. */
 export function discoveryTwins(subjects: DuplicateSubject[]): Map<string, DiscoveryTwin[]> {
   const out = new Map<string, DiscoveryTwin[]>()
@@ -134,16 +148,20 @@ export function discoveryTwins(subjects: DuplicateSubject[]): Map<string, Discov
   const byUrl = new Map<string, DuplicateSubject[]>()
   for (const s of subjects) for (const key of urlKeys(s.urls.slice(0, 1))) byUrl.set(key, [...(byUrl.get(key) ?? []), s])
   for (const group of byUrl.values()) for (const a of group) for (const b of group) if (a.id !== b.id) push(a, b, 'Same page')
-  const words = new Map(subjects.map(s => [s.id, titleWords(s.title)]))
+  const pagesWithTitle = new Map<string, number>()
+  for (const s of subjects) { const t = exactTitle(s.title); pagesWithTitle.set(t, (pagesWithTitle.get(t) ?? 0) + 1) }
+  // One distinctive word ("More", "Application guidelines") is not enough to call two pages one call.
+  const titled = subjects.filter(s => titleWords(s.title).length >= 2 && (pagesWithTitle.get(exactTitle(s.title)) ?? 0) <= CHROME_TITLE_PAGES)
+  const words = new Map(titled.map(s => [s.id, titleWords(s.title)]))
   const byWord = new Map<string, DuplicateSubject[]>()
-  for (const s of subjects) for (const w of words.get(s.id)!) byWord.set(w, [...(byWord.get(w) ?? []), s])
-  for (const a of subjects) {
+  for (const s of titled) for (const w of words.get(s.id)!) byWord.set(w, [...(byWord.get(w) ?? []), s])
+  for (const a of titled) {
     const seen = new Set<string>()
     for (const w of words.get(a.id)!) for (const b of byWord.get(w) ?? []) {
       if (b.id === a.id || seen.has(b.id)) continue
       seen.add(b.id)
       const sameDeadline = !a.deadline || !b.deadline || a.deadline === b.deadline
-      if (sameDeadline && !otherRound(a.title, b.title) && similarity(words.get(a.id)!, words.get(b.id)!) >= SAME_TITLE) push(a, b, 'Same title')
+      if (sameDeadline && !otherRound(a.title, b.title) && !otherCall(a.title, b.title) && similarity(words.get(a.id)!, words.get(b.id)!) >= SAME_TITLE) push(a, b, 'Same title')
     }
   }
   return out
