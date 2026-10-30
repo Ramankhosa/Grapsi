@@ -134,6 +134,11 @@ export function reservationFor(price: PriceSnapshot, inputTokens: number, maxOut
   )
 }
 
+/** The exact text a paid stage sends (also used to replay a stage against another model). */
+export function paidPromptText(input: Pick<PaidStageInput, 'systemPrompt' | 'prompt' | 'jsonSchema'>): string {
+  return `${input.systemPrompt.trim()}\n\nReturn only a JSON value matching this schema, without Markdown fences or commentary:\n${JSON.stringify(input.jsonSchema.schema)}\n\n${input.prompt.trim()}`
+}
+
 export function actualCost(price: PriceSnapshot, usage: Record<string, unknown>): bigint {
   const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   return (
@@ -176,7 +181,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
 
   // Some independent fallback providers do not consume response_format. Carry
   // the schema in the prompt too so they receive the same output contract.
-  const fullPrompt = `${input.systemPrompt.trim()}\n\nReturn only a JSON value matching this schema, without Markdown fences or commentary:\n${JSON.stringify(input.jsonSchema.schema)}\n\n${input.prompt.trim()}`
+  const fullPrompt = paidPromptText(input)
   // UTF-8 bytes conservatively bound text token counts, including the schema
   // and a protocol envelope. The cheap packing estimator is not a spend cap.
   const inputTokens = Buffer.byteLength(fullPrompt + JSON.stringify(input.jsonSchema), 'utf8') + 1024 + (input.documentTokenAllowance ?? 0)
