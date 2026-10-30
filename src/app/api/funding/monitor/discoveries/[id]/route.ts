@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { requireFundingOperatorRequest, requireFundingPublisherRequest } from '@/lib/fundingIntake/routeAuth'
+import { requireFundingOperatorRequest, requireFundingPublisherRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { prisma } from '@/lib/prisma'
+import { lifecycleAt } from '@/lib/monitor/evidence'
+import { localSuggestion } from '@/lib/monitor/localAnalysis'
 import { enqueueTask, operationKeys } from '@/lib/monitor/queue'
+import { duplicateCheckFor } from '@/lib/monitor/reviewList'
 import { MonitorConflictError } from '@/lib/monitor/writeGuard'
 import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
 import type { FundingDraftValues } from '@/lib/fundingIntake/types'
 export const runtime = 'nodejs'
 const schema = z.object({ action: z.enum(['extract', 'draft', 'publish', 'accept_update', 'reject', 'snooze', 'revalidate', 'label']), reviewRevision: z.number().int().nonnegative(), evidenceManifestVersion: z.number().int().nonnegative().optional(), callRevision: z.number().int().nonnegative().optional(), reason: z.string().max(1000).optional(), selectedFields: z.array(z.string()).max(35).optional(), ocrPages: z.array(z.number().int().min(1).max(40)).min(1).max(2).optional(), label: z.enum(['RELEVANT', 'IRRELEVANT', 'UNSURE']).optional() }).refine(v => v.action !== 'label' || !!v.label)
+/** One discovery with its evidence, the laptop's suggestion and the live duplicate check. */
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  const auth = await requireFundingReadOperatorRequest(request)
+  if ('response' in auth) return auth.response
+  const row = await prisma.monitorOpportunity.findUnique({ where: { id: params.id }, include: { site: { select: { host: true, display_name: true } }, primary_resource: { select: { title: true, canonical_url: true, last_validated_at: true, last_validation_status: true, call_score: true, call_band: true, call_signals: true } }, funding_call: { select: { id: true, title: true, revision: true, catalog_status: true } } } })
+  if (!row) return NextResponse.json({ message: 'Discovery not found' }, { status: 404 })
+  const payload = (row.field_evidence as { payload?: { fields?: Record<string, { value: unknown }> } } | null)?.payload
+  const [local_analysis, duplicates] = await Promise.all([row.primary_resource_id ? localSuggestion(row.primary_resource_id) : null, duplicateCheckFor(row.id)])
+  return NextResponse.json({ discovery: { ...row, local_analysis, duplicates, lifecycle: lifecycleAt(payload?.fields?.close_date?.value as string | null, payload?.fields?.open_date?.value as string | null, row.lifecycle) } }, { headers: { 'Cache-Control': 'private, no-store' } })
+}
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   const parsed = schema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return NextResponse.json({ message: 'Invalid review action' }, { status: 400 })

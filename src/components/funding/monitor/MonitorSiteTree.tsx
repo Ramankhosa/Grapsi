@@ -191,7 +191,7 @@ export default function MonitorSiteTree({ authedFetch, canOperate, initialSiteId
                 {node.detail && <span>{node.detail}</span>}
                 {node.lastSeenAt && <span>· {ago(node.lastSeenAt)}</span>}
                 {node.opportunity?.fundingCallId && (
-                  <a className="text-cobalt-700 underline" href={`/admin/funding/catalog/${node.opportunity.fundingCallId}`}>
+                  <a className="text-cobalt-700 underline" href={`/funding/calls/${node.opportunity.fundingCallId}`}>
                     Open catalog call
                   </a>
                 )}

@@ -7,6 +7,7 @@ import { OUTCOME_STYLES } from '@/components/funding/monitor/outcome'
 
 import { lifecycleAt } from './evidence'
 import { classifyOpportunity } from './outcomes'
+import { catalogueIndex, checkAgainst } from './reviewDuplicates'
 
 /** The Review lanes, as database filters. The list screen and the export share them. */
 export function laneWhere(lane: string): Prisma.MonitorOpportunityWhereInput {
@@ -46,7 +47,7 @@ function amount(fields: Fields) {
 
 const COLUMNS = [
   'Result', 'Title', 'Funder', 'Website', 'Call page', 'Deadline', 'Opens', 'Rolling', 'Award', 'Funding kinds', 'Eligible countries',
-  'Lifecycle', 'Review state', 'AI verdict', 'AI confidence', 'AI reason', 'Call score', 'Call score band', 'Call score signals', 'Catalogue call', 'Catalogue status',
+  'Lifecycle', 'Review state', 'AI verdict', 'AI confidence', 'AI reason', 'Call score', 'Call score band', 'Call score signals', 'Catalogue call', 'Catalogue status', 'Possible duplicates',
   'Found', 'Updated', 'Page last checked', 'Page status', 'Your decision', 'Reviewer notes', 'Discovery id',
 ]
 
@@ -66,22 +67,26 @@ export async function discoveryWorkbook(lane: string, generatedBy: string, now =
       include: {
         site: { select: { host: true, display_name: true } },
         funder: { select: { name: true } },
-        primary_resource: { select: { canonical_url: true, last_validated_at: true, last_validation_status: true, call_score: true, call_band: true, call_signals: true } },
+        primary_resource: { select: { canonical_url: true, final_url: true, last_validated_at: true, last_validation_status: true, call_score: true, call_band: true, call_signals: true } },
         funding_call: { select: { id: true, title: true, catalog_status: true } },
       },
     }),
   ])
   const sheet: unknown[][] = [COLUMNS]
+  const index = await catalogueIndex()
   const tally = new Map<string, number>()
   for (const row of rows) {
     const fields = ((row.field_evidence as { payload?: { fields?: Fields } } | null)?.payload?.fields ?? {}) as Fields
     const { outcome, detail } = classifyOpportunity(row, row.primary_resource)
     const label = OUTCOME_STYLES[outcome].label
     tally.set(label, (tally.get(label) ?? 0) + 1)
+    const title = asText(fields.scheme_title?.value) || row.title || ''
+    const funder = asText(fields.agency_name?.value) || row.funder?.name || ''
+    const twins = checkAgainst(index, { id: row.id, title, funder, urls: [row.primary_resource?.canonical_url, row.primary_resource?.final_url].filter((u): u is string => Boolean(u)), deadline: asText(fields.close_date?.value) || null, ownCallId: row.funding_call_id, host: row.site.host })
     sheet.push([
       label,
-      row.title || asText(fields.scheme_title?.value),
-      row.funder?.name || asText(fields.agency_name?.value) || row.site.display_name || '',
+      title,
+      funder || row.site.display_name || '',
       row.site.host,
       row.primary_resource?.canonical_url ?? '',
       asText(fields.close_date?.value),
@@ -100,6 +105,7 @@ export async function discoveryWorkbook(lane: string, generatedBy: string, now =
       (row.primary_resource?.call_signals ?? []).join('; '),
       row.funding_call?.title ?? '',
       row.funding_call?.catalog_status ?? '',
+      twins.map(t => `${t.reason}: ${t.title} (${t.origin.toLowerCase()}, ${t.status.toLowerCase()})`).join('; '),
       iso(row.created_at),
       iso(row.updated_at),
       iso(row.primary_resource?.last_validated_at),
@@ -125,6 +131,7 @@ export async function discoveryWorkbook(lane: string, generatedBy: string, now =
       ['Columns'],
       ['Result', 'Same colour-coded result as the screen: Funding found = a call was found and sent for review; Published = it reached the catalogue.'],
       ['Deadline, Opens, Award…', 'Drafted by the AI from the official page; check them against the page before publishing.'],
+      ['Possible duplicates', 'Catalogue calls on the same page or with the same title, checked when this file was made. The pipeline holds a duplicate back from drafting until a person decides.'],
       ['Your decision, Reviewer notes', 'Left empty for you. Decisions are made in Source Watch → Review; this file does not change anything.'],
     ],
   }
