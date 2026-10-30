@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
 import type { Prisma } from '@/lib/prisma-generated'
 
-import { pipelinePaused } from './pipelineSwitch'
+import { CRAWL_KINDS, pipelineSwitch } from './pipelineSwitch'
 import { NOW_UTC, msInterval, utc } from './sqlTime'
 
 /**
@@ -169,11 +169,14 @@ export async function claimNextTask(options: {
   kinds?: TaskKind[]
   leaseMs?: number
 }): Promise<Lease | null> {
-  // The master switch is off: idle, keeping every queued task for later.
-  if (await pipelinePaused()) return null
+  // The master switch: stopped claims nothing; crawl-paused claims everything
+  // but the tasks that fetch new pages. Queued tasks wait either way.
+  const state = await pipelineSwitch()
+  if (state.paused) return null
+  const skipKinds: string[] = state.crawlPaused ? [...CRAWL_KINDS] : []
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      return await claimOnce(options)
+      return await claimOnce({ ...options, skipKinds })
     } catch (error) {
       if (!isUniqueViolation(error)) throw error
       // Another claimer took this site's slot between our check and update.
@@ -182,9 +185,10 @@ export async function claimNextTask(options: {
   return null
 }
 
-async function claimOnce(options: { owner: string; kinds?: TaskKind[]; leaseMs?: number }): Promise<Lease | null> {
+async function claimOnce(options: { owner: string; kinds?: TaskKind[]; leaseMs?: number; skipKinds: string[] }): Promise<Lease | null> {
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS
   const kinds = options.kinds ?? null
+  const skipKinds = options.skipKinds
 
   // Expired leases that have used their attempts go to the dead letters
   // instead of being reclaimed forever.
@@ -205,6 +209,7 @@ async function claimOnce(options: { owner: string; kinds?: TaskKind[]; leaseMs?:
           OR (t."status" = 'RUNNING' AND t."lease_until" < ${NOW_UTC})
         )
         AND (${kinds}::text[] IS NULL OR t."kind" = ANY(${kinds}::text[]))
+        AND NOT (t."kind" = ANY(${skipKinds}::text[]))
         AND (t."site_id" IS NULL OR s."status" = 'ACTIVE')
         -- A site with any other RUNNING task is busy, even if that task's
         -- lease expired: it is reclaimed itself rather than run beside.

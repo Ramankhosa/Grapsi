@@ -23,7 +23,7 @@ import MonitorDiscoveries from './MonitorDiscoveries'
 import MonitorEvidence from './MonitorEvidence'
 import MonitorHealth from './MonitorHealth'
 import MonitorOperators from './MonitorOperators'
-import { PipelineStoppedBanner, PipelineSwitchControl, type PipelineSwitchState } from './MonitorPipelineSwitch'
+import { PipelineStoppedBanner, PipelineSwitchControl, type PipelineMode, type PipelineSwitchState } from './MonitorPipelineSwitch'
 import MonitorQuality from './MonitorQuality'
 import MonitorQueue from './MonitorQueue'
 import MonitorSites from './MonitorSites'
@@ -359,12 +359,16 @@ export default function SourceMonitorPage() {
     return `Check failed: ${data.message ?? 'unknown error'}`
   }
 
-  async function switchPipeline(paused: boolean, reason?: string) {
-    const response = await authedFetch('/api/funding/monitor/switch', { method: 'POST', body: JSON.stringify({ paused, reason }) })
+  async function switchPipeline(mode: PipelineMode, reason?: string) {
+    const response = await authedFetch('/api/funding/monitor/switch', { method: 'POST', body: JSON.stringify({ mode, reason }) })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.message ?? 'Could not change the switch')
     setPipelineSwitch(data)
-    setNotice(paused ? 'Source Watch stopped. Running tasks finish the page in hand; nothing new starts.' : 'Source Watch started again. Waiting work resumes within a minute.')
+    setNotice({
+      RUNNING: 'Source Watch is running again. Waiting work resumes within a minute.',
+      CRAWL_PAUSED: 'Crawling paused. Screening and extraction keep working through the queue.',
+      STOPPED: 'Source Watch stopped. Running tasks finish the page in hand; nothing new starts.',
+    }[mode])
   }
 
   async function toggleStatus(source: MonitorSource) {

@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 
 import { EXECUTABLE_KINDS, executeTask } from './execute'
-import { pipelinePaused } from './pipelineSwitch'
+import { pipelineSwitch } from './pipelineSwitch'
 import { PRIORITY, claimNextTask, enqueueTask, operationKeys } from './queue'
 import { defaultSafeFetch } from './safeFetch'
 import { adaptiveCadenceDays, cadenceDays, nextCheckAt, startOfIstDay } from './schedule'
@@ -33,7 +33,10 @@ export interface PlanCounts {
 
 export async function planDueChecks(now = new Date(), limit = 500): Promise<PlanCounts> {
   const counts: PlanCounts = { due: 0, enqueued: 0, sitesAttached: 0, urlIndexQueued: false }
-  if (await pipelinePaused()) return counts
+  const state = await pipelineSwitch()
+  if (state.paused) return counts
+  // Crawl paused: plan no source check, revisit or discovery; the rest still runs.
+  const crawl = !state.crawlPaused
 
   // Sources created while the legacy engine ran have no site yet.
   const orphans = await prisma.monitoredSource.findMany({ where: { site_id: null }, select: { id: true, url: true }, take: 200 })
@@ -47,7 +50,7 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
     }
   }
 
-  const due = await prisma.monitoredSource.findMany({
+  const due = !crawl ? [] : await prisma.monitoredSource.findMany({
     where: {
       status: 'ACTIVE',
       site: { status: 'ACTIVE' },
@@ -103,6 +106,8 @@ export async function planDueChecks(now = new Date(), limit = 500): Promise<Plan
     await reconcileHandoffs()
     await resumeAfterLaptop()
     await prisma.monitorOpportunity.updateMany({ where: { review_state: 'SNOOZED', snoozed_until: { lte: now } }, data: { review_state: 'PENDING', snoozed_until: null, review_revision: { increment: 1 } } })
+  }
+  if (process.env.MONITOR_PIPELINE_ENABLED === 'true' && crawl) {
     const siteCursor = (await prisma.monitorSyncCursor.findUnique({ where: { name: 'discovery-planner' } }))?.cursor as { after?: string } | undefined
     const sites = await prisma.monitorSite.findMany({ where: { status: 'ACTIVE', ...(siteCursor?.after ? { id: { gt: siteCursor.after } } : {}) }, take: 500, orderBy: { id: 'asc' } })
     // One bounded exploration occurrence per site/week. Daily listing checks
