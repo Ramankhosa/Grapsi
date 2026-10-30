@@ -15,7 +15,7 @@ async function main() {
     if (!context?.planId) throw new Error('Platform billing has no active control plan')
     const stages = [
       { code: 'FUNDING_SOURCE_TRIAGE', name: 'Source Watch Screening', primary: 'glm-5.3-flash', fallback: 'gemini-3.1-flash', input: 32000, output: 4000 },
-      { code: 'FUNDING_SOURCE_EXTRACT', name: 'Source Watch Evidence Extraction', primary: 'gpt-5.2', fallback: 'gemini-2.5-pro', input: 128000, output: 6000 },
+      { code: 'FUNDING_SOURCE_EXTRACT', name: 'Source Watch Evidence Extraction', primary: 'deepseek-v4-flash', fallback: 'gpt-5.2', input: 128000, output: 16000 },
       { code: 'FUNDING_SOURCE_OCR', name: 'Source Watch Selected Page OCR', primary: 'gemini-3.1-flash', fallback: 'claude-haiku-4.5', input: 128000, output: 12000 },
     ]
     await prisma.$transaction(async tx => {
