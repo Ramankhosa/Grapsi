@@ -5,6 +5,7 @@ import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { isV2Engine, monitorEngine } from '@/lib/monitor/engine'
 import { dispatchPendingEvents, emitEvent } from '@/lib/monitor/events'
 import { runPaidBatches } from '@/lib/monitor/paidBatch'
+import { pipelinePaused } from '@/lib/monitor/pipelineSwitch'
 import { WORKER_STALE_MS, freshestWorkerAgeMs, resumeAfterLaptop } from '@/lib/monitor/planner'
 import { prisma } from '@/lib/prisma'
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     }
     const dispatched = await dispatchPendingEvents()
     // Pages the laptop has judged go back to screening within 15 minutes.
-    const resumedAfterLaptop = process.env.MONITOR_PIPELINE_ENABLED === 'true' ? await resumeAfterLaptop() : 0
+    const resumedAfterLaptop = process.env.MONITOR_PIPELINE_ENABLED === 'true' && !await pipelinePaused() ? await resumeAfterLaptop() : 0
     // Half-price provider batches: submit queued requests, collect finished ones. This runs even
     // with MONITOR_PAID_BATCH off (which only stops new requests queuing), so none is stranded.
     const paidBatches = await runPaidBatches().catch(error => ({ error: error instanceof Error ? error.message : String(error) }))

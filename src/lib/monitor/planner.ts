@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 
 import { EXECUTABLE_KINDS, executeTask } from './execute'
+import { pipelinePaused } from './pipelineSwitch'
 import { PRIORITY, claimNextTask, enqueueTask, operationKeys } from './queue'
 import { defaultSafeFetch } from './safeFetch'
 import { adaptiveCadenceDays, cadenceDays, nextCheckAt, startOfIstDay } from './schedule'
@@ -32,6 +33,7 @@ export interface PlanCounts {
 
 export async function planDueChecks(now = new Date(), limit = 500): Promise<PlanCounts> {
   const counts: PlanCounts = { due: 0, enqueued: 0, sitesAttached: 0, urlIndexQueued: false }
+  if (await pipelinePaused()) return counts
 
   // Sources created while the legacy engine ran have no site yet.
   const orphans = await prisma.monitoredSource.findMany({ where: { site_id: null }, select: { id: true, url: true }, take: 200 })

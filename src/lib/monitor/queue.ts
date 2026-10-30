@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
 import type { Prisma } from '@/lib/prisma-generated'
 
+import { pipelinePaused } from './pipelineSwitch'
 import { NOW_UTC, msInterval, utc } from './sqlTime'
 
 /**
@@ -168,6 +169,8 @@ export async function claimNextTask(options: {
   kinds?: TaskKind[]
   leaseMs?: number
 }): Promise<Lease | null> {
+  // The master switch is off: idle, keeping every queued task for later.
+  if (await pipelinePaused()) return null
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       return await claimOnce(options)

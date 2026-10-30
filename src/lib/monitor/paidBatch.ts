@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import type { Prisma } from '@/lib/prisma-generated'
 
 import { settleAttempt, type PriceSnapshot } from './budget'
+import { pipelinePaused } from './pipelineSwitch'
 import { validateBatch } from './candidates'
 import { ROUTING_POLICY_VERSION, actualCost, jsonResponseText } from './paidCall'
 import { PRIORITY } from './queue'
@@ -127,7 +128,8 @@ export async function runPaidBatches(client: BatchClient | null = null, now = ne
 
 async function batchRun(client: BatchClient | null, now: Date): Promise<BatchRunCounts> {
   const counts: BatchRunCounts = { submitted: 0, jobs: 0, answered: 0, failed: 0, filed: 0 }
-  const queued = await prisma.monitorLlmAttempt.findMany({ where: { status: 'BATCH_QUEUED' }, orderBy: { created_at: 'asc' }, take: 1000 })
+  // Switched off: submit nothing new, but still collect jobs already paid for.
+  const queued = await pipelinePaused() ? [] : await prisma.monitorLlmAttempt.findMany({ where: { status: 'BATCH_QUEUED' }, orderBy: { created_at: 'asc' }, take: 1000 })
   const open = await prisma.monitorPaidBatch.findMany({ where: { state: 'SUBMITTED' }, orderBy: { submitted_at: 'asc' }, take: 50 })
   if (!queued.length && !open.length) return counts
   const api = client ?? geminiBatchClient()

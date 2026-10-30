@@ -7,6 +7,7 @@ import type { ContentPart } from '@/lib/metering/types'
 import { prisma } from '@/lib/prisma'
 
 import { MonitorConfigError, resolveMonitorActor } from './actor'
+import { pipelinePaused } from './pipelineSwitch'
 import {
   markDispatched,
   markUncertain,
@@ -181,6 +182,7 @@ export async function stageModels(stage: string): Promise<{ models: string[]; ma
 
 export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResult> {
   if (process.env.MONITOR_PAID_WORK_ENABLED !== 'true') throw new MonitorConfigError('PAID_WORK_DISABLED', 'Paid Source Watch work is disabled until its actor, provider and budgets are verified')
+  if (await pipelinePaused()) throw new MonitorConfigError('PIPELINE_PAUSED', 'Source Watch is switched off; paid work waits until it is switched on')
   const actor = await resolveMonitorActor()
   const models = (await stageModels(input.stage)).models.filter(m => !input.excludeModels?.includes(m))
   if (!models.length) throw new PaidStageFailedError(`${input.stage} has no model left to try`, 'CONFIG', false)

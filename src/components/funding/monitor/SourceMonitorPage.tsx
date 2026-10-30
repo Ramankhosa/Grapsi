@@ -23,6 +23,7 @@ import MonitorDiscoveries from './MonitorDiscoveries'
 import MonitorEvidence from './MonitorEvidence'
 import MonitorHealth from './MonitorHealth'
 import MonitorOperators from './MonitorOperators'
+import { PipelineStoppedBanner, PipelineSwitchControl, type PipelineSwitchState } from './MonitorPipelineSwitch'
 import MonitorQuality from './MonitorQuality'
 import MonitorQueue from './MonitorQueue'
 import MonitorSites from './MonitorSites'
@@ -201,6 +202,7 @@ export default function SourceMonitorPage() {
   const [view, setView] = useState<View | null>(requestedView)
   const [subs, setSubs] = useState<Record<string, string>>(requestedView && requestedSub ? { [requestedView]: requestedSub } : {})
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [pipelineSwitch, setPipelineSwitch] = useState<PipelineSwitchState | null>(null)
   const [engine, setEngine] = useState<MonitorEngine>('legacy')
   const [queueState, setQueueState] = useState('NEW')
   const [changes, setChanges] = useState<MonitorChange[]>([])
@@ -248,15 +250,19 @@ export default function SourceMonitorPage() {
       setChanges(changesData.changes ?? [])
       setSources(sourcesData.sources ?? [])
       // Which engine runs decides what "Check now" does and what Review shows.
-      const [healthResponse, summaryResponse] = await Promise.all([
+      const [healthResponse, summaryResponse, switchResponse] = await Promise.all([
         authedFetch('/api/funding/monitor/liveness'),
         authedFetch('/api/funding/monitor/pipeline'),
+        authedFetch('/api/funding/monitor/switch'),
       ])
+      let v2 = false
       if (healthResponse.ok || healthResponse.status === 503) {
         const liveness = await healthResponse.json()
-        setEngine(liveness.engine === 'v2' ? 'v2' : 'legacy')
+        v2 = liveness.engine === 'v2'
+        setEngine(v2 ? 'v2' : 'legacy')
       }
       setSummary(summaryResponse.ok ? await summaryResponse.json() : null)
+      setPipelineSwitch(v2 && switchResponse.ok ? await switchResponse.json() : null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load monitoring data.')
     } finally {
@@ -353,6 +359,14 @@ export default function SourceMonitorPage() {
     return `Check failed: ${data.message ?? 'unknown error'}`
   }
 
+  async function switchPipeline(paused: boolean, reason?: string) {
+    const response = await authedFetch('/api/funding/monitor/switch', { method: 'POST', body: JSON.stringify({ paused, reason }) })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message ?? 'Could not change the switch')
+    setPipelineSwitch(data)
+    setNotice(paused ? 'Source Watch stopped. Running tasks finish the page in hand; nothing new starts.' : 'Source Watch started again. Waiting work resumes within a minute.')
+  }
+
   async function toggleStatus(source: MonitorSource) {
     setBusy(true)
     try {
@@ -429,7 +443,8 @@ export default function SourceMonitorPage() {
             waiting there, and red means something needs fixing.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <PipelineSwitchControl state={pipelineSwitch} canOperate={canOperate} onChange={switchPipeline} />
           <button className="cb-btn-secondary cb-btn-sm" onClick={() => void load()} disabled={busy}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
@@ -445,6 +460,8 @@ export default function SourceMonitorPage() {
           )}
         </div>
       </header>
+
+      <PipelineStoppedBanner state={pipelineSwitch} />
 
       <nav aria-label="Pipeline stages" className="cb-scroll-x -mx-1 overflow-x-auto px-1 pb-1">
         <ol className="grid min-w-[46rem] grid-cols-5 gap-0">

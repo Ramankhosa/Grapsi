@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { runCheck } from '@/lib/monitor/checker'
 import { isV2Engine } from '@/lib/monitor/engine'
+import { pipelinePaused } from '@/lib/monitor/pipelineSwitch'
 import { requestCheckNow } from '@/lib/monitor/planner'
 
 export const runtime = 'nodejs'
@@ -20,6 +21,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if ('response' in auth) return auth.response
 
   if (isV2Engine()) {
+    if (await pipelinePaused()) return NextResponse.json({ status: 'error', message: 'Source Watch is switched off. Switch it on to run checks.' }, { status: 409 })
     try {
       const queued = await requestCheckNow(params.id)
       return NextResponse.json({ status: 'queued', taskId: queued.taskId, generation: queued.generation }, { status: 202 })
