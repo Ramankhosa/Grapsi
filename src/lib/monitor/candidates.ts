@@ -5,7 +5,7 @@ import { readResource } from './content'
 import { fingerprint, meaningfulText } from './hashing'
 import { matchCatalog } from './matching'
 import { BatchPendingError, estimateTokens, ROUTING_POLICY_VERSION, runPaidStage, recordInvalidOutput, type PaidStageInput, type PaidStageResult } from './paidCall'
-import { completeTaskInTx, enqueueTask, withFence, type Db, type Lease } from './queue'
+import { PRIORITY, completeTaskInTx, enqueueTask, withFence, type Db, type Lease } from './queue'
 import { RELEVANCE_VERSION, scoreShortlist } from './relevance'
 import type { SafeFetch } from './safeFetch'
 import type { Renderer } from './browser'
@@ -340,7 +340,7 @@ async function applyDecision(lease: Lease, opportunityId: string, resourceId: st
     if ((autoDraft || process.env.MONITOR_EXTRACTION_ENABLED === 'true') && decision.confidence >= 0.9 && ['NEW_OPPORTUNITY', 'UPDATE_TO_EXISTING'].includes(decision.verdict) && !reviewed) {
       const revision = current.review_revision + (changed ? 1 : 0)
       await enqueueTask(tx, { kind: 'EXTRACT', operationKey: `extract-auto:${opportunityId}:${inputKey}:${fullHash}`, siteId: resource.site_id, opportunityId,
-        payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: match.type==='UPDATE_OF'?30:80 })
+        payload: { opportunityId, reviewRevision: revision, draft: autoDraft }, priority: PRIORITY.EXTRACT })
     }
     // A page screened as not funding is only re-read monthly (and less as it
     // stays unchanged); funding pages keep the three-day rhythm.

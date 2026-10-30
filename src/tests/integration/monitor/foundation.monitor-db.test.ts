@@ -11,6 +11,7 @@ import { databaseHostPacer } from '@/lib/monitor/hostPacing'
 import { planDueChecks, requestCheckNow } from '@/lib/monitor/planner'
 import {
   LeaseLostError,
+  PRIORITY,
   claimNextTask,
   completeTask,
   enqueueTask,
@@ -201,6 +202,17 @@ describe('leases and fencing', () => {
     expect(first?.siteId).toBe(site.id)
     expect(second?.siteId).toBe(other.site.id)
     expect(await claimNextTask({ owner: 'w3' })).toBeNull()
+  })
+
+  it('automatic extraction runs ahead of an aged screening backlog', async () => {
+    const { site } = await makeSource('aged-backlog.example')
+    const other = await makeSource('extract-site.example')
+    const aged = await enqueueTask(db, { kind: 'TRIAGE', operationKey: 'triage:aged', payload: {}, siteId: site.id, priority: 80 })
+    const sevenHoursAgo = new Date(Date.now() - 7 * 3_600_000)
+    await db.monitorTask.update({ where: { id: aged.id! }, data: { created_at: sevenHoursAgo, available_at: sevenHoursAgo } })
+    await enqueueTask(db, { kind: 'EXTRACT', operationKey: 'extract:fresh', payload: {}, siteId: other.site.id, priority: PRIORITY.EXTRACT })
+    expect((await claimNextTask({ owner: 'w1' }))?.kind).toBe('EXTRACT')
+    expect((await claimNextTask({ owner: 'w2' }))?.kind).toBe('TRIAGE')
   })
 
   it('concurrent claimers never run two tasks of one site at once', async () => {

@@ -31,3 +31,21 @@ test('existing date safeguards remain independent of title capitalization',()=>{
  assert(!P.applicationDate('opensOn','2026-11-18','Proposals accepted until November 18th, 2026.'));assert(!P.groundedDate('2026-11-10','Deadline 10/11/2026'));assert(!P.groundedDate('2026-10-31','Applications close October 31'));assert(!P.applicationDate('closesOn','2026-11-30','Project completion 30 November 2026'));
  const page=P.packPage({title:'Calls',url:'https://unit-test.invalid/calls',text:'Pilot Grant\nApplications close 30 November 2026.\nResearch Grant\nApplications close 31 December 2026.'});const details=P.validateDetails({multipleCalls:true,candidates:[{title:'Pilot Grant',titleQuote:'Pilot Grant',closesOn:'2026-12-31',closesQuote:'Applications close 30 November 2026.'},{title:'Research Grant',titleQuote:'Research Grant',closesOn:'2026-12-31',closesQuote:'Applications close 31 December 2026.'}]},page);assert(details.multipleCalls);assert.equal(details.candidates[0].closesOn,null);assert.equal(details.candidates[1].closesOn,'2026-12-31');
 });
+test('deadlines and openings written in the funders\' own languages are recognised',()=>{
+ // 30 Oct 2026: a correct gpt-5.2 close date from sls.se was rejected for its Swedish wording.
+ for(const [value,quote] of [
+  ['2026-02-01','Sista ansökningsdag är 1 februari 2026.'],['2026-02-01','Bewerbungsschluss: 1. Februar 2026'],['2026-03-15','Ansøgningsfrist: 15. marts 2026'],
+  ['2026-02-01','Date limite : 1er février 2026'],['2026-02-01','Plazo de presentación: hasta el 1 de febrero de 2026'],['2026-05-31','Scadenza: 31 maggio 2026'],
+  ['2026-09-30','Søknadsfrist 30. september 2026'],['2026-12-01','Sluitingsdatum: 1 december 2026'],['2026-08-15','Prazo de submissão: 15 de agosto de 2026'],
+ ])assert(P.applicationDate('closesOn',value,quote),quote);
+ assert(P.applicationDate('opensOn','2026-01-10','Ansökan öppnar 10 januari 2026.'));
+ assert(P.applicationDate('opensOn','2026-03-01','Bewerbungsbeginn ab dem 1. März 2026'));
+ // A Swedish opening is not a deadline, a deadline is not an opening, and the wrong day never passes.
+ assert(!P.applicationDate('closesOn','2026-01-10','Ansökan öppnar 10 januari 2026.'));
+ assert(!P.applicationDate('opensOn','2026-02-01','Sista ansökningsdag är 1 februari 2026.'));
+ assert(!P.applicationDate('closesOn','2026-02-02','Sista ansökningsdag är 1 februari 2026.'));
+ assert(!P.applicationDate('closesOn','2026-02-01','Ansökan öppnar 10 januari 2026, sista ansökningsdag 1 februari 2026.'));
+ // English is unchanged.
+ assert(P.applicationDate('closesOn','2026-11-30','Applications close on 30 November 2026.'));
+ assert(!P.applicationDate('closesOn','2026-11-30','Project end date: 30 November 2026.'));
+});

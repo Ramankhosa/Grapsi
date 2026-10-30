@@ -63,8 +63,13 @@ export const operationKeys = {
   housekeeping: (day: string) => `housekeeping:${day}`,
 }
 
-/** Priorities: lower runs first. */
-export const PRIORITY = { URGENT: 10, CHECK_NOW: 20, NORMAL: 100, BACKGROUND: 200 } as const
+/**
+ * Priorities: lower runs first. A task waiting more than 6 hours is treated as
+ * 30 at most, so a backlog runs oldest-first. EXTRACT sits below that line: it
+ * is the step that turns a found call into a draft, and behind an aged backlog
+ * of screening it barely ran (3 in a day on 30 Oct 2026, 193 waiting).
+ */
+export const PRIORITY = { URGENT: 10, CHECK_NOW: 20, EXTRACT: 25, NORMAL: 100, BACKGROUND: 200 } as const
 
 export const DEFAULT_LEASE_MS = 2 * 60 * 1000
 

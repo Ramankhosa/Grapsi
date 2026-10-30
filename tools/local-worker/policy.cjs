@@ -34,23 +34,44 @@ const POLICY_HASH = sha256(JSON.stringify({version:'local-screen-2',model:MODEL.
 const RESULT_SCHEMA={type:'object',additionalProperties:false,properties:{type:{type:'string',enum:TYPES},candidates:{type:'array',maxItems:2,items:{type:'object',additionalProperties:false,properties:{title:{type:'string',maxLength:240},titleQuote:{type:'string',maxLength:360},invitationQuote:{type:['string','null'],maxLength:240},opensOn:{type:['string','null']},opensQuote:{type:['string','null'],maxLength:180},closesOn:{type:['string','null']},closesQuote:{type:['string','null'],maxLength:180}},required:['title','titleQuote','invitationQuote','opensOn','opensQuote','closesOn','closesQuote']}},multipleCalls:{type:'boolean'},needsMoreEvidence:{type:'boolean'}},required:['type','candidates','multipleCalls','needsMoreEvidence']};
 const {packPage}=require('./evidence-packing.cjs');
 const normal=value=>String(value??'').normalize('NFC').replace(/\s+/g,' ').trim();
+// Month names in English and the languages of the monitored funders (de, fr, es, it, pt, nl, sv, da, no):
+// "Sista ansökningsdag är 1 februari 2026" was rejected on 30 Oct 2026. Day-first forms take "1.", "1er", "1 de".
+const MONTH_NAMES=[
+  ['january','januar','janvier','enero','gennaio','janeiro','januari'],
+  ['february','februar','février','fevrier','febrero','febbraio','fevereiro','februari'],
+  ['march','märz','maerz','marz','marts','mars','marzo','março','marco','maart'],
+  ['april','avril','abril','aprile'],
+  ['may','mai','mayo','maggio','maio','mei','maj'],
+  ['june','juni','juin','junio','giugno','junho'],
+  ['july','juli','juillet','julio','luglio','julho'],
+  ['august','août','aout','agosto','augustus','augusti'],
+  ['september','sept','septembre','septiembre','setiembre','settembre','setembro'],
+  ['october','oktober','octobre','octubre','ottobre','outubro'],
+  ['november','novembre','noviembre','novembro'],
+  ['december','dezember','décembre','decembre','diciembre','dicembre','dezembro','desember'],
+];
+const monthName=i=>'(?:'+MONTH_NAMES[i].join('|')+'|'+MONTH_NAMES[i][0].slice(0,3)+'\\.?)';
+const englishMonth=i=>'(?:'+MONTH_NAMES[i][0]+'|'+MONTH_NAMES[i][0].slice(0,3)+'\\.?)';
+const ANY_MONTH='(?:'+MONTH_NAMES.map((_,i)=>monthName(i)).join('|')+')',ANY_ENGLISH_MONTH='(?:'+MONTH_NAMES.map((_,i)=>englishMonth(i)).join('|')+')';
+const DAY_SUFFIX='(?:st|nd|rd|th|er|\\.)?',DAY_MONTH_GAP='\\s+(?:of\\s+|de\\s+)?',MONTH_YEAR_GAP='[,]?\\s+(?:de\\s+)?';
+// Deadline and opening wording beyond English (the English rules below are unchanged).
+const CLOSE_INTL=/sista (?:ansökningsdag|ansökningsdagen|dag)|ansökningstiden (?:stänger|går ut)|ansøgningsfrist|søknadsfrist|frist|einsendeschluss|bewerbungsschluss|date limite|clôture|cloture|jusqu['’]au|au plus tard|fecha l[ií]mite|plazo de (?:presentaci|solicitud)|cierre de (?:la )?convocatoria|scadenza|entro il|termine (?:ultimo|di presentazione|per la presentazione)|data limite|prazo (?:de|para) (?:submiss|inscri|candidatur|apresenta)|sluitingsdatum|uiterlijk|senast|senest|spätestens|määräaika|viimeistään/;
+const OPEN_INTL=/öppnar|åbner|åpner|öffnet|ouverture|apertura|abertura|bewerbungsbeginn|ab dem|à partir du|a partir del|a partire dal|från och med|fra og med|vanaf|alkaa/;
 function groundedDate(value,quote){
   if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value)return false;
   const [year,month,day]=value.split('-').map(Number),text=normal(quote).toLowerCase();
   if(new RegExp('\\b'+value+'\\b').test(text))return true;
-  const name=['january','february','march','april','may','june','july','august','september','october','november','december'][month-1],m='(?:'+name+'|'+name.slice(0,3)+'\\.?)';
-  if(new RegExp('\\b0?'+day+'(?:st|nd|rd|th)?\\s+(?:of\\s+)?'+m+'[,]?\\s+'+year+'\\b').test(text)||new RegExp('\\b'+m+'\\s+0?'+day+'(?:st|nd|rd|th)?[,]?\\s+'+year+'\\b').test(text))return true;
+  if(new RegExp('\\b0?'+day+DAY_SUFFIX+DAY_MONTH_GAP+monthName(month-1)+MONTH_YEAR_GAP+year+'\\b').test(text)||new RegExp('\\b'+englishMonth(month-1)+'\\s+0?'+day+'(?:st|nd|rd|th)?[,]?\\s+'+year+'\\b').test(text))return true;
   return [...text.matchAll(/\b(\d{1,2})[./-](\d{1,2})[./-](20\d{2})\b/g)].some(x=>Number(x[3])===year&&((Number(x[1])>12&&Number(x[1])===day&&Number(x[2])===month)||(Number(x[2])>12&&Number(x[2])===day&&Number(x[1])===month)||(day===month&&Number(x[1])===day&&Number(x[2])===month)));
 }
 function applicationDate(key,value,quote){
  const text=normal(quote).toLowerCase();if(!groundedDate(value,text))return false;
  // Separate date labels prevent an opening date from borrowing a later deadline.
- const months='(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
- const dates=text.match(new RegExp('\\b20\\d{2}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[./-]\\d{1,2}[./-]20\\d{2}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?'+months+'[,]?\\s+20\\d{2}\\b|\\b'+months+'\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+20\\d{2}\\b','g'))??[];
+ const dates=text.match(new RegExp('\\b20\\d{2}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[./-]\\d{1,2}[./-]20\\d{2}\\b|\\b\\d{1,2}'+DAY_SUFFIX+DAY_MONTH_GAP+ANY_MONTH+MONTH_YEAR_GAP+'20\\d{2}\\b|\\b'+ANY_ENGLISH_MONTH+'\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+20\\d{2}\\b','g'))??[];
  if(!dates.length||dates.some(date=>!groundedDate(value,date)))return false;
  if(/project (?:end|completion)|reporting|deliverable|ceremony|event date/.test(text)&&!/appl|proposal|submission|nomination/.test(text))return false;
- if(key==='opensOn'||key==='open_date')return !/until|deadline|clos|last date/.test(text)&&/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text);
- return /deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text);
+ if(key==='opensOn'||key==='open_date')return !/until|deadline|clos|last date/.test(text)&&!CLOSE_INTL.test(text)&&(/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text)||OPEN_INTL.test(text));
+ return /deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text)||CLOSE_INTL.test(text);
 }
 function validateDetails(value,page){
   const text=normal(page.title+'\n'+page.text),warnings=[],candidates=[];
