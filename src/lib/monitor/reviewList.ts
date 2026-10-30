@@ -73,16 +73,25 @@ export async function reviewLane(lane: string, options: { q?: string; cap?: numb
     { site: { host: { contains: q, mode: 'insensitive' } } },
   ] } : {}
   const where = { ...laneWhere(lane), ...search }
-  const [total, rows] = await Promise.all([
+  const select = {
+    id: true, title: true, review_state: true, processing_state: true, triage_verdict: true, triage_confidence: true, triage_reason: true, relevance_outcome: true,
+    match_type: true, lifecycle: true, stale_evidence: true, created_at: true, funding_call_id: true,
+    site: { select: { host: true } }, funder: { select: { name: true } },
+    primary_resource: { select: { title: true, canonical_url: true, final_url: true, last_validation_status: true } },
+    funding_call: { select: { id: true, title: true, catalog_status: true } },
+  } satisfies Prisma.MonitorOpportunitySelect
+  // Readable pages fill the list first: 30 Oct 2026 production held 5,400
+  // pending rows, 4,361 of them unreadable, and newest-first alone pushed
+  // older found calls past the cap.
+  const unreadable: Prisma.MonitorOpportunityWhereInput = { processing_state: 'NEEDS_EVIDENCE' }
+  const [total, first] = await Promise.all([
     prisma.monitorOpportunity.count({ where }),
-    prisma.monitorOpportunity.findMany({ where, orderBy: { created_at: 'desc' }, take: cap, select: {
-      id: true, title: true, review_state: true, processing_state: true, triage_verdict: true, triage_confidence: true, triage_reason: true, relevance_outcome: true,
-      match_type: true, lifecycle: true, stale_evidence: true, created_at: true, funding_call_id: true,
-      site: { select: { host: true } }, funder: { select: { name: true } },
-      primary_resource: { select: { title: true, canonical_url: true, final_url: true, last_validation_status: true } },
-      funding_call: { select: { id: true, title: true, catalog_status: true } },
-    } }),
+    prisma.monitorOpportunity.findMany({ where: { AND: [where, { NOT: unreadable }] }, orderBy: { created_at: 'desc' }, take: cap, select }),
   ])
+  const rest = first.length < cap
+    ? await prisma.monitorOpportunity.findMany({ where: { AND: [where, unreadable] }, orderBy: { created_at: 'desc' }, take: cap - first.length, select })
+    : []
+  const rows = [...first, ...rest]
   const ids = rows.map(r => r.id)
   // Only the handful of extracted facts, not the quoted evidence behind them.
   const factRows = ids.length ? await prisma.$queryRaw<FactRow[]>`
