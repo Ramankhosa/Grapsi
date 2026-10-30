@@ -20,7 +20,7 @@ async function main() {
   const { TRIAGE_SYSTEM_PROMPT, TRIAGE_SCHEMA } = await import('../src/lib/monitor/candidates')
   const { paidPromptText, jsonResponseText } = await import('../src/lib/monitor/paidCall')
   const { GeminiProvider } = await import('../src/lib/metering/providers/gemini-provider')
-  const provider = new GeminiProvider({ apiKey: process.env.GOOGLE_AI_API_KEY } as never)
+  const provider = new GeminiProvider({ apiKey: process.env.GOOGLE_AI_API_KEY, baseURL: 'https://generativelanguage.googleapis.com/v1beta' } as never)
   const before = TRIAGE_SYSTEM_PROMPT.split(' The request gives')[0]
   try {
     const items: Array<Record<string, unknown>> = []
