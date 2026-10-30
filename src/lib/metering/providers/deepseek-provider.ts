@@ -114,6 +114,8 @@ export class DeepSeekProvider implements LLMProvider {
             ? request.parameters.thinking
             : { type: 'enabled' }
       }
+      // V4 models think unless told not to (checked 30 Oct 2026), so "off" must be sent.
+      if (thinkingDisabled && !('thinking' in extraBody)) extraBody.thinking = { type: 'disabled' }
 
       if (thinkingEnabled && maxTokens > 64000) {
         maxTokens = 64000
@@ -130,12 +132,14 @@ export class DeepSeekProvider implements LLMProvider {
 
       const responseFormat = request.parameters?.response_format || request.parameters?.responseFormat
       if (responseFormat && typeof responseFormat === 'object') {
-        createParams.response_format = responseFormat
+        // The API refuses json_schema ("This response_format type is unavailable now");
+        // callers carry the schema in the prompt, so ask for plain JSON instead.
+        createParams.response_format = (responseFormat as { type?: string }).type === 'json_schema' ? { type: 'json_object' } : responseFormat
       }
 
-      if (Object.keys(extraBody).length > 0) {
-        createParams.extra_body = extraBody
-      }
+      // The Node SDK sends `extra_body` literally (only the Python SDK merges it),
+      // so these fields go at the top level where the API reads them.
+      Object.assign(createParams, extraBody)
 
       if (request.stream?.onToken) {
         return await collectOpenAICompatibleChatCompletionStream({

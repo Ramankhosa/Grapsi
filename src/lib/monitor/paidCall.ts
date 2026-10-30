@@ -78,6 +78,18 @@ export interface PaidStageInput {
   memberKeys?: string[]
   /** Batch mode only: what the batch collector needs to file each answer (e.g. screening's page ids and cache keys). */
   batchMembers?: Array<Record<string, unknown>>
+  /** Models to pass over, e.g. the one whose answer is being second-guessed. */
+  excludeModels?: string[]
+}
+
+/**
+ * DeepSeek V4 Flash always thinks, and the thinking counts inside its output
+ * limit: at 6,000 tokens it cut off 4 of 14 extraction answers (30 Oct 2026).
+ * The stage's max_out must allow this; other models keep the caller's limit.
+ */
+const THINKING_OUTPUT_TOKENS: Record<string, number> = { 'deepseek-v4-flash': 16000 }
+export function outputTokensFor(model: string, requested: number): number {
+  return Math.max(requested, THINKING_OUTPUT_TOKENS[model] ?? 0)
 }
 
 /**
@@ -170,7 +182,8 @@ export async function stageModels(stage: string): Promise<{ models: string[]; ma
 export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResult> {
   if (process.env.MONITOR_PAID_WORK_ENABLED !== 'true') throw new MonitorConfigError('PAID_WORK_DISABLED', 'Paid Source Watch work is disabled until its actor, provider and budgets are verified')
   const actor = await resolveMonitorActor()
-  const { models } = await stageModels(input.stage)
+  const models = (await stageModels(input.stage)).models.filter(m => !input.excludeModels?.includes(m))
+  if (!models.length) throw new PaidStageFailedError(`${input.stage} has no model left to try`, 'CONFIG', false)
   const receipt=await prisma.monitorLlmAttempt.findFirst({where:{operation_key:input.operationKey,status:'SUCCEEDED'},orderBy:{attempt_no:'desc'}})
   const savedOutput=(receipt?.usage as {outputText?:unknown}|null)?.outputText
   if(receipt&&typeof savedOutput==='string'&&savedOutput.trim()&&models.includes(receipt.model??''))return {text:jsonResponseText(savedOutput),model:receipt.model!,attemptId:receipt.id,actualMicros:receipt.actual_cost_micros??0n,attemptNo:receipt.attempt_no}
@@ -233,6 +246,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
 
     const price = await priceFor(model)
     if (price.inputCentsPer1M <= 0 || price.outputCentsPer1M <= 0) throw new MonitorConfigError('MODEL_PRICE_MISSING', `A positive price snapshot is required for ${model}`)
+    const maxOutputTokens = outputTokensFor(model, input.maxOutputTokens)
     const attemptId = await reserveAttempt({
       operationKey: input.operationKey,
       attemptNo,
@@ -240,7 +254,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
       model,
       provider: account,
       price,
-      reservedMaxMicros: reservationFor(price, inputTokens, input.maxOutputTokens),
+      reservedMaxMicros: reservationFor(price, inputTokens, maxOutputTokens),
       scopes: [...new Set(['PLATFORM', ...input.scopes, ...(input.lease?.siteId ? [`SITE:${input.lease.siteId}`] : [])])],
       taskId: input.lease?.taskId ?? null,
       leaseGeneration: input.lease?.generation ?? null,
@@ -262,7 +276,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
           inputTokens: estimateTokens(fullPrompt + JSON.stringify(input.jsonSchema)) + (input.documentTokenAllowance ?? 0),
           parameters: {
             temperature: 0,
-            maxTokensOut: input.maxOutputTokens,
+            maxTokensOut: maxOutputTokens,
             response_format: {
               type: 'json_schema',
               json_schema: { name: input.jsonSchema.name, schema: input.jsonSchema.schema, strict: true },
@@ -273,6 +287,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
             ...(getProviderFromModelCode(model)==='gemini'&&model.startsWith('gemini-3')?{thinking_level:'low'}:{}),
             ...(input.stage==='FUNDING_SOURCE_EXTRACT'&&model==='gpt-5.2'?{reasoning_effort:'none'}:{}),
             ...(input.stage==='FUNDING_SOURCE_EXTRACT'&&model==='gemini-2.5-pro'?{thinking_budget:256}:{}),
+            ...(model==='deepseek-v4-flash'?{thinking:{type:'enabled'}}:{}),
           },
           metadata: {
             skipFeaturePolicy: true,
@@ -308,7 +323,7 @@ export async function runPaidStage(input: PaidStageInput): Promise<PaidStageResu
       }
       // Missing usage is not evidence of a free request. Keep a conservative
       // charge until an operator can reconcile the provider's receipt.
-      const actual = typeof meta.inputTokens === 'number' && typeof meta.outputTokens === 'number' ? actualCost(price, usage) : reservationFor(price, inputTokens, input.maxOutputTokens)
+      const actual = typeof meta.inputTokens === 'number' && typeof meta.outputTokens === 'number' ? actualCost(price, usage) : reservationFor(price, inputTokens, maxOutputTokens)
       await settleAttempt(attemptId, { status: 'SUCCEEDED', actualMicros: actual, usage })
       await recordProviderSuccess(account)
       return { text: jsonResponseText(result.response.output), model, attemptId, actualMicros: actual, attemptNo: attemptNo - 1 }

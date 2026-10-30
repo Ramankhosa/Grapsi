@@ -84,6 +84,26 @@ describe('screening and evidence integration', () => {
     expect(payload.payload.fields.amount_max.value).toBeNull()
     expect(await db.monitorOpportunityEvidence.count({ where: { opportunity_id: saved.id, role: 'GUIDELINES' } })).toBe(1)
   })
+  it('gives an empty DeepSeek Flash extraction one second opinion on the next model', async () => {
+    const { site, r } = await resource('second-opinion.example')
+    const fetch = fixture({ [r.canonical_url!]: '<main><h1>Alpha Research Grant 2026</h1><p>Alpha Foundation invites university researchers to apply.</p><p>Applications close on 30 November 2026.</p></main>' })
+    const opportunity = await db.monitorOpportunity.create({ data: { site_id: site.id, primary_resource_id: r.id, title: r.title, review_state: 'PENDING', match_type: 'NEW' } })
+    await enqueueTask(db, { kind: 'EXTRACT', operationKey: 'second-opinion', siteId: site.id, payload: { opportunityId: opportunity.id, reviewRevision: 0 } })
+    const calls: PaidStageInput[] = []
+    const paid = async (input: PaidStageInput) => {
+      calls.push(input)
+      if (calls.length === 1) return { ...paidResult(JSON.stringify({ fields: {} })), model: 'deepseek-v4-flash', attemptId: 'first' }
+      const segment = (JSON.parse(input.prompt.split('\n')[0]).manifest as Array<{ id: string }>)[0].id
+      return { ...paidResult(JSON.stringify({ fields: { close_date: { value: '2026-11-30', citations: [{ segment, quote: 'Applications close on 30 November 2026.', coverage: 'COMPLETE' }] } } })), model: 'gpt-5.2', attemptId: 'second' }
+    }
+    await extractOpportunity((await claimNextTask({ owner: 'fixture', kinds: ['EXTRACT'] }))!, { fetch, paid })
+    expect(calls).toHaveLength(2)
+    expect(calls[1].operationKey).toBe(`${calls[0].operationKey}:second`)
+    expect(calls[1].excludeModels).toEqual(['deepseek-v4-flash'])
+    const saved = await db.monitorOpportunity.findUniqueOrThrow({ where: { id: opportunity.id } })
+    expect((saved.field_evidence as unknown as { payload: { fields: Record<string, { value: unknown }> } }).payload.fields.close_date.value).toBe('2026-11-30')
+    expect((await db.monitorStageCache.findFirstOrThrow({ where: { stage: 'EXTRACT' } })).model_used).toBe('gpt-5.2')
+  })
   it('supplies only the requested pages from a 30-page scanned document', async () => {
     const doc = await PDFDocument.create()
     for (let i = 0; i < 30; i++) doc.addPage()

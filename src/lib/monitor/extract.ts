@@ -23,6 +23,13 @@ export const EXTRACT_VERSION = EXTRACTION_VERSION
 const FIELDS = [...LLM_EXTRACTABLE_FUNDING_FIELD_KEYS]
 const DATE_FIELDS = new Set(['open_date', 'close_date'])
 const NUMBER_FIELDS = new Set(['amount_min', 'amount_max', 'project_duration_min_months', 'project_duration_max_months'])
+/**
+ * DeepSeek V4 Flash extracts as well as gpt-5.2 at a quarter of the price, but
+ * on about 1 page in 7 it answers "nothing here" where gpt-5.2 finds the call
+ * (30 Oct 2026, 14-page comparison). Such an answer gets one try on the stage's
+ * next model before the page is left for Review.
+ */
+const SECOND_OPINION_AFTER = new Set(['deepseek-v4-flash'])
 const ARRAY_FIELDS = new Set(['eligible_countries', 'eligible_regions', 'host_countries', 'funding_kinds', 'institution_types', 'career_stages', 'citizenship_requirements', 'residency_requirements', 'application_languages', 'disciplines', 'official_urls'])
 
 export function groundedValue(key: string, value: unknown, quotes: string): boolean {
@@ -164,18 +171,32 @@ export async function extractOpportunity(lease: Lease, deps: { fetch: SafeFetch;
     invitationVerified = result.invitationVerified === true; warnings = result.warnings ?? []
     await withFence(lease, tx => tx.monitorStageCache.update({ where: { id: cached!.id }, data: { hit_count: { increment: 1 }, last_hit_at: new Date() } }))
   } else {
-    const result = await (deps.paid ?? runPaidStage)({ stage: 'FUNDING_SOURCE_EXTRACT', operationKey: `extract:${key}`, lease,
+    const paid = deps.paid ?? runPaidStage
+    const request: PaidStageInput = { stage: 'FUNDING_SOURCE_EXTRACT', operationKey: `extract:${key}`, lease,
       scopes: [`SITE:${opportunity.site_id}`, ...(opportunity.bootstrap ? ['BOOTSTRAP'] : [])], maxOutputTokens: 6000,
       systemPrompt: EXTRACTION_SYSTEM_PROMPT, prompt: extractionPrompt(bundle, updateContext), jsonSchema: EXTRACTION_JSON_SCHEMA,
-    })
-    let parsed: unknown
-    try { parsed = JSON.parse(result.text) } catch { await recordInvalidOutput(result.attemptId, 'Extraction returned invalid JSON'); throw new Error('Extraction returned invalid JSON; the paid attempt remains accounted') }
-    const validated = validateExtraction(parsed, bundle.segments)
+    }
+    const read = (answer: PaidStageResult) => { try { return validateExtraction(JSON.parse(answer.text), bundle.segments) } catch { return null } }
+    const empty = (v: ReturnType<typeof read>) => !v || extractionQuality(v.payload, v.coverage, v.invitationVerified).state === 'INSUFFICIENT'
+    let result = await paid(request)
+    let validated = read(result)
+    let spent = result.actualMicros
+    if (empty(validated) && SECOND_OPINION_AFTER.has(result.model)) {
+      // The first answer is marked invalid only after this call, so a crash here
+      // replays it from its receipt instead of paying for it again.
+      const second = await paid({ ...request, operationKey: `extract:${key}:second`, excludeModels: [result.model] })
+      const secondValidated = read(second)
+      spent += second.actualMicros
+      const [kept, dropped] = !empty(secondValidated) || !validated ? [second, result] : [result, second]
+      await recordInvalidOutput(dropped.attemptId, kept === second ? 'Replaced by a second opinion' : 'Second opinion found nothing either')
+      if (kept === second) { result = second; validated = secondValidated }
+    }
+    if (!validated) { await recordInvalidOutput(result.attemptId, 'Extraction returned invalid JSON'); throw new Error('Extraction returned invalid JSON; the paid attempt remains accounted') }
     warnings = validated.conflicts
     conflicts = warnings.filter(w => [...REQUIRED_FIELDS, 'open_date', 'close_date', 'is_rolling'].some(k => w === `Unsupported or invalid ${k}`))
     payload = validated.payload; coverage = validated.coverage; identity = validated.identity; invitationVerified = validated.invitationVerified
     if (conflicts.length || extractionQuality(payload, coverage, invitationVerified).state === 'INSUFFICIENT') await recordInvalidOutput(result.attemptId, conflicts.join('; ') || 'No supported facts returned')
-    await withFence(lease, tx => tx.monitorStageCache.upsert({ where: { cache_key: key }, create: { cache_key: key, stage: 'EXTRACT', result: { payload, conflicts, coverage, identity, invitationVerified, warnings } as unknown as Prisma.InputJsonObject, model_used: result.model, cost_micros: result.actualMicros, routing_policy_version: ROUTING_POLICY_VERSION }, update: {} }))
+    await withFence(lease, tx => tx.monitorStageCache.upsert({ where: { cache_key: key }, create: { cache_key: key, stage: 'EXTRACT', result: { payload, conflicts, coverage, identity, invitationVerified, warnings } as unknown as Prisma.InputJsonObject, model_used: result.model, cost_micros: spent, routing_policy_version: ROUTING_POLICY_VERSION }, update: {} }))
   }
   } finally { if (claimed) await releaseSharedWork(key, owner) }
   conflicts = [...conflicts, ...failures]

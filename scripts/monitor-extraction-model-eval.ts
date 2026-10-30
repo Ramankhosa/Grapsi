@@ -19,7 +19,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(typeof a === 'string' ? 
 
 async function main() {
   const limit = Number(arg('limit', '15'))
-  const models = arg('models', 'deepseek-v4-flash,deepseek-v4-flash+thinking,deepseek-chat').split(',').map(s => s.trim()).filter(Boolean)
+  const models = arg('models', 'deepseek-v4-pro+thinking,deepseek-v4-pro,deepseek-v4-flash+thinking').split(',').map(s => s.trim()).filter(Boolean)
   const out = arg('out', '/tmp/extraction-model-eval.json')
   const { prisma } = await import('../src/lib/prisma')
   const { segmentsFromVersion } = await import('../src/lib/monitor/content')
@@ -27,8 +27,9 @@ async function main() {
   const { EXTRACT_VERSION, EXTRACTION_JSON_SCHEMA, EXTRACTION_SYSTEM_PROMPT, extractionPrompt, validateExtraction } = await import('../src/lib/monitor/extract')
   const { EXTRACTION_SCHEMA, REQUIRED_FIELDS, extractionQuality } = await import('../src/lib/monitor/extractionContract')
   const { ROUTING_POLICY_VERSION, jsonResponseText, paidPromptText } = await import('../src/lib/monitor/paidCall')
-  const { DeepSeekProvider } = await import('../src/lib/metering/providers/deepseek-provider')
-  const provider = new DeepSeekProvider({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: process.env.DEEPSEEK_BASE_URL } as never)
+  // Called directly: the API takes `thinking` as a top-level field, which the provider cannot send yet.
+  const OpenAI = (await import('openai')).default
+  const client = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com' })
   const prices = new Map((await prisma.lLMModel.findMany({ where: { code: { in: ['gpt-5.2', ...models.map(m => m.split('+')[0])] } } })).map(m => [m.code, m]))
 
   type Validated = ReturnType<typeof validateExtraction>
@@ -43,7 +44,7 @@ async function main() {
     const samples: Array<{ cacheKey: string; text: string; costCents: number }> = []
     for (const a of attempts) {
       const text = (a.usage as { outputText?: string } | null)?.outputText
-      const cacheKey = a.operation_key.replace(/^extract:/, '')
+      const cacheKey = a.operation_key.replace(/^extract:/, '').replace(/:second$/, '')
       if (text && a.operation_key.startsWith('extract:') && !samples.some(s => s.cacheKey === cacheKey)) samples.push({ cacheKey, text, costCents: Number(a.actual_cost_micros ?? 0n) / 10000 })
     }
     const rows: Array<Record<string, unknown>> = []
@@ -70,7 +71,11 @@ async function main() {
         const [code, mode] = spec.split('+')
         const thinking = mode === 'thinking'
         const started = Date.now()
-        const call = (responseFormat: unknown) => provider.execute({ modelClass: code, prompt: fullPrompt, parameters: { temperature: 0, maxTokensOut: thinking ? 12000 : 6000, response_format: responseFormat, ...(thinking ? {} : { reasoning_effort: 'none' }) } } as never, { allowed: true, maxTokensOut: thinking ? 12000 : 6000 } as never)
+        const call = async (responseFormat: unknown) => {
+          const r = await client.chat.completions.create({ model: code, messages: [{ role: 'user', content: fullPrompt }], temperature: 0, max_tokens: thinking ? 16000 : 6000, response_format: responseFormat, thinking: { type: thinking ? 'enabled' : 'disabled' } } as never) as any
+          const u = r.usage ?? {}
+          return { output: r.choices?.[0]?.message?.content ?? '', metadata: { inputTokens: u.prompt_tokens, outputTokens: u.completion_tokens, thoughtTokens: 0, finishReason: r.choices?.[0]?.finish_reason } }
+        }
         let format = 'json_schema'
         try {
           let response
@@ -81,7 +86,7 @@ async function main() {
           const costCents = price ? ((meta.inputTokens ?? 0) * price.inputCostPer1M + ((meta.outputTokens ?? 0) + (meta.thoughtTokens ?? 0)) * price.outputCostPer1M) / 1e6 : null
           let parsed: unknown = null
           try { parsed = JSON.parse(jsonResponseText(String(response.output ?? ''))) } catch { /* unparsable */ }
-          return { model: spec, format, seconds: (Date.now() - started) / 1000, costCents, tokens: meta, finish: meta.finishReason, parsed: Boolean(parsed), ...(parsed ? score(validateExtraction(parsed, bundle.segments)) : {}) }
+          return { model: spec, format, seconds: (Date.now() - started) / 1000, costCents, tokens: meta, finish: meta.finishReason, parsed: Boolean(parsed), raw: String(response.output ?? '').slice(0, 4000), ...(parsed ? score(validateExtraction(parsed, bundle.segments)) : {}) }
         } catch (error) { return { model: spec, error: String((error as Error)?.message ?? error).slice(0, 200), seconds: (Date.now() - started) / 1000 } }
       }))
       rows.push({ opportunityId: opportunity.id, host, title: opportunity.title, gpt: gpt && { ...gpt, costCents: sample.costCents }, results })
