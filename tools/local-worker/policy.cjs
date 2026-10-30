@@ -70,8 +70,10 @@ function applicationDate(key,value,quote){
  const dates=text.match(new RegExp('\\b20\\d{2}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[./-]\\d{1,2}[./-]20\\d{2}\\b|\\b\\d{1,2}'+DAY_SUFFIX+DAY_MONTH_GAP+ANY_MONTH+MONTH_YEAR_GAP+'20\\d{2}\\b|\\b'+ANY_ENGLISH_MONTH+'\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+20\\d{2}\\b','g'))??[];
  if(!dates.length||dates.some(date=>!groundedDate(value,date)))return false;
  if(/project (?:end|completion)|reporting|deliverable|ceremony|event date/.test(text)&&!/appl|proposal|submission|nomination/.test(text))return false;
- if(key==='opensOn'||key==='open_date')return !/until|deadline|clos|last date/.test(text)&&!CLOSE_INTL.test(text)&&(/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text)||OPEN_INTL.test(text));
- return /deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text)||CLOSE_INTL.test(text);
+ // "Applications … will be due Monday, January 4, 2027" (30 Oct 2026) is a deadline too.
+ const due=/\bdue date\b|(?:appl|proposal|submi|nomination).{0,70}\bdue\b/.test(text);
+ if(key==='opensOn'||key==='open_date')return !/until|deadline|clos|last date/.test(text)&&!due&&!CLOSE_INTL.test(text)&&(/open|start|begin|commenc|(?:appl|proposal|submi|portal).{0,70}(?:from|available)|प्रारंभ/.test(text)||OPEN_INTL.test(text));
+ return /deadline|clos|last date|(?:appl|proposal|submi|nomination).{0,70}(?:by|before|until|no later)|अंतिम/.test(text)||due||CLOSE_INTL.test(text);
 }
 function validateDetails(value,page){
   const text=normal(page.title+'\n'+page.text),warnings=[],candidates=[];

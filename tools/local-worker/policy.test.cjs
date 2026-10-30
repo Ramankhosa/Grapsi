@@ -49,3 +49,9 @@ test('deadlines and openings written in the funders\' own languages are recognis
  assert(P.applicationDate('closesOn','2026-11-30','Applications close on 30 November 2026.'));
  assert(!P.applicationDate('closesOn','2026-11-30','Project end date: 30 November 2026.'));
 });
+test('"due" wording is a deadline and never an opening',()=>{
+ assert(P.applicationDate('closesOn','2027-01-04','Applications for the 2027-2028 fellowship year will be due Monday, January 4, 2027.'));
+ assert(P.applicationDate('closesOn','2026-11-30','Due date: 30 November 2026'));
+ assert(!P.applicationDate('opensOn','2027-01-04','Applications are due January 4, 2027.'));
+ assert(!P.applicationDate('closesOn','2026-11-30','Payment due on 30 November 2026 for the conference hall.'));
+});

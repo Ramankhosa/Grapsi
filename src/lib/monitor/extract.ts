@@ -28,7 +28,15 @@ const ARRAY_FIELDS = new Set(['eligible_countries', 'eligible_regions', 'host_co
 export function groundedValue(key: string, value: unknown, quotes: string): boolean {
   const text = normalQuote(quotes).toLowerCase()
   if(key==='is_rolling'&&value===true)return /rolling|year.round|throughout the year|any time|no fixed deadline|continuous basis|साल भर/.test(text)
-  if (['agency_name', 'scheme_title'].includes(key)) return typeof value === 'string' && text.includes(normalQuote(value).toLowerCase())
+  if (['agency_name', 'scheme_title'].includes(key)) {
+    if (typeof value !== 'string') return false
+    const name = normalQuote(value).toLowerCase()
+    if (text.includes(name)) return true
+    // A funder named as "Ministry …, Government of India" from the lines "Government of India / Ministry …"
+    // (30 Oct 2026): every comma-separated part must still be quoted word for word.
+    const parts = name.split(',').map(p => p.trim()).filter(Boolean)
+    return key === 'agency_name' && parts.length > 1 && parts.every(p => p.length >= 3 && text.includes(p))
+  }
   if (DATE_FIELDS.has(key) && typeof value === 'string') {
     return applicationDate(key,value,quotes)
   }
