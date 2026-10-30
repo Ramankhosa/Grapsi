@@ -48,6 +48,14 @@ describe('conservative cost and recovery rules',()=>{
   const {r}=await fixture();await db.fundingCall.create({data:{title,source_url:r.canonical_url,visibility:'GLOBAL_PUBLISHED',metadata:{source_watch_identity:{reference:'REF-A',round:'2026'}},createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
   const {matchCatalog}=await import('@/lib/monitor/matching');expect((await matchCatalog(r.canonical_url!,title,null,db,'2026',[],'REF-B')).type).toBe('AMBIGUOUS')
  })
+ it('finds a same-titled call on another URL even when its first long word is common',async()=>{
+  // 30 Oct 2026: 80 calls contained "professional"; the twin was outside the 30 compared.
+  for(let i=0;i<40;i++)await db.fundingCall.create({data:{title:`Professional development award ${i}`,visibility:'GLOBAL_CATALOG',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
+  await db.fundingCall.create({data:{title:'Professional doctorate: clinical research training fellowship',source_url:'https://funder.invalid/opportunity/professional-doctorate',visibility:'GLOBAL_CATALOG',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
+  const {matchCatalog}=await import('@/lib/monitor/matching')
+  const m=await matchCatalog('https://funder.invalid/opportunity/?keywords=clinical','Professional doctorate: clinical research training fellowship',null,db)
+  expect(m.type).toBe('AMBIGUOUS');expect(m.candidates.map(c=>c.title)).toContain('Professional doctorate: clinical research training fellowship')
+ })
  it('does not purchase screening or extraction for unchanged complete published evidence',async()=>{
   const {site,r}=await fixture();await db.fundingCall.create({data:{title,source_url:r.canonical_url,normalized_text:title+'\n'+facts,catalog_status:'PUBLISHED',visibility:'GLOBAL_PUBLISHED',createdByUserId:'monitor-test',updatedByUserId:'monitor-test'}})
   process.env.MONITOR_LOCAL_SCREENING_REQUIRED='true';const paid=paidFor(r.id);await run(site.id,r.id,'unchanged',paid)

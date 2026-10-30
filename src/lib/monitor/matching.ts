@@ -27,10 +27,17 @@ export async function matchCatalog(url: string, title: string, funderId: string 
   const sameRound = direct.filter(c => (!explicitRound||!storedRound(c)||storedRound(c)===explicitRound)&&(!year || !callYear(c) || callYear(c) === year))
   if (sameRound.length === 1 && (!funderId || !sameRound[0].funder_id || sameRound[0].funder_id===funderId) && jaccard(title, sameRound[0].title) >= 0.75) return { type: 'UPDATE_OF', confidence: 'EXACT', callId: sameRound[0].id, candidates: direct }
   if (direct.length && year && direct.every(c => callYear(c) && callYear(c) !== year)) return { type: 'NEW_ROUND_OF', confidence: 'PROBABLE', callId: null, candidates: direct }
-  const candidates = direct.length ? direct : await db.fundingCall.findMany({ where: {
-    ...(funderId ? { funder_id: funderId } : {}),
-    title: { contains: tokens(title).filter(t => t.length > 4)[0] ?? title.slice(0, 30), mode: 'insensitive' },
-  }, select: { id: true, title: true, funder_id: true, close_date: true }, take: 30 })
+  // One shared word is a wide net over a 10k-call catalogue ("professional" is in
+  // 80 titles; 30 Oct 2026 the real twin was not among the 30 compared), so calls
+  // sharing the title's three longest words are looked up first.
+  const words = [...new Set(tokens(title).filter(t => t.length > 4))]
+  const longest = [...words].sort((a, b) => b.length - a.length).slice(0, 3)
+  const scope = funderId ? { funder_id: funderId } : {}
+  const select = { id: true, title: true, funder_id: true, close_date: true }
+  const candidates = direct.length ? direct : [...new Map((await Promise.all([
+    longest.length > 1 ? db.fundingCall.findMany({ where: { ...scope, AND: longest.map(t => ({ title: { contains: t, mode: 'insensitive' as const } })) }, select, take: 30 }) : [],
+    db.fundingCall.findMany({ where: { ...scope, title: { contains: words[0] ?? title.slice(0, 30), mode: 'insensitive' } }, select, take: 30 }),
+  ])).flat().map(c => [c.id, c])).values()]
   const similar = candidates.filter(c => jaccard(title, c.title) >= 0.65)
   return { type: similar.length || direct.length ? 'AMBIGUOUS' : 'NEW', confidence: similar.length || direct.length ? 'AMBIGUOUS' : 'NONE', callId: null, candidates: [...direct, ...similar].slice(0, 10) }
 }
