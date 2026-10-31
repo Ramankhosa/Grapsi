@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
  * silently disabled a rule (enrichment's "403 goes to review"). Source files
  * must not carry control characters other than tab and line breaks.
  */
-const ROOTS = ['src', 'scripts', 'pages']
+const ROOTS = ['src', 'scripts', 'pages', 'tools']
 // Present before this check, and harmless: a regex for NUL written with a
 // literal NUL, and a garbled emoji in a log line.
 const KNOWN = new Set([
