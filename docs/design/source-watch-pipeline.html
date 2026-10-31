@@ -1,0 +1,372 @@
+<title>Source Watch Redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; the live mockup breaks out wider. Grapsi cobalt system: white ground, three grays, cobalt accent. */
+:root{
+  --bg:#ffffff; --panel:#f6f7f9; --line:#e3e6eb; --line-strong:#cdd2da;
+  --ink:#111827; --ink-soft:#4b5563; --muted:#6b7280;
+  --cobalt:#1d4ed8; --cobalt-soft:#eef3ff; --cobalt-line:#c7d6fb;
+  --ok:#15803d; --ok-soft:#ecfdf3; --warn:#a16207; --warn-soft:#fef8e7; --bad:#b91c1c; --bad-soft:#fef2f2;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1218; --panel:#171b23; --line:#262c37; --line-strong:#353d4b;
+  --ink:#e8ebf0; --ink-soft:#b3bac6; --muted:#8a93a3;
+  --cobalt:#7aa2ff; --cobalt-soft:#18223a; --cobalt-line:#2c3f6b;
+  --ok:#4ade80; --ok-soft:#10241a; --warn:#facc15; --warn-soft:#2a2410; --bad:#f87171; --bad-soft:#2b1416; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1218; --panel:#171b23; --line:#262c37; --line-strong:#353d4b;
+  --ink:#e8ebf0; --ink-soft:#b3bac6; --muted:#8a93a3;
+  --cobalt:#7aa2ff; --cobalt-soft:#18223a; --cobalt-line:#2c3f6b;
+  --ok:#4ade80; --ok-soft:#10241a; --warn:#facc15; --warn-soft:#2a2410; --bad:#f87171; --bad-soft:#2b1416; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6}
+.wrap{max-width:1080px;margin:0 auto;padding-block:40px 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:56px}
+.prose{max-width:720px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.25}
+h1{font-size:30px;font-weight:600;letter-spacing:-.01em}
+h2{font-size:21px;font-weight:600}
+h3{font-size:15px;font-weight:600}
+p{margin:0}
+.eyebrow{font-size:11.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lede{color:var(--ink-soft);font-size:16px;margin-top:10px}
+section{display:flex;flex-direction:column;gap:16px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.hint{color:var(--muted);font-size:13px}
+
+/* before / after */
+.ba{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.tabs-old{display:flex;flex-wrap:wrap;gap:6px}
+.tabs-old span{font-size:13px;padding:5px 10px;border:1px dashed var(--line-strong);border-radius:6px;color:var(--ink-soft)}
+.flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap}
+.flow .f{flex:1 1 140px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg)}
+.flow .f b{display:block;font-size:14px;font-weight:600}
+.flow .f small{font-size:12px;color:var(--muted)}
+.flow .f em{display:block;font-style:normal;font-size:12px;color:var(--ink-soft);margin-top:4px}
+
+/* mockup frame */
+.frame{border:1px solid var(--line-strong);border-radius:12px;background:var(--bg);overflow:hidden}
+.frame-bar{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--muted)}
+.frame-bar i{width:9px;height:9px;border-radius:50%;background:var(--line-strong);display:inline-block}
+.app{padding:20px;display:flex;flex-direction:column;gap:16px}
+.app-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start}
+.app-head .t{font-size:20px;font-weight:600}
+.btn{font:inherit;font-size:13px;border:1px solid var(--line-strong);background:var(--bg);color:var(--ink);border-radius:6px;padding:6px 11px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--cobalt)}
+.btn.primary{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#0f1218}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .btn.primary{color:#0f1218}}
+.btn:focus-visible,.stage:focus-visible,.chip:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--cobalt);outline-offset:2px}
+
+.pipe{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;counter-reset:s}
+.stage{position:relative;text-align:left;font:inherit;background:var(--bg);border:1px solid var(--line);padding:10px 14px 10px 22px;cursor:pointer;color:var(--ink);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%);margin-left:-6px}
+.stage:first-child{clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%);margin-left:0;padding-left:14px;border-radius:8px 0 0 8px}
+.stage:last-child{clip-path:polygon(0 0,100% 0,100% 100%,0 100%,12px 50%);border-radius:0 8px 8px 0}
+.stage{background:var(--panel)}
+.stage.on{background:var(--cobalt-soft)}
+.stage .n{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.stage .t{font-size:14.5px;font-weight:600;display:block}
+.stage .m{font-size:12px;color:var(--ink-soft);display:block}
+.stage .m.bad{color:var(--bad)}
+.stage .m.go{color:var(--cobalt);font-weight:500}
+.stage.on .t{color:var(--cobalt)}
+@media (max-width:760px){.pipe{grid-template-columns:minmax(0,1fr)}.stage,.stage:first-child,.stage:last-child{clip-path:none;margin:0 0 4px;border-radius:8px;padding-left:14px}}
+
+.panel{border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px}
+.panel-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.panel-head p{color:var(--ink-soft);font-size:13.5px;max-width:560px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-size:12.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--ink-soft);cursor:pointer}
+.chip.on{background:var(--cobalt-soft);border-color:var(--cobalt-line);color:var(--cobalt);font-weight:500}
+.stub{border:1px dashed var(--line-strong);border-radius:8px;padding:14px;color:var(--ink-soft);font-size:13.5px}
+.stub ul{margin:6px 0 0;padding-left:18px}
+
+/* import */
+.imp{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:16px}
+@media (max-width:860px){.imp{grid-template-columns:minmax(0,1fr)}}
+.search{display:flex;flex-direction:column;gap:10px}
+.search input[type=search]{font:inherit;font-size:14px;width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg);color:var(--ink)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.filters select{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+.filters label{font-size:12.5px;color:var(--ink-soft);display:flex;gap:5px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{font:inherit;font-size:12.5px;border:0;background:var(--bg);color:var(--ink-soft);padding:5px 10px;cursor:pointer}
+.seg button.on{background:var(--cobalt-soft);color:var(--cobalt);font-weight:500}
+.rows{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.row{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;padding:11px 12px;border-top:1px solid var(--line);align-items:start}
+.row:first-child{border-top:0}
+.row.dim{opacity:.62}
+.row .host{font-family:var(--mono);font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.row .who{font-size:12.5px;color:var(--ink-soft)}
+.row .url{font-family:var(--mono);font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+.row .nums{text-align:right;font-size:12px;color:var(--ink-soft);white-space:nowrap}
+.row .nums b{font-size:14px;color:var(--ink);font-weight:600}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;margin:3px 4px 0 0;font-weight:500}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.bad{background:var(--bad-soft);color:var(--bad)}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.info{background:var(--cobalt-soft);color:var(--cobalt)}
+.tray{border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--panel);align-self:start}
+.tray h3{font-size:13.5px}
+.tray ol{margin:0;padding-left:18px;font-size:12.5px;font-family:var(--mono);overflow-wrap:anywhere}
+.tray .field{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-soft)}
+.tray select{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+
+/* setup drawer */
+.setup{border:1px solid var(--cobalt-line);border-radius:10px;padding:16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px}
+@media (max-width:700px){.setup{grid-template-columns:minmax(0,1fr)}}
+.setup .full{grid-column:1/-1}
+.fld{display:flex;flex-direction:column;gap:4px}
+.fld label{font-size:12.5px;font-weight:500}
+.fld .val{font-size:13px;border:1px solid var(--line);border-radius:6px;padding:6px 9px;background:var(--bg);overflow-wrap:anywhere}
+.fld .src{font-size:11.5px;color:var(--muted)}
+.radio{display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.radio div{display:flex;gap:6px;align-items:baseline;font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+
+/* tables */
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
+th,td{text-align:left;padding:9px 12px;border-top:1px solid var(--line);vertical-align:top}
+thead th{border-top:0;font-size:11.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--panel)}
+td.k{font-weight:500;white-space:nowrap}
+.lvl{font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap}
+.lvl.req{background:var(--cobalt-soft);color:var(--cobalt)}
+.lvl.pre{background:var(--ok-soft);color:var(--ok)}
+.lvl.adv{background:var(--panel);color:var(--ink-soft);border:1px solid var(--line)}
+
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.fact{border:1px solid var(--line);border-radius:10px;padding:14px}
+.fact .big{font-size:24px;font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.fact p{font-size:13px;color:var(--ink-soft);margin-top:2px}
+.fact.bad .big{color:var(--bad)}
+.fact.warn .big{color:var(--warn)}
+
+ol.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+ol.steps li::marker{color:var(--muted);font-family:var(--mono)}
+.q{border-left:3px solid var(--cobalt);padding:6px 0 6px 14px;border-radius:0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="prose">
+  <p class="eyebrow">Grapsi · Source monitoring · Design plan · 24 Oct 2026</p>
+  <h1 style="margin-top:8px">Source Watch, rebuilt as one pipeline</h1>
+  <p class="lede">Today the page has nine tabs in no particular order. This plan lines them up as five stages, from funder websites on the left to published catalog calls on the right. It also adds a way to pick websites straight from the 10,049 calls and 1,813 funders already in the database. No code has changed yet.</p>
+</header>
+
+<section>
+  <p class="eyebrow">1 · What changes</p>
+  <h2>Nine tabs become five stages</h2>
+  <div class="ba">
+    <div>
+      <p class="hint" style="margin-bottom:6px">Today, in the order they appear</p>
+      <div class="tabs-old"><span>Discoveries</span><span>Sites</span><span>Quality</span><span>Legacy finds</span><span>Sources</span><span>Evidence</span><span>Health</span><span>Add sources</span><span>Operators</span></div>
+    </div>
+    <div>
+      <p class="hint" style="margin-bottom:6px">Proposed, left to right</p>
+      <div class="flow">
+        <div class="f"><small>Step 1 · set up</small><b>Sources</b><em>Sites + Sources + Add sources, plus the new database import</em></div>
+        <div class="f"><small>Step 2 · collect</small><b>Crawl</b><em>Evidence + Health (checks, failures, scheduled runs)</em></div>
+        <div class="f"><small>Step 3 · AI filter</small><b>Screen</b><em>What the AI kept, what it screened out, AI cost</em></div>
+        <div class="f"><small>Step 4 · you decide</small><b>Review</b><em>Discoveries: to review, updates, snoozed, rejected</em></div>
+        <div class="f"><small>Step 5 · outcome</small><b>Publish</b><em>Drafted and published catalog calls</em></div>
+      </div>
+      <p class="hint" style="margin-top:8px">Quality, Operators and Legacy finds move to two buttons at the top right, Quality and Settings, because they are about the pipeline rather than steps in it.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">2 · The page</p>
+  <h2>Interactive mockup</h2>
+  <p class="hint">Click any stage. The Sources stage shows the new database import in full; the other stages show what each panel holds. Counts are examples based on your dev data.</p>
+
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span style="margin-left:8px" class="mono">/funding/monitor</span></div>
+    <div class="app">
+      <div class="app-head">
+        <div>
+          <p class="eyebrow">Source monitoring</p>
+          <div class="t">Funding source watch</div>
+          <p class="hint">Funder websites go in on the left. Published catalog calls come out on the right.</p>
+        </div>
+        <div style="display:flex;gap:6px"><button class="btn" type="button">Quality</button><button class="btn" type="button">Settings</button></div>
+      </div>
+
+      <div class="pipe" role="tablist" aria-label="Pipeline stages">
+        <button class="stage" role="tab" data-s="0" type="button"><span class="n">1 · Set up</span><span class="t">Sources</span><span class="m">7 sites · 1 feed to approve</span></button>
+        <button class="stage" role="tab" data-s="1" type="button"><span class="n">2 · Collect</span><span class="t">Crawl</span><span class="m bad">6 checks failed</span></button>
+        <button class="stage" role="tab" data-s="2" type="button"><span class="n">3 · AI filter</span><span class="t">Screen</span><span class="m">18 screened · $0.36</span></button>
+        <button class="stage" role="tab" data-s="3" type="button"><span class="n">4 · You decide</span><span class="t">Review</span><span class="m go">16 waiting</span></button>
+        <button class="stage" role="tab" data-s="4" type="button"><span class="n">5 · Outcome</span><span class="t">Publish</span><span class="m">0 in catalog</span></button>
+      </div>
+
+      <div id="panel"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">3 · Import from the funding database</p>
+  <h2>How an admin picks websites to watch</h2>
+  <div class="prose" style="display:flex;flex-direction:column;gap:10px">
+    <p>The admin searches the database rather than typing URLs. Results are grouped by website, because Source Watch watches a website's listing page, not a single call. One row such as <span class="mono">grants.nih.gov</span> stands for all 249 NIH calls behind it.</p>
+    <p>For each website the admin sees who funds through it, how many calls the database holds there, how many are still open, and whether it is already watched. A warning appears where watching would not work, for example a file store like <span class="mono">cdn.pfizer.com</span>, or a page that needs a browser to render.</p>
+    <p>Picking a row opens a short setup form. Most of it is filled in from the database, so the admin mostly confirms and approves.</p>
+  </div>
+  <ol class="steps prose">
+    <li><b>Search</b> by funder, programme, country or website, with filters for funder type, call status, and "not yet watched".</li>
+    <li><b>Pick websites.</b> Each result suggests a listing page to watch, worked out from the call URLs (for example <span class="mono">/grants/guide/</span> rather than one PDF).</li>
+    <li><b>Confirm the setup</b>: which page to watch, the funder link, that it is the official website, how often to check, and the priority.</li>
+    <li><b>Add to the pipeline.</b> The websites go to Sources as approved and get their first check. Nothing reaches the catalog without passing Review.</li>
+  </ol>
+</section>
+
+<section>
+  <p class="eyebrow">4 · What the admin fills in</p>
+  <h2>Information needed to monitor a website regularly</h2>
+  <p class="hint prose">Taken from what the crawler actually stores for each site and watch point. "Filled from database" means the form fills it in and the admin only confirms it.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Field</th><th>Need</th><th>Why it matters</th><th>Where the value comes from</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Page to watch</td><td><span class="lvl req">Required</span></td><td>The listing page, feed or sitemap where new calls appear. Watching one call's page finds nothing new.</td><td>Suggested from call URLs: the shared parent folder, the funder's "calls" page, or a feed found on the site</td></tr>
+      <tr><td class="k">Page type</td><td><span class="lvl pre">Filled from database</span></td><td>Listing page, RSS feed, sitemap or API. Decides how the crawler reads it.</td><td>Detected on preview</td></tr>
+      <tr><td class="k">Funder</td><td><span class="lvl req">Confirm</span></td><td>Links discoveries to the right funder. Shared portals such as <span class="mono">ec.europa.eu</span> carry 35 funders.</td><td>Funders on the calls from this website; admin ticks the right ones</td></tr>
+      <tr><td class="k">Official website</td><td><span class="lvl req">Confirm</span></td><td>Stops the crawler treating a news site or a copy as the funder's own page.</td><td>Admin tick box. It is saved on the funder too, because no funder has a website stored today.</td></tr>
+      <tr><td class="k">Check frequency</td><td><span class="lvl pre">Filled from database</span></td><td>Daily is the floor. Weekly suits funders with a few calls a year.</td><td>Suggested from how many calls the funder publishes a year</td></tr>
+      <tr><td class="k">Priority</td><td><span class="lvl pre">Filled from database</span></td><td>High, normal or low. Orders the work when the crawler is busy.</td><td>Suggested from open calls and how many researchers matched them</td></tr>
+      <tr><td class="k">Alerts go to</td><td><span class="lvl pre">Filled from database</span></td><td>The person told when this website shows something new.</td><td>Defaults to the admin who adds it</td></tr>
+      <tr><td class="k">Linked websites</td><td><span class="lvl adv">Advanced</span></td><td>Other hosts the crawl may follow, such as a funder's submission portal.</td><td>Other hosts seen on this funder's calls</td></tr>
+      <tr><td class="k">Document hosts</td><td><span class="lvl adv">Advanced</span></td><td>Hosts allowed for attachments only, such as a CDN holding PDFs.</td><td>PDF hosts seen on this funder's calls (494 calls point at PDFs)</td></tr>
+      <tr><td class="k">Include / exclude words</td><td><span class="lvl adv">Advanced</span></td><td>Narrows a busy listing, for example to research grants only.</td><td>Blank</td></tr>
+      <tr><td class="k">Needs a browser</td><td><span class="lvl adv">Advanced</span></td><td>Some portals only show calls after scripts run. Left on "detect" unless the preview shows nothing.</td><td>Detected on preview</td></tr>
+      <tr><td class="k">Language</td><td><span class="lvl adv">Advanced</span></td><td>Which word lists score relevance (for example Swedish for vr.se).</td><td>Funder country</td></tr>
+      <tr><td class="k">Daily AI budget</td><td><span class="lvl adv">Advanced</span></td><td>Caps paid screening and extraction for one busy website.</td><td>Platform default</td></tr>
+      <tr><td class="k">Note</td><td><span class="lvl adv">Advanced</span></td><td>Why it is watched, for the next admin.</td><td>Blank</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <p class="eyebrow">5 · What the database holds today</p>
+  <h2>What the import can work with, from the dev database</h2>
+  <div class="facts">
+    <div class="fact"><div class="big">10,049</div><p>calls, all with a source URL, spread over <b class="mono">1,996</b> websites</p></div>
+    <div class="fact"><div class="big">493</div><p>websites with 5 or more calls. These are the ones worth watching first.</p></div>
+    <div class="fact warn"><div class="big">856</div><p>websites with only one call. They're hidden by default with a "show one-off websites" switch.</p></div>
+    <div class="fact bad"><div class="big">0</div><p>of 1,813 funders have a website stored. The import has to work from call URLs, and confirming saves the website on the funder.</p></div>
+    <div class="fact warn"><div class="big">494</div><p>calls point straight at a PDF. Their folder or host is offered instead, with a file-host warning.</p></div>
+    <div class="fact"><div class="big">2,484</div><p>calls are open, rolling or forthcoming. The default filter puts websites with live calls first.</p></div>
+  </div>
+  <p class="hint prose">Two data problems the form has to catch. <span class="mono">www.dfg.de</span> has calls linked to India's DST, so the funder link needs a human check. The existing "Suggest sites from catalog" button reads 500 calls at a time in database order, with no search, which is why this plan replaces it.</p>
+</section>
+
+<section class="prose">
+  <p class="eyebrow">6 · Build scope</p>
+  <h2>What gets built</h2>
+  <ol class="steps">
+    <li><b>Page layout</b>: the five-stage bar with live counts, existing tab components moved into their stages, Quality and Settings at the top right. The page opens on the first stage that needs attention.</li>
+    <li><b>Search endpoint</b>: one read-only query that groups calls by website and returns funders, call counts, open counts, a suggested page to watch and an "already watched" flag. It needs no schema change.</li>
+    <li><b>Import panel and setup form</b> under Sources, with the fields above and a preview check before adding.</li>
+    <li><b>Save the confirmed website on the funder</b> (<span class="mono">funders.website_url</span>), so the database improves each time an admin adds a site.</li>
+  </ol>
+  <p class="q" style="margin-top:6px">Questions for you: should imported websites start <b>approved and checking</b> or as <b>suggestions</b> for a super admin to approve? And should tenant admins see the import, or only platform operators?</p>
+</section>
+
+</div>
+
+<script>
+const ROWS=[
+ {h:'grants.nih.gov',who:'NIH and 5 other funders · US · Government',calls:249,live:173,url:'grants.nih.gov/grants/guide/',tags:[['info','173 live calls']]},
+ {h:'ec.europa.eu',who:'35 funders incl. Horizon Europe partnerships · EU',calls:690,live:84,url:'ec.europa.eu/info/funding-tenders/opportunities/portal/',tags:[['warn','Shared portal: confirm funders'],['warn','Needs a browser']]},
+ {h:'www.ukri.org',who:'UKRI councils (AHRC, MRC, …) · GB · Government',calls:230,live:63,url:'www.ukri.org/opportunity/',tags:[['ok','Feed found']]},
+ {h:'novonordiskfonden.dk',who:'Novo Nordisk Fonden · DK · Foundation',calls:95,live:12,url:'novonordiskfonden.dk/en/grant/',tags:[]},
+ {h:'www.forskningsradet.no',who:'Norges Forskningsråd · NO · Government',calls:88,live:25,url:'www.forskningsradet.no/en/call-for-proposals/',tags:[['ok','Already watched']],watched:1},
+ {h:'www.dfg.de',who:'DFG, plus calls linked to DST (India) · DE',calls:89,live:26,url:'www.dfg.de/de/aktuelles/',tags:[['bad','Funder link looks wrong']]},
+ {h:'cdn.pfizer.com',who:'Pfizer, HTRS · US · Corporate',calls:96,live:2,url:'cdn.pfizer.com/pfizercom/',tags:[['bad','File store, not a listing page']]},
+ {h:'www.vr.se',who:'Swedish Research Council · SE · Government',calls:106,live:2,url:'www.vr.se/english/applying-for-funding/calls/',tags:[['info','Swedish + English']]}
+];
+const picked=new Set(['grants.nih.gov','www.ukri.org']);
+function importHTML(){
+ return `
+ <div class="chips"><button class="chip" type="button">Watched sites 7</button><button class="chip on" type="button">Add from funding database</button><button class="chip" type="button">Paste URLs</button><button class="chip" type="button">Feeds to approve 1</button></div>
+ <div class="imp">
+  <div class="search">
+   <label class="hint" for="q">Search funders, programmes, countries or websites</label>
+   <input id="q" type="search" placeholder="NIH, Horizon Europe, Norway, ukri.org" autocomplete="off">
+   <div class="filters">
+    <select id="f-country" aria-label="Country"><option>All countries</option><option>United States</option><option>United Kingdom</option><option>European Union</option><option>India</option></select>
+    <select id="f-type" aria-label="Funder type"><option>All funder types</option><option>Government</option><option>Foundation</option><option>Intergovernmental</option><option>Corporate</option></select>
+    <select id="f-status" aria-label="Call status"><option>Has live calls</option><option>Any call status</option><option>Closed only</option></select>
+    <label><input type="checkbox" id="f-new" checked> Not yet watched</label>
+    <span class="seg" role="group" aria-label="Group results"><button type="button" class="on">By website</button><button type="button">By funder</button></span>
+   </div>
+   <p class="hint" id="count"></p>
+   <div class="rows" id="rows"></div>
+  </div>
+  <aside class="tray" aria-label="Selected websites">
+   <h3 id="tray-h"></h3>
+   <ol id="tray"></ol>
+   <div class="field"><label for="d-freq">Check every</label><select id="d-freq"><option>Day</option><option>3 days</option><option>Week</option></select></div>
+   <div class="field"><label for="d-pri">Priority</label><select id="d-pri"><option>Suggested per site</option><option>High</option><option>Normal</option><option>Low</option></select></div>
+   <div class="field"><label for="d-owner">Alerts go to</label><select id="d-owner"><option>Me</option><option>Funding operations team</option></select></div>
+   <button class="btn primary" type="button" id="review-btn">Review and add</button>
+   <p class="hint" style="font-size:12px">Each site gets a preview check before it's added. Discoveries still go through Review.</p>
+  </aside>
+ </div>
+ <div>
+  <p class="hint" style="margin-bottom:8px">Setup form for one website (opens on "Review and add")</p>
+  <div class="setup">
+   <div class="fld full"><label>Page to watch · grants.nih.gov</label>
+    <div class="radio">
+     <div><input type="radio" name="pg" checked aria-label="Suggested listing page"> grants.nih.gov/grants/guide/ <span class="tag ok">Suggested: parent of 249 call pages</span></div>
+     <div><input type="radio" name="pg" aria-label="Feed"> grants.nih.gov/grants/guide/newsfeed/fundingopps.xml <span class="tag info">Feed found on preview</span></div>
+     <div><input type="radio" name="pg" aria-label="Homepage"> grants.nih.gov/</div>
+    </div></div>
+   <div class="fld"><label>Funder</label><div class="val">National Institutes of Health · AHRQ · 4 more</div><span class="src">6 funders have calls on this website. Untick any that don't belong.</span></div>
+   <div class="fld"><label>Official website</label><div class="val"><input type="checkbox" checked aria-label="Official website confirmed"> This is NIH's own website</div><span class="src">Also saved as the funder's website</span></div>
+   <div class="fld"><label>Check every</label><div class="val">Day</div><span class="src">About 120 calls a year here</span></div>
+   <div class="fld"><label>Priority</label><div class="val">High</div><span class="src">173 live calls; 41 researchers matched last month</span></div>
+   <div class="fld full"><label>Advanced</label><div class="val" style="color:var(--ink-soft)">Linked websites: simpler.grants.gov · Document hosts: none · Words: none · Browser: detect · Language: English · AI budget: default</div></div>
+   <div class="full" style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" type="button">Skip this site</button><button class="btn primary" type="button">Add 2 websites to the pipeline</button></div>
+  </div>
+ </div>`;
+}
+const P=[
+ {h:'Sources: what we watch',d:'Pick funder websites, set what each one may crawl, and approve feeds the crawler found.',a:'Add from funding database',custom:1},
+ {h:'Crawl: what was checked',d:'Every scheduled check, the pages it visited, and anything that failed or was left incomplete.',a:'Look at 6 failed checks',c:['Recent checks','Failures 6','Observed pages','Scheduled runs'],s:['Each check: website, time, pages visited, new items, complete or not','Failed checks first, with the error and a "check again" button','Pages observed per website, newest first, with the words around each link','From today\'s Evidence and Health tabs']},
+ {h:'Screen: what the AI kept',d:'The AI separates funding announcements from everything else and pulls out details with quotes.',a:'Audit screened-out items',c:['Kept','Screened out','Extraction','AI cost'],s:['Kept items with confidence and the reason','Screened-out items, so you can catch a wrong rejection','Extraction status per item','Cost so far: $0.36 across 18 attempts, 11 cache hits']},
+ {h:'Review: your decision',d:'Read the quoted evidence, then draft, reject or snooze. Nothing is published automatically.',a:'Open the oldest item',c:['To review 16','Updates','Snoozed','Rejected'],s:['One card per discovery: title, website, confidence, how long it has waited','Main button: Draft it. Reject and Snooze beside it','Evidence and extracted fields fold out under each card','From today\'s Discoveries tab']},
+ {h:'Publish: what reached the catalog',d:'Calls drafted from Source Watch and where they are in the catalog.',a:'Open the catalog',c:['Drafted','Published'],s:['Drafted calls waiting in the catalog editor','Published calls with the website they came from','From the Published lane of Discoveries']}
+];
+function renderRows(){
+ const q=(document.getElementById('q')?.value||'').toLowerCase().trim();
+ const onlyNew=document.getElementById('f-new')?.checked;
+ const list=ROWS.filter(r=>(!q||(r.h+' '+r.who).toLowerCase().includes(q))&&(!onlyNew||!r.watched));
+ document.getElementById('count').textContent=`${list.length} websites shown · example rows from your dev data`;
+ document.getElementById('rows').innerHTML=list.map(r=>`<label class="row ${r.watched?'dim':''}">
+  <input type="checkbox" data-h="${r.h}" ${picked.has(r.h)?'checked':''} ${r.watched?'disabled':''} aria-label="Select ${r.h}">
+  <div><div class="host">${r.h}</div><div class="who">${r.who}</div><div class="url">Watch: ${r.url}</div>${r.tags.map(t=>`<span class="tag ${t[0]}">${t[1]}</span>`).join('')}</div>
+  <div class="nums"><b class="mono">${r.calls}</b> calls<br><span class="mono">${r.live}</span> live</div></label>`).join('')||'<p class="hint" style="padding:12px">No websites match. Try a funder name or a country.</p>';
+ document.querySelectorAll('#rows input[type=checkbox]').forEach(cb=>cb.onchange=()=>{cb.checked?picked.add(cb.dataset.h):picked.delete(cb.dataset.h);renderTray()});
+}
+function renderTray(){
+ document.getElementById('tray-h').textContent=`${picked.size} selected`;
+ document.getElementById('tray').innerHTML=[...picked].map(h=>`<li>${h}</li>`).join('');
+ document.getElementById('review-btn').textContent=picked.size?`Review and add ${picked.size}`:'Select websites to add';
+}
+function show(i){
+ document.querySelectorAll('.stage').forEach(b=>{const on=+b.dataset.s===i;b.classList.toggle('on',on);b.setAttribute('aria-selected',on)});
+ const p=P[i];
+ let h=`<div class="panel"><div class="panel-head"><div><h3>${p.h}</h3><p>${p.d}</p></div><button class="btn primary" type="button">${p.a}</button></div>`;
+ if(p.custom) h+=importHTML();
+ else h+=`<div class="chips">${p.c.map((c,j)=>`<button class="chip ${j?'':'on'}" type="button">${c}</button>`).join('')}</div><div class="stub">What this panel shows<ul>${p.s.map(x=>`<li>${x}</li>`).join('')}</ul></div>`;
+ document.getElementById('panel').innerHTML=h+'</div>';
+ if(p.custom){renderRows();renderTray();document.getElementById('q').oninput=renderRows;document.getElementById('f-new').onchange=renderRows}
+}
+document.querySelectorAll('.stage').forEach(b=>b.onclick=()=>show(+b.dataset.s));
+show(0);
+</script>
