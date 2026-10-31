@@ -11,7 +11,7 @@ export default defineConfig({
     // an opt-in and a disposable database, e.g.:
     //   ALLOW_REAL_DB_TESTS=true npx vitest run src/tests/integration --config vitest.realdb.config.ts
     // or by pointing --exclude at nothing and setting the env var yourself.
-    exclude: [...configDefaults.exclude, '**/*.real-db.test.ts'],
+    exclude: [...configDefaults.exclude, '**/*.real-db.test.ts', '**/.claude/**', '**/outputs/**', '**/backups/**'],
     // Several suites build a real module graph or parse fixtures and take a
     // couple of seconds on their own. Under a full parallel run on a loaded
     // machine that drifts past vitest's 5s default, which showed up as tests

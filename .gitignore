@@ -82,6 +82,9 @@ storage/import-snapshots/
 prisma/super-admin-settings.snapshot.json
 
 # Local reports and scratch output
+# Local worktrees and generated reports (existing tracked artifacts stay tracked)
+/.claude/worktrees/
+/outputs/
 estimate-apply-output.txt
 test-output.txt
 test-output-full.txt

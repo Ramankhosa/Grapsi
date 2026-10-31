@@ -103,7 +103,7 @@ describe('generateFromGemini', () => {
   // starts a global cooldown instead (GEMINI_RATE_LIMIT_COOLDOWN_MS).
   it('fails fast on a rate-limited model instead of retrying it', async () => {
     const { generateFromGemini, calls } = await loadGeminiService(async ({ model, attempt }) => {
-      if (model === 'gemini-2.0-flash' && attempt === 1) {
+      if (model === 'gemini-2.5-flash' && attempt === 1) {
         return buildRateLimitResponse();
       }
 
@@ -114,7 +114,9 @@ describe('generateFromGemini', () => {
       name: 'GeminiRateLimitError',
       code: 'GEMINI_RATE_LIMITED',
     });
-    expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual(['gemini-2.0-flash:1']);
+    // The legacy request name is resolved before dispatch; quota handling must
+    // still fail fast on the canonical model without a retry or fallback.
+    expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual(['gemini-2.5-flash:1']);
   });
 
   it('does not try the fallback model when the primary is rate limited', async () => {
@@ -147,7 +149,7 @@ describe('generateFromGemini', () => {
     expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual([
       'gemini-2.5-pro:1',
       'gemini-2.5-pro:2',
-      'gemini-2.0-flash:1',
+      'gemini-2.5-flash:1',
     ]);
   });
 
