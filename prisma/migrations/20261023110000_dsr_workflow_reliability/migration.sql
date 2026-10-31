@@ -41,6 +41,16 @@ ON CONFLICT DO NOTHING;
 -- Enqueue at publication in the database transaction, even if the app process exits immediately afterwards.
 CREATE FUNCTION dsr_enqueue_published_call() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  -- Re-saving an already published call is not a new publication. In
+  -- particular, Source Watch updates must not replay DSR routing or notices.
+  IF TG_OP='UPDATE' THEN
+    IF NEW.is_active IS NOT DISTINCT FROM OLD.is_active
+       AND NEW.status IS NOT DISTINCT FROM OLD.status
+       AND NEW.catalog_status IS NOT DISTINCT FROM OLD.catalog_status
+       AND NEW.visibility IS NOT DISTINCT FROM OLD.visibility THEN
+      RETURN NEW;
+    END IF;
+  END IF;
   IF NEW.is_active IS DISTINCT FROM false
      AND COALESCE(NEW.metadata->>'origin','') <> 'source_watch'
      AND (NEW.status::text='PUBLISHED' OR NEW.catalog_status::text='PUBLISHED')
