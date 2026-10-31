@@ -1,10 +1,9 @@
 /**
- * The facts an imported catalogue call carries beyond a curated call: where
- * it came from (with attribution), how fresh that source is, its deadline
+ * The facts an imported catalogue call carries beyond a curated call: deadline
  * stages, eligibility by requirement, and the award as the funder states it.
  * Shown on the finder call page when the API returns `catalogImport`.
  */
-import { ExternalLink, Info } from 'lucide-react'
+import { Info } from 'lucide-react'
 
 import { ELIGIBILITY_BADGE } from './eligibilityBadge'
 
@@ -114,19 +113,6 @@ export function ImportedCallFacts({ facts, promotedToDsr = false }: { facts: Imp
           <h2 id="imported-call-facts" className="cb-title">
             Key facts
           </h2>
-          <p className="mt-1 text-[12px] text-muted">
-            {facts.source.attribution || `From ${facts.source.name}`}
-            {facts.source.url ? (
-              <>
-                {' · '}
-                <a href={facts.source.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cobalt-700 hover:underline">
-                  View listing <ExternalLink className="h-3 w-3" />
-                </a>
-              </>
-            ) : null}
-            {facts.source.lastCheckedAt ? ` · Source last checked ${formatDay(facts.source.lastCheckedAt)}` : null}
-            {!facts.source.available ? ' · Listing no longer available at the source' : null}
-          </p>
         </div>
         {status ? <span className={`rounded-full border px-2.5 py-1 text-[12px] font-medium ${status.tone}`}>{status.text}</span> : null}
       </div>

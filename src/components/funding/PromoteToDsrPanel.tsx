@@ -196,9 +196,7 @@ export default function PromoteToDsrPanel({ callId, onChanged }: { callId: strin
             </div>
 
             <p className="cb-hint mt-3">
-              {preview.attribution ? `Details as ${preview.attribution} lists them` : 'Details as the source lists them'}
-              {preview.sourceCheckedAt ? `, last checked ${day(preview.sourceCheckedAt)}` : ''}.
-              {preview.enrichmentLevel !== 'ENRICHED' ? ' The official guidelines are fetched from the funder’s page after sending.' : ''}
+              {preview.enrichmentLevel !== 'ENRICHED' ? 'The official guidelines are fetched from the funder’s page after sending.' : 'Official guidelines are available.'}
             </p>
 
             <fieldset className="mt-4 space-y-2">
