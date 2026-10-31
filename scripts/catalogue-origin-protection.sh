@@ -45,6 +45,8 @@ for name in ['aigrantmentor.com','aigrantmentor.online']:
   s=re.sub(r'(server_name\s+[^;]+;)',r'\1\n    # grapsi-catalogue-protection\n    limit_req zone=grapsi_catalogue_flood burst=200 nodelay;\n    limit_req_status 429;\n    limit_conn grapsi_catalogue_connections 500;\n    limit_conn_status 429;',s)
  s=s.replace('proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;','proxy_set_header X-Forwarded-For $remote_addr;')
  s=s.replace('proxy_set_header X-Forwarded-For $remote_addr;', 'proxy_set_header X-Forwarded-For $remote_addr;\n    proxy_set_header Forwarded "";\n    proxy_set_header X-Original-URL "";\n    proxy_set_header X-Rewrite-URL "";') if 'proxy_set_header Forwarded "";' not in s else s
+ if 'proxy_set_header X-Middleware-Subrequest "";' not in s:
+  s=s.replace('proxy_set_header Forwarded "";', 'proxy_set_header Forwarded "";\n    proxy_set_header X-Middleware-Subrequest "";\n    proxy_set_header X-Invoke-Path "";\n    proxy_set_header X-Invoke-Query "";\n    proxy_set_header X-Invoke-Status "";\n    proxy_set_header X-Matched-Path "";')
  p.write_text(s)
 PY
 nginx -t
