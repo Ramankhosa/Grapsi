@@ -34,6 +34,21 @@ import { llmProviderRouter } from './providers/provider-router'
 import { resolveModel, type ModelResolutionResult } from './model-resolver'
 import { recordStandaloneLLMUsage } from './llm-usage'
 
+/** The provider's own failure, in a form a caller can classify (status, code, usage). */
+export function providerErrorDetails(error: unknown): Record<string, unknown> {
+  const e = (error ?? {}) as Record<string, unknown>
+  const nested = (e.error && typeof e.error === 'object' ? e.error : {}) as Record<string, unknown>
+  return {
+    providerMessage: error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000),
+    providerStatus: typeof e.status === 'number' ? e.status : undefined,
+    providerCode: typeof e.code === 'string' ? e.code : typeof nested.type === 'string' ? nested.type : undefined,
+    providerRequestId:
+      typeof e.requestId === 'string' ? e.requestId : typeof e.request_id === 'string' ? e.request_id : undefined,
+    retryAfterMs: typeof e.retryAfterMs === 'number' ? e.retryAfterMs : undefined,
+    billableUsage: e.billableUsage && typeof e.billableUsage === 'object' ? e.billableUsage : undefined,
+  }
+}
+
 // === CENTRAL GATEWAY SERVICE ===
 
 export class LLMGateway {
@@ -185,7 +200,7 @@ export class LLMGateway {
         console.warn(`[Gateway] Primary model ${selectedModel} failed capability check: ${capabilityCheck.error}`)
 
         let fallbackFound = false
-        if (modelResolution?.fallbacks?.length) {
+        if (modelResolution?.fallbacks?.length && llmRequest.metadata?.disableModelFallbacks !== true) {
           for (const fb of modelResolution.fallbacks) {
             const fbCheck = this.validateModelCapabilities(fb.modelCode, llmRequest)
             if (fbCheck.valid) {
@@ -408,7 +423,10 @@ export class LLMGateway {
       }
 
       console.error('LLM Gateway error:', error)
-      const wrappedError = new MeteringError('SERVICE_UNAVAILABLE', 'LLM gateway error')
+      // Same code and message as before for existing callers; the provider's
+      // own failure travels in `details` so a caller can tell a billing or auth
+      // failure from a transient one without parsing log lines.
+      const wrappedError = new MeteringError('SERVICE_UNAVAILABLE', 'LLM gateway error', providerErrorDetails(error))
       return { success: false, error: wrappedError }
     }
   }
@@ -566,6 +584,8 @@ export class LLMGateway {
    * Models that support direct document/file input in this gateway.
    */
   private readonly FILE_CAPABLE_MODELS = new Set([
+    'claude-haiku-4.5',
+    'claude-sonnet-4',
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-1.5-pro',

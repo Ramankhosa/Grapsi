@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
+import { expectedReviewSchema, MonitorConflictError } from '@/lib/monitor/writeGuard'
 
 export const runtime = 'nodejs'
 
@@ -32,12 +33,13 @@ async function cataloguePATCH(request: NextRequest, { params }: { params: { id: 
 
   try {
     const payload = await request.json()
-    const details = await fundingCatalogService.updateFundingCall(params.id, payload, auth.operator)
+    const { expectedReview, ...values } = payload
+    const details = await fundingCatalogService.updateFundingCall(params.id, values, auth.operator, expectedReview === undefined ? undefined : expectedReviewSchema.parse(expectedReview))
     return NextResponse.json(details)
   } catch (error) {
     return NextResponse.json(
       { message: error instanceof Error ? error.message : 'Failed to update funding call' },
-      { status: 500 }
+      { status: error instanceof MonitorConflictError ? 409 : 400 }
     )
   }
 }

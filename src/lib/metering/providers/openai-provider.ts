@@ -5,6 +5,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { collectOpenAICompatibleSSEStream } from './streaming-utils'
+import { allowedProviderAttempts } from './executionPolicy'
 
 const DEFAULT_OPENAI_TIMEOUT_MS = 30000
 // GPT-5 and o1 models use reasoning and produce longer outputs; they need a much
@@ -186,7 +187,7 @@ export class OpenAIProvider implements LLMProvider {
     // Enforce the selected model's capability before sending either API shape.
     const maxTokens = Math.min(limits.maxTokensOut || 4096, this.getTokenLimits(modelToUse).output)
     const timeoutMs = this.getTimeoutMs(modelToUse)
-    const maxAttempts = this.getMaxRetries()
+    const maxAttempts = allowedProviderAttempts(request, this.getMaxRetries())
     console.log(`[OpenAIProvider] Token limits: admin=${limits.maxTokensOut || 'not set'}, using=${maxTokens}`)
     console.log(`[OpenAIProvider] Request timeout=${timeoutMs}ms, maxAttempts=${maxAttempts}`)
 

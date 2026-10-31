@@ -1,0 +1,20 @@
+[Unit]
+Description=Queue stored Source Watch pages for optional local analysis
+After=network.target
+
+[Service]
+Type=oneshot
+User=ramankhosa
+Group=ramankhosa
+WorkingDirectory=/opt/grapsi-local-worker/current
+ExecStart=/usr/bin/node /opt/grapsi-local-worker/current/broker.cjs --enqueue
+Environment=GRAPSI_LOCAL_WORKER_CONFIG=/etc/grapsi-local-worker.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+Nice=10
+CPUQuota=15%
+MemoryMax=512M
+TimeoutStartSec=45

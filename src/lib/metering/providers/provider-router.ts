@@ -6,6 +6,7 @@ import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider } from './llm-provider'
 import { createLLMProvider, getProviderFromModelCode, type ProviderConfig, type ProviderType } from './llm-provider'
 import { logLLMCost, ensurePricingLoaded, isPricingLoaded } from '../cost-calculator'
+import { executionPolicyOf } from './executionPolicy'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 const parseOptionalPositiveIntEnv = (value: string | undefined): number | undefined => {
@@ -200,7 +201,8 @@ export function buildProviderConfigsFromEnv(env: NodeJS.ProcessEnv = process.env
     anthropic: {
       apiKey: env.ANTHROPIC_API_KEY,
       model: 'claude-3-5-sonnet-20241022',
-      baseURL: 'https://api.anthropic.com/v1',
+      // The Anthropic SDK adds /v1/messages itself.
+      baseURL: 'https://api.anthropic.com',
       timeout: parseOptionalPositiveIntEnv(env.ANTHROPIC_TIMEOUT_MS),
       maxRetries: parseOptionalPositiveIntEnv(env.ANTHROPIC_MAX_RETRIES)
     },
@@ -574,6 +576,11 @@ export class LLMProviderRouter {
     const provider = this.getProviderForModel(modelCode)
     
     if (!provider) {
+      if (executionPolicyOf(request)?.noDefaultRouting && !(fallbackModelCodes && fallbackModelCodes.length > 0)) {
+        // The caller pinned this one model and accounts for every attempt:
+        // silently routing elsewhere would be an unreserved paid call.
+        throw Object.assign(new Error(`No provider available for model ${modelCode}`), { code: 'PROVIDER_UNAVAILABLE' })
+      }
       console.warn(`[ProviderRouter] No provider available for model ${modelCode}, trying fallbacks...`)
       return this.tryFallbackModels(request, limits, fallbackModelCodes)
     }

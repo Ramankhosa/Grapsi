@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -19,7 +19,44 @@ type CatalogCallSummary = {
   published_at: string | null;
   published_by: string | null;
   embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
+  origin?: CatalogOrigin;
+  auto_published?: boolean;
+  entered_by?: string | null;
 };
+
+type CatalogOrigin = 'MANUAL' | 'BATCH' | 'SOURCE_WATCH' | 'IMPORT' | 'OTHER';
+type CatalogFacets = { origins: Record<CatalogOrigin, number>; kinds: Array<{ kind: string; n: number }>; autoPublished: number };
+
+const ORIGINS: Array<{ value: CatalogOrigin; label: string; hint: string; tone: string }> = [
+  { value: 'MANUAL', label: 'Manual entry', hint: 'Entered one at a time through intake', tone: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  { value: 'BATCH', label: 'Bulk upload', hint: 'ZIP/CSV or several sources at once', tone: 'bg-violet-50 text-violet-800 ring-violet-200' },
+  { value: 'SOURCE_WATCH', label: 'Source Watch', hint: 'Found and drafted by the crawler pipeline', tone: 'bg-teal-50 text-teal-800 ring-teal-200' },
+  { value: 'IMPORT', label: 'Catalogue import', hint: 'External catalogue import', tone: 'bg-slate-100 text-slate-700 ring-slate-200' },
+  { value: 'OTHER', label: 'Other', hint: 'Seeded or older records with no intake trail', tone: 'bg-slate-50 text-slate-600 ring-slate-200' },
+];
+const ORIGIN_BY_VALUE = Object.fromEntries(ORIGINS.map((o) => [o.value, o])) as Record<CatalogOrigin, (typeof ORIGINS)[number]>;
+const APPROVAL_OPTIONS = [
+  { value: '', label: 'Any approval' },
+  { value: 'PERSON', label: 'Published by a person' },
+  { value: 'AUTO', label: 'Auto-published (needs review)' },
+  { value: 'UNPUBLISHED', label: 'Not published' },
+];
+const DEADLINE_OPTIONS = [
+  { value: '', label: 'Any deadline' },
+  { value: 'OPEN', label: 'Open (incl. rolling)' },
+  { value: 'CLOSED', label: 'Closed' },
+  { value: 'ROLLING', label: 'Rolling' },
+  { value: 'NONE', label: 'No deadline set' },
+];
+const SORT_OPTIONS = [
+  { value: 'UPDATED', label: 'Recently updated' },
+  { value: 'PUBLISHED', label: 'Recently published' },
+  { value: 'CREATED', label: 'Recently added' },
+  { value: 'DEADLINE', label: 'Deadline (soonest)' },
+];
+type CatalogFilters = { q: string; status: string; origin: string; approval: string; deadline: string; kind: string; sort: string };
+const EMPTY_FILTERS: CatalogFilters = { q: '', status: 'ALL', origin: '', approval: '', deadline: '', kind: '', sort: 'UPDATED' };
+const FILTER_KEYS = Object.keys(EMPTY_FILTERS) as Array<keyof CatalogFilters>;
 
 type EmbeddingCoverage = {
   publishedActiveTotal: number;
@@ -62,7 +99,10 @@ export default function FundingCatalogAdminPage() {
   const [researchAreaCoverage, setResearchAreaCoverage] = useState<ResearchAreaCoverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [backfillBusy, setBackfillBusy] = useState<'funding_calls' | 'research_areas' | 'all' | null>(null);
-  const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>('ALL');
+  const [filters, setFilters] = useState<CatalogFilters>(EMPTY_FILTERS);
+  const [searchText, setSearchText] = useState('');
+  const [facets, setFacets] = useState<CatalogFacets | null>(null);
+  const [filtersReady, setFiltersReady] = useState(false);
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -81,22 +121,65 @@ export default function FundingCatalogAdminPage() {
     }
   }, [isLoading, router, user]);
 
+  // Filters live in the address, so a filtered view can be bookmarked or shared.
   useEffect(() => {
+    if (!router.isReady || filtersReady) return;
+    const next = { ...EMPTY_FILTERS };
+    for (const key of FILTER_KEYS) {
+      const value = router.query[key];
+      if (typeof value === 'string' && value) next[key] = value;
+    }
+    setFilters(next);
+    setSearchText(next.q);
+    const startPage = Number(router.query.page);
+    if (startPage > 1) setPage(Math.floor(startPage));
+    setFiltersReady(true);
+  }, [router.isReady, router.query, filtersReady]);
+
+  // Search as you type, without a request per keystroke.
+  useEffect(() => {
+    if (!filtersReady || searchText === filters.q) return;
+    const timer = setTimeout(() => updateFilters({ q: searchText }), 350);
+    return () => clearTimeout(timer);
+  }, [searchText, filtersReady]);
+
+  useEffect(() => {
+    if (!filtersReady) return;
+    const query: Record<string, string> = {};
+    for (const key of FILTER_KEYS) if (filters[key] && filters[key] !== EMPTY_FILTERS[key]) query[key] = filters[key];
+    if (page > 1) query.page = String(page);
+    void router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
     if (user && isFundingOperator) {
       void loadCalls();
     }
-  }, [user, isFundingOperator, page, statusFilter]);
+  }, [user, isFundingOperator, page, filters, filtersReady]);
+
+  function updateFilters(change: Partial<CatalogFilters>) {
+    setFilters((current) => ({ ...current, ...change }));
+    setPage(1);
+  }
+
+  function clearFilters() {
+    setSearchText('');
+    setFilters(EMPTY_FILTERS);
+    setPage(1);
+  }
+
+  const activeFilterCount = FILTER_KEYS.filter((key) => key !== 'sort' && filters[key] !== EMPTY_FILTERS[key]).length;
 
   async function loadCalls() {
     setLoading(true);
     try {
-      const response = await authFetch(`/api/admin/funding/calls?page=${page}&status=${statusFilter}`);
+      const params = new URLSearchParams({ page: String(page) });
+      for (const key of FILTER_KEYS) if (filters[key] && filters[key] !== 'ALL') params.set(key, filters[key]);
+      const response = await authFetch(`/api/admin/funding/calls?${params.toString()}`);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || data.message || 'Failed to load funding catalog');
       }
       setCalls(data.calls || []);
       setTotal(data.total||0);
+      setFacets(data.facets || null);
       setCoverage(data.coverage || null);
       setEmbeddingHealth(data.embeddingHealth || null);
       setResearchAreaCoverage(data.researchAreaCoverage || null);
@@ -128,14 +211,10 @@ export default function FundingCatalogAdminPage() {
     }
   }
 
-  const visibleCalls = useMemo(() => {
-    if (statusFilter === 'ALL') {
-      return calls;
-    }
-    return calls.filter((call) => call.status === statusFilter);
-  }, [calls, statusFilter]);
+  const visibleCalls = calls;
 
-  if (isLoading || loading) {
+  // Only the first load takes over the page; later filter changes keep the controls in place.
+  if (isLoading || (loading && !facets)) {
     return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading funding catalog...</div>;
   }
 
@@ -294,18 +373,8 @@ export default function FundingCatalogAdminPage() {
               <h2 className="text-lg font-semibold text-slate-900">Catalog records</h2>
               <p className="mt-1 text-sm text-slate-600">Only published active records should be visible to search and chatbot flows.</p>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <select
-                value={statusFilter}
-                onChange={(event) => {setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number]);setPage(1)}}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option === 'ALL' ? 'All statuses' : option}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-slate-600">{total.toLocaleString()} call{total === 1 ? '' : 's'}</span>
               <button
                 type="button"
                 onClick={() => loadCalls()}
@@ -313,20 +382,114 @@ export default function FundingCatalogAdminPage() {
               >
                 Refresh
               </button>
-              <button type="button" disabled={page===1} onClick={()=>setPage(value=>value-1)}>Previous</button>
-              <span className="text-sm">Page {page} of {Math.max(1,Math.ceil(total/50))}</span>
-              <button type="button" disabled={page*50>=total} onClick={()=>setPage(value=>value+1)}>Next</button>
             </div>
+          </div>
+
+          <div className="mt-5 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-3 md:flex-row">
+              <input
+                type="search"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+                placeholder="Search title, funder, source address or who entered it"
+                aria-label="Search the catalogue"
+                className="w-full flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              />
+              <select
+                value={filters.sort}
+                onChange={(event) => updateFilters({ sort: event.target.value })}
+                aria-label="Sort"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Origin">
+              <button
+                type="button"
+                onClick={() => updateFilters({ origin: '' })}
+                className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${filters.origin === '' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'}`}
+              >
+                All origins
+              </button>
+              {ORIGINS.map((origin) => (
+                <button
+                  key={origin.value}
+                  type="button"
+                  title={origin.hint}
+                  onClick={() => updateFilters({ origin: filters.origin === origin.value ? '' : origin.value })}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${filters.origin === origin.value ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'}`}
+                >
+                  {origin.label}
+                  {facets && <span className="ml-1 opacity-70">{facets.origins[origin.value] ?? 0}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={filters.status}
+                onChange={(event) => updateFilters({ status: event.target.value })}
+                aria-label="Status"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option === 'ALL' ? 'All statuses' : option.charAt(0) + option.slice(1).toLowerCase()}</option>
+                ))}
+              </select>
+              <select
+                value={filters.approval}
+                onChange={(event) => updateFilters({ approval: event.target.value })}
+                aria-label="Approval"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                {APPROVAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}{option.value === 'AUTO' && facets ? ` (${facets.autoPublished})` : ''}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={filters.deadline}
+                onChange={(event) => updateFilters({ deadline: event.target.value })}
+                aria-label="Deadline"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                {DEADLINE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {facets && facets.kinds.length > 0 && (
+                <select
+                  value={filters.kind}
+                  onChange={(event) => updateFilters({ kind: event.target.value })}
+                  aria-label="Funding type"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  <option value="">Any funding type</option>
+                  {facets.kinds.map((kind) => <option key={kind.kind} value={kind.kind}>{kind.kind.replace(/_/g, ' ')} ({kind.n})</option>)}
+                </select>
+              )}
+              {activeFilterCount > 0 && (
+                <button type="button" onClick={clearFilters} className="px-2 py-2 text-sm font-medium text-slate-600 underline-offset-2 hover:underline">
+                  Clear filters ({activeFilterCount})
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-end gap-3 text-sm">
+            <button type="button" disabled={page===1} onClick={()=>setPage(value=>value-1)} className="rounded-lg border border-slate-300 px-3 py-1.5 disabled:opacity-40">Previous</button>
+            <span>Page {page} of {Math.max(1,Math.ceil(total/50))}</span>
+            <button type="button" disabled={page*50>=total} onClick={()=>setPage(value=>value+1)} className="rounded-lg border border-slate-300 px-3 py-1.5 disabled:opacity-40">Next</button>
           </div>
 
           <div className="mt-6 overflow-x-auto">
             {visibleCalls.length === 0 ? (
-              <div className="py-12 text-center text-sm text-slate-500">No funding calls match this filter.</div>
+              <div className="py-12 text-center text-sm text-slate-500">{loading ? 'Loading…' : 'No funding calls match these filters.'}</div>
             ) : (
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Funding Call</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Origin</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Status</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Embedding</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Deadline</th>
@@ -342,6 +505,23 @@ export default function FundingCatalogAdminPage() {
                         <div className="mt-1 text-slate-600">{call.agency_name}</div>
                         {call.source_url && (
                           <div className="mt-2 max-w-sm break-all text-xs text-slate-500">{call.source_url}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        {call.origin && (
+                          <span title={ORIGIN_BY_VALUE[call.origin].hint} className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${ORIGIN_BY_VALUE[call.origin].tone}`}>
+                            {ORIGIN_BY_VALUE[call.origin].label}
+                          </span>
+                        )}
+                        {call.entered_by && call.origin !== 'SOURCE_WATCH' && (
+                          <div className="mt-2 max-w-[12rem] break-all text-xs text-slate-500">by {call.entered_by}</div>
+                        )}
+                        {call.auto_published && (
+                          <div className="mt-2">
+                            <span title="Published automatically by the retired bulk option, with no one approving it" className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-amber-200">
+                              Auto-published
+                            </span>
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-4 align-top">
@@ -373,7 +553,7 @@ export default function FundingCatalogAdminPage() {
                             : 'Not specified'}
                       </td>
                       <td className="px-4 py-4 align-top text-slate-600">
-                        {call.published_by || 'Not published'}
+                        {call.published_by || (call.status === 'PUBLISHED' ? 'Not recorded' : 'Not published')}
                         {call.published_at && (
                           <div className="mt-1 text-xs text-slate-500">{new Date(call.published_at).toLocaleString()}</div>
                         )}

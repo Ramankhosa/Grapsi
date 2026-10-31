@@ -118,5 +118,30 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      // Source Watch v2 worker: claims check tasks and runs them (and, with
+      // MONITOR_BROWSER_ENABLED=true, renders JavaScript-built listings).
+      // Run it as its own OS user with egress denied to private ranges and the
+      // 169.254.169.254 metadata address. Set MONITOR_ENGINE=v2 on the web app
+      // only once this process is up.
+      name: 'grapsi-monitor-worker',
+      cwd: `${APP_ROOT}/current`,
+      script: './node_modules/tsx/dist/cli.cjs',
+      args: 'scripts/source-monitor-worker.ts',
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 10000,
+      kill_timeout: 60000,
+      env: {
+        ...sharedEnv,
+        NODE_ENV: 'production',
+      },
+      out_file: `${APP_ROOT}/logs/monitor-worker-out.log`,
+      error_file: `${APP_ROOT}/logs/monitor-worker-error.log`,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };

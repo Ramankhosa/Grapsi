@@ -154,6 +154,8 @@ export interface BatchIntakeSourceInput {
   inputType: FundingInputType;
   sourceUrl?: string;
   sourceText?: string;
+  /** Provenance for already fetched text, without fetching the URL again. */
+  originUrl?: string;
   sourceFile?: IntakeSourceFile;
   sourceJsonText?: string;
   sourceJsonFile?: {
@@ -177,13 +179,20 @@ export interface BatchIntakeJobInput {
   templateSourceKey?: string;
   autoCreateDraft?: boolean;
   extractAll?: boolean;
-  /** Publish the call as soon as its draft is complete (bulk bootstrap flows). */
-  autoPublish?: boolean;
 }
 
 export interface BatchIntakeCreateInput {
   label?: string;
   jobs: BatchIntakeJobInput[];
+}
+
+/** Internal service argument, never accepted from the public intake routes. */
+export interface SourceWatchIntakeContext {
+  identity?: {reference:string|null;round:string|null};
+  handoffKey: string;
+  opportunityId: string;
+  funderId: string | null;
+  payload: FundingExtractionPayload;
 }
 
 export interface IntakeOperator {

@@ -42,6 +42,7 @@ ON CONFLICT DO NOTHING;
 CREATE FUNCTION dsr_enqueue_published_call() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.is_active IS DISTINCT FROM false
+     AND COALESCE(NEW.metadata->>'origin','') <> 'source_watch'
      AND (NEW.status::text='PUBLISHED' OR NEW.catalog_status::text='PUBLISHED')
      AND NEW.visibility::text IN ('GLOBAL_PUBLISHED','TENANT_PRIVATE') THEN
     INSERT INTO dsr_call_routing_jobs(call_id) VALUES(NEW.id)

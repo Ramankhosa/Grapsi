@@ -186,11 +186,9 @@ export default function FundingIntakeAdminPage() {
     totalCsvFiles: number;
     queued: number;
     failed: number;
-    autoPublish?: boolean;
     batches: Array<{ id: string; label: string; totalJobs: number }>;
     results: Array<{ name: string; ok: boolean; error?: string; agencyName?: string | null; schemeTitle?: string | null }>;
   } | null>(null);
-  const [autoPublishZip, setAutoPublishZip] = useState(true);
   const [showJsonPrompt, setShowJsonPrompt] = useState(false);
   const [showCsvPrompt, setShowCsvPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
@@ -545,7 +543,6 @@ export default function FundingIntakeAdminPage() {
       const formData = new FormData();
       formData.append('file', sourceZip);
       formData.append('operatorNotes', operatorNotes);
-      formData.append('autoPublish', String(canPublishFunding && autoPublishZip));
       const response = await fetch('/api/admin/funding/intake/bulk-csv', {
         method: 'POST',
         body: formData,
@@ -567,7 +564,7 @@ export default function FundingIntakeAdminPage() {
 
       setBulkResult(data);
       toast.success(
-        `Queued ${data.queued} call${data.queued === 1 ? '' : 's'} from ${data.totalCsvFiles} CSV file${data.totalCsvFiles === 1 ? '' : 's'}${data.autoPublish ? ' — each call publishes automatically once its draft is ready' : ''}`
+        `Queued ${data.queued} call${data.queued === 1 ? '' : 's'} from ${data.totalCsvFiles} CSV file${data.totalCsvFiles === 1 ? '' : 's'} as drafts — a super admin or funding editor publishes each one`
       );
       setSourceZip(null);
       setOperatorNotes('');
@@ -1027,32 +1024,11 @@ export default function FundingIntakeAdminPage() {
                     </p>
                   </label>
 
-                  <label className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={canPublishFunding && autoPublishZip}
-                      onChange={(event) => setAutoPublishZip(event.target.checked)}
-                      disabled={!canWriteFundingIntake || !canPublishFunding}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <span className="text-sm">
-                      <span className="font-medium text-emerald-900">Publish each call automatically</span>
-                      <span className="mt-1 block text-xs leading-5 text-emerald-800">
-                        Every imported call goes live as soon as its draft is complete — no separate &quot;Publish Ready&quot; step.
-                        Drafts still missing required fields stay unpublished for manual review.
-                        {!canPublishFunding && ' Funding publishing access is required for this option.'}
-                      </span>
-                    </span>
-                  </label>
-
                   {bulkResult && (
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex flex-wrap gap-4 text-sm">
                         <span className="font-medium text-slate-900">{bulkResult.totalCsvFiles} CSV file{bulkResult.totalCsvFiles === 1 ? '' : 's'} found</span>
                         <span className="text-emerald-700">{bulkResult.queued} queued</span>
-                        {bulkResult.autoPublish && (
-                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">auto-publish on</span>
-                        )}
                         {bulkResult.failed > 0 && <span className="text-rose-700">{bulkResult.failed} failed</span>}
                         {bulkResult.batches.length > 0 && (
                           <span className="text-slate-600">{bulkResult.batches.length} batch{bulkResult.batches.length === 1 ? '' : 'es'} created</span>

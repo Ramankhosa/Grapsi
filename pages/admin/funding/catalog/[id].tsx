@@ -45,6 +45,7 @@ type CatalogDetails = {
     embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
   };
   draftValues: Record<string, any>;
+  expectedReview?: { opportunityId: string; callRevision: number; reviewRevision: number; evidenceManifestVersion: number };
   publishReadiness: {
     ready: boolean;
     missingFields: string[];
@@ -187,7 +188,7 @@ export default function FundingCatalogDetailPage() {
       const response = await authFetch(`/api/admin/funding/calls/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draftValues),
+        body: JSON.stringify({ ...draftValues, expectedReview: details?.expectedReview }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -216,6 +217,8 @@ export default function FundingCatalogDetailPage() {
     try {
       const response = await authFetch(`/api/admin/funding/calls/${id}/${action}`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedReview: details?.expectedReview }),
       });
       const data = await response.json();
       if (!response.ok) {

@@ -1,8 +1,8 @@
 export const dynamic = 'force-dynamic'
 import { withCatalogueProtection } from '@/lib/catalogueProtection/guard'
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
 
+import { catalogFacets, parseCatalogSearch } from '@/lib/funding/catalogSearch'
 import { requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingPublicationService } from '@/lib/researcherProfile/funding-publications'
 import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
@@ -17,18 +17,18 @@ async function catalogueGET(request: NextRequest) {
   }
 
   try {
-    const status = request.nextUrl.searchParams.get('status') as any
-    const page = Math.max(1,Math.floor(Number(request.nextUrl.searchParams.get('page'))||1))
-    const total = await prisma.fundingCall.count({where:{NOT:{visibility:'GLOBAL_CATALOG'},...(status && status!=='ALL'?{catalog_status:status}:{})}})
+    const search = parseCatalogSearch(request.nextUrl.searchParams)
     const [
-      calls,
+      { calls, total },
+      facets,
       coverage,
       embeddingHealth,
       researchAreaCoverage,
       researcherProfileCoverage,
       fundingPublicationCoverage,
     ] = await Promise.all([
-      fundingCatalogService.listFundingCalls(status && status !== 'ALL' ? status : null,{page,pageSize:50}),
+      fundingCatalogService.searchFundingCalls(search),
+      catalogFacets(search),
       fundingCatalogService.getEmbeddingCoverageSummary(),
       Promise.resolve(fundingCatalogService.getEmbeddingServiceHealth()),
       researcherProfileService.getResearchAreaEmbeddingCoverage(),
@@ -37,7 +37,8 @@ async function catalogueGET(request: NextRequest) {
     ])
     return NextResponse.json({
       calls,
-      page,total,pageSize:50,
+      page: search.page, total, pageSize: search.pageSize,
+      facets,
       coverage,
       embeddingHealth,
       researchAreaCoverage,

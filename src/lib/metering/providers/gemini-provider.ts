@@ -4,6 +4,35 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
+import { allowedProviderAttempts, withErrorDetails, sdkRetryOptions } from './executionPolicy'
+
+/** Configured model codes -> Gemini API model ids (also used by Source Watch batch mode). */
+export const GEMINI_MODEL_ALIASES: Record<string, string> = {
+  // Gemini 1.5 stable variants
+  'gemini-1.5-pro': 'gemini-1.5-pro-002',
+  'gemini-1.5-flash': 'gemini-1.5-flash-002',
+  // Gemini 2.x variants (align to current GA/preview IDs)
+  // Retired 1 Jun 2026 (hard shutdown) — alias onto the 2.5 line so stored
+  // stage configs that still name them keep working.
+  'gemini-2.0-flash': 'gemini-2.5-flash',
+  'gemini-2.0-flash-001': 'gemini-2.5-flash',
+  'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
+  // Experimental models (pass through as-is)
+  'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
+  'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp',
+  'gemini-exp-1206': 'gemini-exp-1206',
+  // Legacy image models (pass through as-is)
+  'gemini-3.0-nano-banana': 'gemini-3.0-nano-banana',
+  'gemini-3.1-flash': 'gemini-3-flash-preview',
+  'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
+  'gemini-3-flash-preview': 'gemini-3-flash-preview',
+  'gemini-3-pro-preview': 'gemini-3-pro-preview',
+  'gemini-3-pro-preview-thinking': 'gemini-3-pro-preview',
+  'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview'
+}
 
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
@@ -37,32 +66,7 @@ export class GeminiProvider implements LLMProvider {
 
   // Map legacy model codes (as saved in plan config) to current Google model IDs
   // This keeps old config working after Google renames/versions.
-  private modelAliasMap: Record<string, string> = {
-    // Gemini 1.5 stable variants
-    'gemini-1.5-pro': 'gemini-1.5-pro-002',
-    'gemini-1.5-flash': 'gemini-1.5-flash-002',
-    // Gemini 2.x variants (align to current GA/preview IDs)
-    // Retired 1 Jun 2026 (hard shutdown) — alias onto the 2.5 line so stored
-    // stage configs that still name them keep working.
-    'gemini-2.0-flash': 'gemini-2.5-flash',
-    'gemini-2.0-flash-001': 'gemini-2.5-flash',
-    'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
-    'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
-    // Experimental models (pass through as-is)
-    'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
-    'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp',
-    'gemini-exp-1206': 'gemini-exp-1206',
-    // Legacy image models (pass through as-is)
-    'gemini-3.0-nano-banana': 'gemini-3.0-nano-banana',
-    'gemini-3.1-flash': 'gemini-3-flash-preview',
-    'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
-    'gemini-3-flash-preview': 'gemini-3-flash-preview',
-    'gemini-3-pro-preview': 'gemini-3-pro-preview',
-    'gemini-3-pro-preview-thinking': 'gemini-3-pro-preview',
-    'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
-    'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
-    'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview'
-  }
+  private modelAliasMap: Record<string, string> = GEMINI_MODEL_ALIASES
 
   private config: ProviderConfig
   private client: any // Google Generative AI client
@@ -159,15 +163,16 @@ export class GeminiProvider implements LLMProvider {
       // Gemini 3 "thinking_level" is expressed in the REST request schema.
       // The @google/generative-ai SDK may not expose it directly for all versions, so for
       // gemini-3 models we call REST directly to ensure thinking_level is honored.
-      if (isGemini3) {
-        return await this.executeGemini3ViaRest({
+      if (isGemini3 || (modelClass === 'gemini-2.5-pro' && request.parameters?.responseJsonSchema)) {
+        return await this.executeStructuredViaRest({
           requestedModel,
           modelClass,
           request,
           maxTokens,
           temperature,
           topP,
-          thinkingLevel
+          thinkingLevel: isGemini3 ? thinkingLevel : undefined,
+          thinkingBudget: !isGemini3 && Number.isInteger(request.parameters?.thinking_budget) ? request.parameters!.thinking_budget : undefined,
         })
       }
 
@@ -285,13 +290,13 @@ export class GeminiProvider implements LLMProvider {
       }
 
       // Add retry logic for network issues
-      const maxRetries = 3
+      const maxRetries = allowedProviderAttempts(request, 3)
       let lastError: Error | null = null
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`Attempting Gemini API call (attempt ${attempt}/${maxRetries})`)
-          const result = await model.generateContent(contentToGenerate)
+          const result = await model.generateContent(contentToGenerate, sdkRetryOptions(request).timeout ? { timeout: sdkRetryOptions(request).timeout } : undefined)
           const response = result.response
 
           // If we get here, the call was successful
@@ -326,7 +331,12 @@ export class GeminiProvider implements LLMProvider {
             if (finishReason === 'MAX_TOKENS') {
               console.warn('💡 MAX_TOKENS reached - consider increasing token limit or reducing prompt size');
             }
-            throw new Error(`Gemini API returned empty response (finishReason: ${finishReason})`);
+            // The tokens were still billed: carry the usage so a caller that
+            // accounts per attempt records a billable failure, not a free one.
+            throw Object.assign(new Error(`Gemini API returned empty response (finishReason: ${finishReason})`), {
+              code: 'EMPTY_RESPONSE',
+              billableUsage: { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens },
+            });
           }
 
           return {
@@ -358,7 +368,7 @@ export class GeminiProvider implements LLMProvider {
       }
 
       // All retries failed
-      throw new Error(`Gemini API call failed after ${maxRetries} attempts. Last error: ${lastError?.message}`)
+      throw withErrorDetails(`Gemini API call failed after ${maxRetries} attempts. Last error: ${lastError?.message}`, lastError)
     } catch (error) {
       console.error('Gemini API error:', error)
 
@@ -371,7 +381,7 @@ export class GeminiProvider implements LLMProvider {
         }
       }
 
-      throw new Error(`Gemini API call failed: ${error instanceof Error ? error.message : String(error)}`)
+      throw withErrorDetails(`Gemini API call failed: ${error instanceof Error ? error.message : String(error)}`, error)
     }
   }
 
@@ -447,7 +457,7 @@ export class GeminiProvider implements LLMProvider {
     return costs[normalized] || { input: 0.00000125, output: 0.000005 }
   }
 
-  private async executeGemini3ViaRest(args: {
+  private async executeStructuredViaRest(args: {
     requestedModel: string
     modelClass: string
     request: LLMRequest
@@ -455,8 +465,9 @@ export class GeminiProvider implements LLMProvider {
     temperature: number
     topP: number
     thinkingLevel?: string
+    thinkingBudget?: number
   }): Promise<LLMResponse> {
-    const { requestedModel, modelClass, request, maxTokens, temperature, topP, thinkingLevel } = args
+    const { requestedModel, modelClass, request, maxTokens, temperature, topP, thinkingLevel, thinkingBudget } = args
 
     // Build multimodal content payload for Gemini REST API
     let parts: any[] = []
@@ -512,7 +523,9 @@ export class GeminiProvider implements LLMProvider {
     }
 
     if (thinkingLevel) {
-      body.thinking_level = thinkingLevel
+      body.generationConfig.thinkingConfig = { thinkingLevel }
+    } else if (thinkingBudget !== undefined) {
+      body.generationConfig.thinkingConfig = { thinkingBudget }
     }
 
     // Use the configured baseURL (defaults to https://generativelanguage.googleapis.com/v1beta)
@@ -524,21 +537,23 @@ export class GeminiProvider implements LLMProvider {
         'x-goog-api-key': this.config.apiKey
       },
       body: JSON.stringify(body)
+      ,signal: sdkRetryOptions(request).timeout ? AbortSignal.timeout(sdkRetryOptions(request).timeout!) : undefined
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`Gemini API error: ${response.status} ${errorText}`)
+      let detail: { error?: { status?: string } } = {}
+      try { detail = JSON.parse(errorText) } catch { /* HTTP status still identifies the rejection. */ }
+      throw Object.assign(new Error(`Gemini API error: ${response.status} ${errorText.slice(0, 2000)}`), {
+        status: response.status, code: detail.error?.status ?? 'HTTP_ERROR',
+        requestId: response.headers.get('x-request-id') ?? response.headers.get('x-goog-request-id') ?? undefined,
+      })
     }
 
     const data = await response.json()
     const candidate = data?.candidates?.[0]
     const candidateParts = candidate?.content?.parts || []
-    const output = candidateParts.map((p: any) => p?.text).filter(Boolean).join('\n')
-
-    if (!output || output.trim().length === 0) {
-      throw new Error(`Gemini API returned empty response (finishReason: ${candidate?.finishReason || 'unknown'})`)
-    }
+    const output = candidateParts.filter((p: any) => !p?.thought).map((p: any) => p?.text).filter(Boolean).join('\n')
 
     const usage =
       data?.usageMetadata && typeof data.usageMetadata === 'object'
@@ -551,6 +566,11 @@ export class GeminiProvider implements LLMProvider {
     const cachedInputTokens = this.readTokenNumber(
       usage?.cachedContentTokenCount ?? usage?.cached_content_token_count
     )
+    if (!output.trim()) {
+      throw Object.assign(new Error(`Gemini API returned empty response (finishReason: ${candidate?.finishReason || 'unknown'})`), {
+        code: 'EMPTY_RESPONSE', ...(usage ? { billableUsage: { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens } } : {}),
+      })
+    }
     return {
       output,
       outputTokens,
