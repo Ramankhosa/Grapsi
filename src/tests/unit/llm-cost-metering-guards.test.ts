@@ -146,11 +146,8 @@ describe('LLM cost metering guards', () => {
   })
 
   it('seeds Gemini embedding pricing from Google online request pricing', () => {
-    const seed = readRepoFile('scripts/seed-llm-models.ts')
-    const block = seed.slice(
-      seed.indexOf("code: 'gemini-embedding-001'"),
-      seed.indexOf('// Google - Image Generation Models')
-    )
+    const seed = readRepoFile('Seed/seed-llm-models.js')
+    const block = seed.match(/code: 'gemini-embedding-001',[\s\S]*?\n\s*\}/)?.[0] || ''
 
     expect(block).toContain("code: 'gemini-embedding-001'")
     expect(block).toContain('contextWindow: 2048')
