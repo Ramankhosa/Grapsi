@@ -8,6 +8,7 @@ import { canReviewDept } from '@/lib/fundingDept/shared'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { z } from 'zod'
+import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,9 +53,12 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     return NextResponse.json({ error: 'Funding call not found.' }, { status: 404 })
   }
 
+  const orgUnitId=new URL(request.url).searchParams.get('orgUnitId')
+  const unitIds=orgUnitId ? await listSubtreeUnitIds(context.tenantId,[orgUnitId]) : null
   const [alerts, assignments] = await Promise.all([
     prisma.fundingCallAlert.findMany({
-      where: { funding_call_id: call.id, user: { tenantId: context.tenantId } },
+      where: { funding_call_id: call.id, user: { tenantId: context.tenantId,
+        ...(unitIds ? {researcher_profile:{org_unit_id:{in:unitIds}}} : {}) } },
       select: {
         id: true,
         match_score: true,
@@ -79,7 +83,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       take: 200,
     }),
     prisma.callAssignment.findMany({
-      where: { funding_call_id: call.id, tenant_id: context.tenantId },
+      where: { funding_call_id: call.id, tenant_id: context.tenantId,
+        ...(unitIds ? {assignee_org_unit_id:{in:unitIds}} : {}) },
       include: assignmentInclude,
       orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
       take: 200,
@@ -91,7 +96,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   // The shortlist: everyone considered, including the people who were passed
   // over. Without it the record of a call shows only whoever said yes.
   const candidates = await prisma.callCandidate.findMany({
-    where: { tenant_id: context.tenantId, funding_call_id: call.id },
+    where: { tenant_id: context.tenantId, funding_call_id: call.id,
+      ...(unitIds ? {user:{researcher_profile:{org_unit_id:{in:unitIds}}}} : {}) },
     select: {
       id: true,
       status: true,

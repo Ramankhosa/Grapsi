@@ -44,6 +44,7 @@ export async function registerReportHandler(request: NextRequest, view: (typeof 
       filters: Object.fromEntries([...params].filter(([k]) => !['format', 'page', 'pageSize'].includes(k))) })
     const snapshotOf = async (payload: unknown) => writeReportSnapshot(tenantId, access.context.user.id, reportScopeKey(access), reportFilterKey(params, view), payload as never)
     const registerFilters: RegisterFilters = {
+      attention: params.get('attention'), untouchedDays: view==='register' ? (await getDeptSettings(tenantId)).untouchedDays : undefined,
       scopeSchoolIds: scope, schoolId: requestedSchool, coordinatorUserId: params.get('coordinatorId'), reviewState: params.get('reviewState'),
       deadlineState: params.get('deadlineState'), submission: params.get('submission'), source: params.get('source'), callSearch: params.get('callSearch'),
       callId: params.get('callId'), overdueActions: params.get('overdueActions') === 'true', start: window.start, end: window.end, asOf: window.asOf, page, pageSize, all: exporting,

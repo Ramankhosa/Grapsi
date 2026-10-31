@@ -84,8 +84,8 @@ export function Search({ value, onChange, placeholder }: { value: string; onChan
 export function ScopeFilters({ options, lens, filters, patch }: { options?: HubOptions; lens?: string; filters: Filters; patch: (next: Filters) => void }) {
   const deputy = filters.portfolio === 'deputy'
   return <>
-    {lens === 'department' && <Select label="DSR member" value={filters.memberId || ''} onChange={v => patch({ memberId: v, schoolId: '' })} all="All members"
-      options={(options?.members || []).map(m => [m.id, m.name])} help="Show one member's work: their primary schools (Pendency: the calls they are responsible for)." />}
+    {lens === 'department' && <Select label="DSR member" value={filters.memberId || ''} onChange={v => patch({ memberId: v, schoolId: '', coordinatorId:'', noCoordinator:'' })} all="All members"
+      options={(options?.members || []).map(m => [m.id, m.name])} help="Incoming and Assigned follow the available coordinator. Missed work follows the accountable owner at closing. Follow-ups show performed activity." />}
     {lens === 'member' && (deputy || (options?.deputySchools || 0) > 0) && <Select label="Portfolio" value={deputy ? 'deputy' : ''} all={null}
       onChange={v => patch({ portfolio: v === 'deputy' ? 'deputy' : '', schoolId: '' })} options={[['', 'My schools'], ['deputy', 'Schools I cover as deputy']]}
       help="Your own schools, or the schools you cover for another member. The two are never added together." />}

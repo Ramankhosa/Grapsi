@@ -920,33 +920,11 @@ export class FundingCatalogService {
       }
     });
 
-    // Classify into the discipline catalog, then tell the officer covering each
-    // school it matches. The two are chained rather than fired in parallel
-    // because the notice reads the mappings the classifier writes — racing them
-    // would silently notify nobody on a call's first publish.
-    //
-    // The whole chain is off the critical path and swallows its own errors: a
-    // classification we could not make must never fail a publish. Imported
-    // lazily for the same reason as the alert service below.
-    void (async () => {
-      try {
-        const { classifyFundingCall } = await import('@/lib/funding/disciplineClassifier');
-        await classifyFundingCall(fundingCallId);
-        // Store which schools the call is now the business of before anyone is
-        // told about it, so the notice and the coordinator queue agree.
-        const { mapCallToSchools } = await import('@/lib/fundingDept/callSchoolMapping');
-        await mapCallToSchools(fundingCallId).catch((error) =>
-          console.warn(`[DSR MAPPING] Could not map call ${fundingCallId}:`, error instanceof Error ? error.message : String(error))
-        );
-        const { notifyCoveringOfficers } = await import('@/lib/fundingDept/newCallNoticeService');
-        await notifyCoveringOfficers(fundingCallId);
-      } catch (error) {
-        console.warn(
-          `[CLASSIFY] Could not classify or route call ${fundingCallId}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    })();
+    // Publication enqueues routing transactionally in the database. Start it now
+    // for low latency; the scheduled sweep recovers failures and process exits.
+    import('@/lib/fundingDept/callRoutingJobs')
+      .then(({ kickCallRouting }) => kickCallRouting(fundingCallId))
+      .catch(error => console.error('[DSR ROUTING] Could not start worker:', error));
 
     // A curated call the imported catalogue already holds gets a review item,
     // so the imported copy can be set aside. Background, never blocking.

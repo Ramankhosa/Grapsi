@@ -107,18 +107,30 @@ export function paging(params: URLSearchParams) {
  * transfer to someone since deactivated or moved off the school kept naming them
  * as the coordinator here while the Overview named the primary.
  */
-export function transferOwnerSql(tenantId: string, schoolExpr: string, callExpr: string): Prisma.Sql {
+export function transferOwnerSql(tenantId: string | Prisma.Sql, schoolExpr: string, callExpr: string | Prisma.Sql): Prisma.Sql {
   return Prisma.sql`(SELECT tr.owner_user_id FROM dsr_responsibility_transfers tr
       JOIN funding_dept_members tm ON tm.user_id=tr.owner_user_id AND tm.tenant_id=tr.tenant_id AND tm.is_active
-     WHERE tr.tenant_id=${tenantId} AND tr.school_id=${Prisma.raw(schoolExpr)} AND tr.call_id=${Prisma.raw(callExpr)}
+     WHERE tr.tenant_id=${tenantId} AND tr.school_id=${Prisma.raw(schoolExpr)} AND tr.call_id=${typeof callExpr === 'string' ? Prisma.raw(callExpr) : callExpr}
+       AND ${availableMemberSql('tm')}
+       AND EXISTS (SELECT 1 FROM users transfer_user WHERE transfer_user.id=tm.user_id AND transfer_user."tenantId"=${tenantId} AND transfer_user.status='ACTIVE')
        AND EXISTS (SELECT 1 FROM funding_dept_school_assignments ts WHERE ts.member_id=tm.id AND ts.org_unit_id=tr.school_id)
      LIMIT 1)`
 }
 
-/** The school's responsible coordinator: a valid per-call transfer owner, else the primary member. */
-export function coordinatorSql(tenantId: string, schoolExpr: string, callExpr: string): Prisma.Sql {
+/** Same inclusive leave interval as isMemberAway; stored timestamps are UTC without a zone. */
+export function availableMemberSql(alias: string): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  return Prisma.sql`NOT ((${a}.away_from IS NOT NULL OR ${a}.away_until IS NOT NULL)
+    AND (${a}.away_from IS NULL OR ${a}.away_from <= (now() AT TIME ZONE 'UTC'))
+    AND (${a}.away_until IS NULL OR ${a}.away_until >= (now() AT TIME ZONE 'UTC')))`
+}
+
+/** Operational coordinator: available transfer owner, available primary, then available deputy. */
+export function coordinatorSql(tenantId: string | Prisma.Sql, schoolExpr: string, callExpr: string | Prisma.Sql): Prisma.Sql {
   return Prisma.sql`COALESCE(
     ${transferOwnerSql(tenantId, schoolExpr, callExpr)},
     (SELECT dm.user_id FROM funding_dept_school_assignments sa JOIN funding_dept_members dm ON dm.id=sa.member_id AND dm.is_active
-      WHERE sa.tenant_id=${tenantId} AND sa.org_unit_id=${Prisma.raw(schoolExpr)} AND NOT sa.is_deputy ORDER BY sa.id LIMIT 1))`
+      WHERE sa.tenant_id=${tenantId} AND sa.org_unit_id=${Prisma.raw(schoolExpr)} AND ${availableMemberSql('dm')}
+        AND EXISTS (SELECT 1 FROM users coordinator_user WHERE coordinator_user.id=dm.user_id AND coordinator_user."tenantId"=${tenantId} AND coordinator_user.status='ACTIVE')
+      ORDER BY sa.is_deputy, sa.id LIMIT 1))`
 }

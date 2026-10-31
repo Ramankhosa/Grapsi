@@ -14,7 +14,7 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { openCallSql, textArray, visibleCallSql } from './callSql'
+import { effectiveCallDeadlineSql, openCallSql, textArray, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { getDeptSettings } from './settings'
@@ -57,9 +57,9 @@ export async function getUnclassifiedQueue(tenantId: string, f: { page?: number;
         FROM funding_calls fc WHERE ${where}`),
     prisma.$queryRaw<Array<{ id: string; title: string; agency: string | null; entered_at: Date; deadline: Date | null; origin_school: string | null; global: boolean }>>(Prisma.sql`
       SELECT fc.id, COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency, COALESCE(fc."publishedAt", fc."createdAt") entered_at,
-             COALESCE(fc.close_date, fc."deadlineAt") deadline, fc.origin_school_name origin_school, fc."tenantId" IS NULL global
+             ${effectiveCallDeadlineSql('fc',timeZone)} deadline, fc.origin_school_name origin_school, fc.visibility='GLOBAL_PUBLISHED' global
         FROM funding_calls fc WHERE ${where}
-       ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST, fc.id
+       ORDER BY ${effectiveCallDeadlineSql('fc',timeZone)} ASC NULLS LAST, fc.id
        ${f.all ? Prisma.empty : Prisma.sql`LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`}`),
   ])
   return {

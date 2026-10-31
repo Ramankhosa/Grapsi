@@ -3,12 +3,18 @@ import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { zonedDayStart } from '@/lib/i18n/format'
 import { Prisma } from '@/lib/prisma-generated'
 import { actionableSchoolCallWhereSql, loadUnitAreaProfile, relevanceForCalls } from '@/lib/funding/callUnitRelevance'
-import { textArray, visibleCallSql } from './callSql'
+import { textArray, visibleCallSql, effectiveCallDeadlineSql, callDaysToDeadlineSql } from './callSql'
 import { applicationState, day, evidenceFingerprint, hasSubmissionEvidence, inPeriod, median, opportunityActionState, opportunityDeadlineAttention, overdueAt, ratio, type ApplicationRow, type AttentionFilter, type ReportMode } from './managementRules'
 import { resolveActivityWindow } from './accountabilityService'
 import { closesOpportunity, isExpiredInIndia, resolveResponsibility } from './responsibility'
 import { reportSchoolMatchStates } from './currentMatches'
 import { getDeptSettings } from './settings'
+import { getMatchWidth } from './settings'
+import { currentQualifyingMatchSql } from './reportDefinitions'
+import { memberWorkedCallIds } from './memberWork'
+import { schoolDeadlineFactsSql } from './deadlineOutcomeSql'
+import { deadlineStateSql } from './reportDefinitions'
+import { bandForScore } from './matchBands'
 import { isMemberAway } from './shared'
 import { getIncomingReport } from './incomingReport'
 import { countAllocations, countIndependentApplications, countSchoolResponsibilities, countSubmissions, countUniqueCalls, deadlineState, isAdHocCallId, isRelevantQuality, MISSED_DEADLINE_STATES, PENDENCY_MATCH_TIERS, reviewState, submissionState, submissionSummary, isAllocation, isIndependentApplication, isSubmission, UNCOUNTED_MATCH_VERSIONS } from './reportDefinitions'
@@ -70,6 +76,7 @@ export async function loadCanonicalApplications(tenantId: string, schoolIds: str
 export async function getManagementReport(tenantId: string, filters: ManagementFilters) {
   const at = filters.asOf
   const timeZone = await getTenantTimeZone(tenantId)
+  const matchWidth = await getMatchWidth(tenantId)
   const [schoolCatalog, members, settings] = await Promise.all([
     prisma.tenantOrgUnit.findMany({ where: { tenant_id: tenantId, depth: 0 }, orderBy: [{name:'asc'},{id:'asc'}], select: { id:true,name:true,code:true,is_active:true } }),
     prisma.fundingDeptMember.findMany({ where: {tenant_id:tenantId}, include: { user:{select:{id:true,name:true,email:true}}, school_assignments:true } }),
@@ -118,8 +125,8 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     // Only what every other report calls a match: current, automatic, strong or
     // moderate. Counting weak rows here is what made MATCHED_UNALLOCATED fire
     // on calls whose "matches" the call window itself ranked as weak.
-    prisma.fundingOpportunityMatch.findMany({where:{tenant_id:tenantId,school_id:{in:ids.filter(id=>projection.get(id)?.fresh)},is_current:true,
-      inferred:false,match_tier:{in:[...PENDENCY_MATCH_TIERS]},NOT:{source_version:{in:[...UNCOUNTED_MATCH_VERSIONS]}}}}),
+    prisma.$queryRaw<Array<import('@/lib/prisma-generated').FundingOpportunityMatch>>(Prisma.sql`SELECT m.* FROM funding_opportunity_matches m
+      WHERE m.tenant_id=${tenantId} AND m.school_id=ANY(${textArray(ids)}) AND ${currentQualifyingMatchSql('m', matchWidth)}`),
     prisma.$queryRaw<Array<{ school_id:string;call_id:string;first_seen_at:Date;inferred:boolean }>>(Prisma.sql`SELECT * FROM dsr_opportunity_observations WHERE tenant_id=${tenantId} AND school_id=ANY(${textArray(ids)}) AND first_seen_at<=${at}`),
     prisma.$queryRaw<Array<{ application_id:string;evidence_fingerprint:string;reviewer_user_id:string;verified_at:Date }>>(Prisma.sql`SELECT * FROM dsr_submission_verifications WHERE tenant_id=${tenantId} AND verified_at<=${at}`),
     prisma.$queryRaw<Array<{application_id:string;id:string}>>(Prisma.sql`SELECT 'assignment:'||assignment_id application_id,id FROM assignment_documents WHERE tenant_id=${tenantId} AND kind='PROPOSAL'
@@ -185,13 +192,15 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     a.contacts.some(c=>external(c) && inPeriod(c.happened_at,filters.start,filters.end)) || a.actions.some(x=>inPeriod(x.completed_at,filters.start,filters.end))
   const rawSchoolRows = await Promise.all(schools.map(async school => {
     const profile = await loadUnitAreaProfile(tenantId,[school.id])
-    const calls = await prisma.$queryRaw<Array<{id:string;title:string;agency:string|null;deadline:Date|null;triage:string|null;decided_at:Date|null;origin_school_id:string|null;origin_school_name:string|null;origin_school_source:string|null;intake_origin?:boolean}>>(Prisma.sql`
+    const calls = await prisma.$queryRaw<Array<{id:string;title:string;agency:string|null;deadline:Date|null;deadline_status?:import('./reportGlossary').DeadlineState;triage:string|null;decided_at:Date|null;origin_school_id:string|null;origin_school_name:string|null;origin_school_source:string|null;intake_origin?:boolean}>>(Prisma.sql`
       SELECT fc.id,COALESCE(fc.scheme_title,fc.title) title,COALESCE(fc.agency_name,fc."agencyName") agency,
-      COALESCE(fc.close_date,fc."deadlineAt") deadline,tri.status triage,tri.decided_at,
+      ${effectiveCallDeadlineSql('fc',timeZone)} deadline,tri.status triage,tri.decided_at,
+      ${deadlineStateSql({deadline:effectiveCallDeadlineSql('fc',timeZone),formalAllocations:'history.allocations',submissions:'history.submissions',closedWithReason:'history.closed',daysToDeadline:callDaysToDeadlineSql(at,'fc',timeZone)},at,timeZone)} deadline_status,
       fc.origin_school_id,fc.origin_school_name,fc.origin_school_source,COALESCE(fc."publishedAt",fc."createdAt") entered_at,
       EXISTS(SELECT 1 FROM dsr_origin_responsibilities intake WHERE intake.tenant_id=${tenantId} AND intake.school_id=${school.id} AND intake.call_id=fc.id) intake_origin,
       EXISTS(SELECT 1 FROM dsr_origin_responsibilities intake WHERE intake.tenant_id=${tenantId} AND intake.call_id=fc.id) has_tenant_origin
       FROM funding_calls fc LEFT JOIN call_school_triage tri ON tri.funding_call_id=fc.id AND tri.org_unit_id=${school.id} AND tri.tenant_id=${tenantId}
+      CROSS JOIN LATERAL (${schoolDeadlineFactsSql(tenantId,Prisma.sql`${school.id}`,'fc',timeZone)}) history
       WHERE fc."createdAt"<=${at} AND ${visibleCallSql(tenantId)} AND ${actionableSchoolCallWhereSql(tenantId,school.id)} ORDER BY fc.id`)
     const relevance = await relevanceForCalls(profile,calls.map(c=>c.id))
     const allSchoolApps = apps.filter(a=>a.school_id===school.id)
@@ -206,7 +215,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       // A stored mapping is the one arrival date for this school (reportDefinitions:
       // "New" ages from mapped_at); the backfill seeded it from these observations.
       const firstSeen = mappingRow?.mapped_at || observation?.first_seen_at || (adHoc ? callApps[0]?.created_at : (call as typeof call & {entered_at?:Date}).entered_at) || null
-      const callMatches = matches.filter(m=>m.school_id===school.id && m.funding_call_id===call.id && personSchool.get(m.user_id)===school.id)
+      const callMatches = matches.filter(m=>m.school_id===school.id && m.funding_call_id===call.id)
       const callActions = actions.filter(a=>a.school_id===school.id && a.call_id===call.id && !a.application_id)
       const allCallActions=actions.filter(a=>a.school_id===school.id&&(a.call_id===call.id||callApps.some(app=>app.id===a.application_id)))
       const matchedUsers = new Set(callMatches.map(m=>m.user_id))
@@ -237,7 +246,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       // The shared per-responsibility states (reportDefinitions).
       const review = adHoc ? null : reviewState({triageStatus:call.triage,triageDecidedAt:call.decided_at,dispositionReason:disposition?.reason,
         formalAllocations:formalAllocationCount,namedActions:callActions.length})
-      const deadlineStatus = adHoc ? null : deadlineState({deadline:call.deadline,formalAllocations:formalAllocationCount,submissions:submittedApplicationCount,
+      const deadlineStatus = adHoc ? null : call.deadline_status ?? deadlineState({deadline:call.deadline,formalAllocations:formalAllocationCount,submissions:submittedApplicationCount,
         closedWithReason:review==='CLOSED_NO_ALLOCATION'},at,timeZone)
       const submission = submissionSummary(callApps.map(a=>({...a,verified:Boolean(a.verification)})))
       const upcoming21 = deadlineRisk.upcoming21
@@ -314,7 +323,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
           const allocation=callApps.find(a=>a.faculty_id===m.user_id&&Boolean(a.assignment_id))
           const independent=callApps.find(a=>a.faculty_id===m.user_id&&!a.assignment_id)
           const candidate=callCandidates.find(c=>c.user_id===m.user_id)
-          return {...m,faculty:peopleMap.get(m.user_id),allocationStatus:allocation?'FORMALLY_ALLOCATED':independent?'INDEPENDENT_APPLICATION':'PENDING_ALLOCATION',
+          return {...m,match_tier:bandForScore(m.match_score,matchWidth,m.match_tier),faculty:peopleMap.get(m.user_id),allocationStatus:allocation?'FORMALLY_ALLOCATED':independent?'INDEPENDENT_APPLICATION':'PENDING_ALLOCATION',
             applicationWorkState:allocation?.workState || independent?.workState || null,applicationId:allocation?.id || independent?.id || null,
             candidateStatus:candidate?.status || null}
         }),
@@ -380,7 +389,9 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
   const scopedApps = apps.filter(a=>includedIds.has(a.id))
   const scopedActions=actions.filter(a=>includedCalls.some(c=>c.schoolId===a.school_id&&c.id===a.call_id)||Boolean(a.application_id&&includedIds.has(a.application_id)))
   const activityApps=scopedApps.filter(isActivity)
-  const contributors = members.filter(m=>m.is_active&&!rows.some(r=>r.id===m.id)&&contacts.some(c=>c.actor_id===m.user_id&&external(c)))
+  const workFacts={applications:scopedApps,contacts,events,visibleCallIds:new Set(includedCalls.map(c=>c.id))}
+  const workedCalls=(userId:string|null)=>userId ? memberWorkedCallIds(userId,filters.start,filters.end,workFacts) : new Set<string>()
+  const contributors = members.filter(m=>!rows.some(r=>r.id===m.id)&&workedCalls(m.user_id).size>0)
     .map(m=>({id:m.id,name:m.user.name||m.user.email,userId:m.user_id,totals:summarize([])}))
   const hasDetailFilter=Boolean(filters.callId||filters.callSearch||filters.workState||filters.stage||filters.exception||filters.waitingWith||filters.horizon||filters.attention||filters.actionClass||filters.responsibilityType||filters.ageDays||filters.queue||!filters.includeExpired)
   const weekly=weeklyMovement(events,filters.start,filters.end,members.map(m=>({id:m.id,name:m.user.name || m.user.email})),ids)
@@ -397,7 +408,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
     for(const a of portfolio){money[a.currency]??={requested:0,sanctioned:0};money[a.currency].requested+=a.requested_amount || 0;if(a.stage==='SANCTIONED') money[a.currency].sanctioned+=a.sanctioned_amount || 0}
     const memberCalls=includedCalls.filter(c=>owned.includes(c.schoolId))
     const firstTouches=memberCalls.filter(c=>c.firstSeen&&c.firstTouchAt).map(c=>Math.max(0,(c.firstTouchAt!.getTime()-c.firstSeen!.getTime())/day))
-    return {id:member.id,name:member.name,workload:member.totals,isAway:members.some(m=>m.id===member.id&&isMemberAway(m,at)),
+    return {id:member.id,name:member.name,workload:member.totals,performedCalls:workedCalls(member.userId).size,isAway:members.some(m=>m.id===member.id&&isMemberAway(m,at)),
       medianFirstTouchDays:median(firstTouches),firstTouchSample:firstTouches.length,
       oldestUnresolvedDays:Math.max(0,...memberCalls.flatMap(c=>c.responsibilities.filter(r=>!r.complete).map(r=>r.ageDays||0))),
       opportunityActionCoverage:ratio(member.totals.actedOn,member.totals.callSchoolOpportunities),

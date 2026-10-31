@@ -11,6 +11,7 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { DEFAULT_TIMEZONE } from '@/lib/i18n/format'
 import { deadlineDaySql, safeTimeZone } from '@/lib/i18n/sql'
+import { visibleFundingCallSql } from '@/lib/funding/callVisibility'
 
 /** A bound `text[]` literal. Empty arrays are the caller problem, not this one. */
 export function textArray(values: string[]): Prisma.Sql {
@@ -26,12 +27,8 @@ export function textArray(values: string[]): Prisma.Sql {
  * only, so counting a draft as pendency would create a backlog nobody could
  * clear.
  */
-export function visibleCallSql(tenantId: string, alias = 'fc'): Prisma.Sql {
-  const a = Prisma.raw(alias)
-  return Prisma.sql`(
-    (${a}."tenantId" = ${tenantId} AND (${a}.status = 'PUBLISHED' OR ${a}.catalog_status = 'PUBLISHED'))
-    OR (${a}."tenantId" IS NULL AND ${a}.visibility = 'GLOBAL_PUBLISHED' AND ${a}.status = 'PUBLISHED')
-  )`
+export function visibleCallSql(tenantId: string | Prisma.Sql, alias = 'fc'): Prisma.Sql {
+  return visibleFundingCallSql(tenantId, alias)
 }
 
 /**
@@ -66,6 +63,22 @@ export function callClosingDaySql(alias = 'fc', timeZone: string = DEFAULT_TIMEZ
 /** Today, in the call's deadline zone. */
 export function callTodaySql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
   return Prisma.sql`(now() AT TIME ZONE ${callDeadlineZoneSql(alias, timeZone)})::date`
+}
+
+/** Effective application-entry day, including an earlier closure reported by the source. */
+export function effectiveCallDeadlineSql(alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  return Prisma.sql`LEAST(${callClosingDaySql(alias, timeZone)},
+    CASE WHEN ${a}.import_run_id IS NOT NULL AND ${a}.source_closed_at IS NOT NULL
+      THEN (${a}.source_closed_at AT TIME ZONE 'UTC' AT TIME ZONE ${callDeadlineZoneSql(alias, timeZone)})::date END)`
+}
+
+/** An explicitly closed source is overdue even when it was first observed closed today. */
+export function callDaysToDeadlineSql(asOf: Date, alias = 'fc', timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  const days = Prisma.sql`(${effectiveCallDeadlineSql(alias, timeZone)}::date - (${asOf.toISOString()}::timestamptz AT TIME ZONE ${callDeadlineZoneSql(alias, timeZone)})::date)`
+  return Prisma.sql`CASE WHEN ${a}.import_run_id IS NOT NULL AND ${a}.source_closed_at IS NOT NULL
+    AND ${a}.source_closed_at <= ${utcTimestamp(asOf)} THEN LEAST(-1, ${days}) ELSE ${days} END`
 }
 
 /**

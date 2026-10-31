@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { sweepCallRouting } from '@/lib/fundingDept/callRoutingJobs'
 import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
@@ -62,6 +63,7 @@ export async function POST(request: NextRequest) {
         // Sequential, not parallel: all three write notifications for the same
         // people, and a member reading their bell should see them in a sensible
         // order.
+        const routing = await sweepCallRouting({ limit: Math.min(body.limit ?? 10,10), tenantId: body.tenantId })
         const reminders = await sweepDueReminders({ limit: body.limit })
         const escalations = await sweepDeadlineEscalations({ limit: body.limit })
         // Last, because it is the only one whose cost grows with the catalog: it
@@ -72,7 +74,7 @@ export async function POST(request: NextRequest) {
         // on this very sweep too, which is the point — if this route stops
         // being called, the console badge is what says so instead.
         const jobHealth = await sweepJobHealth()
-        return NextResponse.json({ reminders, escalations, pendency, jobHealth })
+        return NextResponse.json({ routing, reminders, escalations, pendency, jobHealth })
       } catch (error) {
         console.error('[FUNDING-DEPT] Reminder sweep failed:', error)
         return NextResponse.json(

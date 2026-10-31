@@ -10,6 +10,8 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { getTenantLocale } from '@/lib/tenant/locale'
 import { amountIn, sumByCurrency } from '@/lib/i18n/format'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryClosed, callEntryDeadline } from '@/lib/funding/callDeadline'
+import { callDaysToDeadlineSql, openCallSql, visibleCallSql } from '@/lib/fundingDept/callSql'
 
 export const dynamic = 'force-dynamic'
 
@@ -84,9 +86,9 @@ export async function GET(request: NextRequest) {
     tenantId: context.tenantId,
     NOT: { OR: [{ status: 'PUBLISHED' }, { catalog_status: 'PUBLISHED' }] },
   }
-  const notClosed: Prisma.FundingCallWhereInput = {
-    OR: [{ close_date: null }, { close_date: { gte: now } }],
-  }
+  const tenantTimeZone=(await getTenantLocale(context.tenantId)).timezone
+  const openIds=(await prisma.$queryRaw<Array<{id:string}>>(Prisma.sql`SELECT fc.id FROM funding_calls fc WHERE ${visibleCallSql(context.tenantId)} AND ${openCallSql('fc',tenantTimeZone)}`)).map(c=>c.id)
+  const notClosed: Prisma.FundingCallWhereInput = {id:{in:openIds}}
 
   const filters: Prisma.FundingCallWhereInput[] = [visible]
   if (q) {
@@ -104,9 +106,9 @@ export async function GET(request: NextRequest) {
   } else if (state === 'open') {
     filters.push({ NOT: draftPredicate }, notClosed)
   } else if (state === 'unassigned') {
-    filters.push({ NOT: draftPredicate }, notClosed, { assignments: { none: {} } })
+    filters.push({ NOT: draftPredicate }, notClosed, { assignments: { none: {tenant_id:context.tenantId} } })
   } else if (state === 'closed') {
-    filters.push({ close_date: { lt: now } })
+    filters.push({ NOT: draftPredicate }, {NOT:notClosed})
   }
 
   if (agency) {
@@ -157,10 +159,10 @@ export async function GET(request: NextRequest) {
     }
   }
   if (closingInDays > 0) {
-    const until = new Date(now.getTime() + closingInDays * 24 * 60 * 60 * 1000)
     // Undated calls are excluded on purpose: "closing within 30 days" is a
     // question about dated calls, and a null date would otherwise read as urgent.
-    filters.push({ close_date: { gte: now, lte: until } })
+    const closingIds=(await prisma.$queryRaw<Array<{id:string}>>(Prisma.sql`SELECT fc.id FROM funding_calls fc WHERE ${visibleCallSql(context.tenantId)} AND ${callDaysToDeadlineSql(now,'fc',tenantTimeZone)} BETWEEN 0 AND ${closingInDays}`)).map(c=>c.id)
+    filters.push({id:{in:closingIds}})
   }
 
   const where: Prisma.FundingCallWhereInput = { AND: filters }
@@ -223,7 +225,7 @@ export async function GET(request: NextRequest) {
         scheme_title: true,
         agencyName: true,
         agency_name: true,
-        close_date: true,
+        ...CALL_ENTRY_DEADLINE_SELECT,
         visibility: true,
         status: true,
         catalog_status: true,
@@ -237,7 +239,7 @@ export async function GET(request: NextRequest) {
     prisma.fundingCall.count({ where: visible }),
     prisma.fundingCall.count({ where: { AND: [visible, draftPredicate] } }),
     prisma.fundingCall.count({
-      where: { AND: [visible, { NOT: draftPredicate }, notClosed, { assignments: { none: {} } }] },
+      where: { AND: [visible, { NOT: draftPredicate }, notClosed, { assignments: { none: {tenant_id:context.tenantId} } }] },
     }),
   ])
 
@@ -266,8 +268,11 @@ export async function GET(request: NextRequest) {
             COUNT(*) FILTER (WHERE email_status = 'queued')::int AS emails_queued,
             COUNT(*) FILTER (WHERE email_status = 'failed')::int AS emails_failed,
             MAX(created_at) AS last_alert_at
-          FROM funding_call_alerts
+          FROM funding_call_alerts alert
           WHERE funding_call_id = ANY(${idArray})
+            AND EXISTS (SELECT 1 FROM users recipient WHERE recipient.id=alert.user_id AND recipient."tenantId"=${context.tenantId})
+            ${orgUnitId ? Prisma.sql`AND EXISTS (SELECT 1 FROM researcher_profiles recipient_profile JOIN tenant_org_units recipient_unit ON recipient_unit.id=recipient_profile.org_unit_id
+              WHERE recipient_profile.user_id=alert.user_id AND recipient_unit.tenant_id=${context.tenantId} AND ${orgUnitId}=ANY(recipient_unit.path))` : Prisma.empty}
           GROUP BY funding_call_id
         `),
         prisma.$queryRaw<
@@ -297,6 +302,7 @@ export async function GET(request: NextRequest) {
             COUNT(DISTINCT assignee_org_unit_id) FILTER (WHERE assignee_org_unit_id IS NOT NULL)::int AS schools
           FROM call_assignments
           WHERE tenant_id = ${context.tenantId} AND funding_call_id = ANY(${idArray})
+            ${orgUnitId ? Prisma.sql`AND EXISTS (SELECT 1 FROM tenant_org_units allocation_unit WHERE allocation_unit.id=assignee_org_unit_id AND allocation_unit.tenant_id=${context.tenantId} AND ${orgUnitId}=ANY(allocation_unit.path))` : Prisma.empty}
           GROUP BY funding_call_id
         `),
       ])
@@ -316,10 +322,10 @@ export async function GET(request: NextRequest) {
       id: row.id,
       title: row.scheme_title || row.title,
       agency: row.agency_name || row.agencyName || null,
-      closeDate: row.close_date,
+      closeDate: callEntryDeadline(row),
       visibility: row.visibility,
       isDraft,
-      isClosed: Boolean(row.close_date && row.close_date < now),
+      isClosed: callEntryClosed(row,now,tenantTimeZone),
       updatedAt: row.updatedAt,
       matched: {
         count: alerts?.matched ?? 0,

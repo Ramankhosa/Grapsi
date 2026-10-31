@@ -4,6 +4,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { getMatchWidth } from './settings'
 import { zonedDayStart } from '@/lib/i18n/format'
 
 import { resolveHubScope, paging, type HubScope } from './hubScope'
@@ -31,7 +32,7 @@ const builders: Record<HubReport, Builder> = {
     const { page, pageSize } = paging(params)
     const closing = params.get('closingWithin')
     const result = await getIncomingCalls(scope.tenantId, {
-      schoolIds: scope.schoolIds, includeExpired: params.get('includeExpired') === 'true', action: params.get('action'),
+      schoolIds: scope.schoolIdsIgnoringMember, coordinatorUserId: scope.memberUserId, width: await getMatchWidth(scope.tenantId), includeExpired: params.get('includeExpired') === 'true', action: params.get('action'),
       closingWithin: closing ? Number(closing) : null, source: params.get('source'), search: params.get('q'), callId: params.get('callId'),
       asOf: new Date(), page, pageSize, all: exporting,
     })
@@ -40,7 +41,7 @@ const builders: Record<HubReport, Builder> = {
   'assigned-calls': async (scope, params, exporting) => {
     const { page, pageSize } = paging(params)
     const result = await getAssignedCalls(scope.tenantId, {
-      schoolIds: scope.schoolIds, status: params.get('status'), due: params.get('due'), silent: params.get('silent') === 'true',
+      schoolIds: scope.schoolIdsIgnoringMember, coordinatorUserId: scope.memberUserId, status: params.get('status'), due: params.get('due'), silent: params.get('silent') === 'true',
       awaitingReply: params.get('awaitingReply') === 'true', submittedIn: params.get('submittedIn'), assignedByUserId: params.get('assignedBy') === 'me' ? scope.userId : null,
       search: params.get('q'), callId: params.get('callId'), assignmentId: params.get('assignmentId'), asOf: new Date(), page, pageSize, all: exporting,
     })
@@ -60,7 +61,7 @@ const builders: Record<HubReport, Builder> = {
     // A chosen member means "calls this person is responsible for": the by-member
     // table's basis, which follows per-call transfers rather than primary schools.
     const result = await getPendency(scope.tenantId, {
-      schoolIds: scope.memberUserId ? scope.schoolIdsIgnoringMember : scope.schoolIds, coordinatorUserId: scope.memberUserId, state: params.get('state'), deadlineFrom: day(params.get('deadlineFrom')), deadlineTo: day(params.get('deadlineTo'), 1),
+      schoolIds: scope.schoolIdsIgnoringMember, coordinatorUserId: params.get('noCoordinator')==='true' ? 'none' : params.get('coordinatorId') || scope.memberUserId, width: await getMatchWidth(scope.tenantId), matchedOnly: params.get('matchedOnly') === 'true', state: params.get('state'), deadlineFrom: day(params.get('deadlineFrom')), deadlineTo: day(params.get('deadlineTo'), 1),
       minMatches: min ? Math.max(1, Number(min) || 1) : null, search: params.get('q'), asOf: new Date(), page, pageSize, all: exporting,
     })
     return { payload: result, tables: () => pendencyExportTables(result.rows, result.members), extra: [['Rows', result.total]] }

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
@@ -179,6 +179,9 @@ export default function DeptCallFunnelPage() {
 
   const [openCallId, setOpenCallId] = useState<string | null>(null)
   const [drill, setDrill] = useState<Record<string, DrillIn | 'loading'>>({})
+  const drillScope=useRef(filters.orgUnitId)
+  drillScope.current=filters.orgUnitId
+  useEffect(()=>{setDrill({});setOpenCallId(null)},[filters.orgUnitId])
   const [publishingId, setPublishingId] = useState<string | null>(null)
 
   const canReview = me.isHead || me.canAdminister
@@ -282,9 +285,11 @@ export default function DeptCallFunnelPage() {
     setOpenCallId(callId)
     if (drill[callId] && drill[callId] !== 'loading') return
     setDrill((current) => ({ ...current, [callId]: 'loading' }))
+    const scope=filters.orgUnitId
     try {
-      const response = await authFetch(`/api/funding-dept/calls/${callId}`)
+      const response = await authFetch(`/api/funding-dept/calls/${callId}${scope ? `?orgUnitId=${encodeURIComponent(scope)}` : ''}`)
       const data = await response.json()
+      if(drillScope.current!==scope)return
       if (!response.ok) throw new Error(data.error || 'Failed to load call detail')
       setDrill((current) => ({
         ...current,
@@ -295,6 +300,7 @@ export default function DeptCallFunnelPage() {
         },
       }))
     } catch {
+      if(drillScope.current!==scope)return
       setDrill((current) => {
         const next = { ...current }
         delete next[callId]
@@ -538,7 +544,7 @@ export default function DeptCallFunnelPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-nickel-200 bg-nickel-50">
-                  {['Call', 'Deadline', 'State', 'Matched', 'Assigned', 'Submitted', 'Awarded', ''].map(
+                  {['Call', 'Deadline', 'State', 'Alert recipients', 'Assigned', 'Submitted', 'Awarded', ''].map(
                     (heading, index) => (
                       <th key={index} className="nk-eyebrow px-4 py-2.5 text-left">
                         {heading}
@@ -645,7 +651,7 @@ export default function DeptCallFunnelPage() {
                                 <div className="grid gap-6 lg:grid-cols-3">
                                   <div>
                                     <p className="nk-eyebrow mb-2">
-                                      Matched by alerts ({detail.matched.length})
+                                      Alert recipients ({detail.matched.length})
                                     </p>
                                     {detail.matched.length === 0 ? (
                                       <p className="nk-sub">

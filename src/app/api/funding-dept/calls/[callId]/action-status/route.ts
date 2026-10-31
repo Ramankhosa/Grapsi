@@ -27,7 +27,8 @@ const bodySchema = z.object({
   schoolIds: z.array(z.string().trim().min(1)).min(1).max(50),
   completed: z.boolean(),
   note: z.string().trim().max(1000).nullable().optional(),
-})
+  outcome: z.enum(['WORK_RECORDED','NO_SUITABLE_FACULTY','NOT_RELEVANT','CAPACITY','OTHER']).default('WORK_RECORDED'),
+}).refine(v => !v.completed || Boolean(v.note?.trim()), { message: 'Explain the action taken and its outcome before marking it completed.', path: ['note'] })
 
 export async function POST(request: NextRequest, { params }: { params: { callId: string } }) {
   const context = await requireTenantScope(request)
@@ -60,13 +61,14 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
 
   const now = new Date()
   const note = payload.completed ? payload.note || null : null
+  const outcome = payload.completed ? payload.outcome : null
   const results = await prisma.$transaction(async tx => {
     const out: Array<{ schoolId: string; completedAt: Date | null; changed: boolean }> = []
     for (const school of schools) {
-      const [before] = await tx.$queryRaw<Array<{ action_completed_at: Date | null; action_completed_note: string | null }>>(Prisma.sql`
-        SELECT action_completed_at, action_completed_note FROM call_school_triage WHERE funding_call_id=${call.id} AND org_unit_id=${school.id} FOR UPDATE`)
+      const [before] = await tx.$queryRaw<Array<{ action_completed_at: Date | null; action_completed_note: string | null; action_completed_outcome: string | null }>>(Prisma.sql`
+        SELECT action_completed_at, action_completed_note, action_completed_outcome FROM call_school_triage WHERE tenant_id=${context.tenantId} AND funding_call_id=${call.id} AND org_unit_id=${school.id} FOR UPDATE`)
       const wasCompleted = Boolean(before?.action_completed_at)
-      if (wasCompleted === payload.completed && (!payload.completed || (before?.action_completed_note || null) === note)) {
+      if (wasCompleted === payload.completed && (!payload.completed || ((before?.action_completed_note || null) === note && before?.action_completed_outcome === outcome))) {
         out.push({ schoolId: school.id, completedAt: before?.action_completed_at ?? null, changed: false })
         continue
       }
@@ -75,17 +77,17 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
       // decided_at is stamped only when empty: marking work done is a human look,
       // but it must never overwrite the date of an earlier review decision.
       await tx.$executeRaw(Prisma.sql`
-        INSERT INTO call_school_triage (id, tenant_id, funding_call_id, org_unit_id, status, decided_by_user_id, decided_at, action_completed_at, action_completed_by_user_id, action_completed_note, created_at, updated_at)
-        VALUES (${randomUUID()}, ${context.tenantId}, ${call.id}, ${school.id}, 'NEW', ${context.user.id}, ${utcTimestamp(now)}, ${utcTimestamp(completedAt)}, ${by}, ${note}, ${utcTimestamp(now)}, ${utcTimestamp(now)})
+        INSERT INTO call_school_triage (id, tenant_id, funding_call_id, org_unit_id, status, decided_by_user_id, decided_at, action_completed_at, action_completed_by_user_id, action_completed_note, action_completed_outcome, created_at, updated_at)
+        VALUES (${randomUUID()}, ${context.tenantId}, ${call.id}, ${school.id}, 'NEW', ${context.user.id}, ${utcTimestamp(now)}, ${utcTimestamp(completedAt)}, ${by}, ${note}, ${outcome}, ${utcTimestamp(now)}, ${utcTimestamp(now)})
         ON CONFLICT (funding_call_id, org_unit_id) DO UPDATE SET
           action_completed_at = EXCLUDED.action_completed_at, action_completed_by_user_id = EXCLUDED.action_completed_by_user_id,
-          action_completed_note = EXCLUDED.action_completed_note, updated_at = EXCLUDED.updated_at,
+          action_completed_note = EXCLUDED.action_completed_note, action_completed_outcome = EXCLUDED.action_completed_outcome, updated_at = EXCLUDED.updated_at,
           decided_by_user_id = CASE WHEN call_school_triage.decided_at IS NULL THEN EXCLUDED.decided_by_user_id ELSE call_school_triage.decided_by_user_id END,
           decided_at = COALESCE(call_school_triage.decided_at, EXCLUDED.decided_at)`)
-      await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
+      await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason,occurred_at)
         VALUES(${context.tenantId},${school.id},'REVIEW',${call.id},${context.user.id},${payload.completed ? 'ACTION_COMPLETED' : 'ACTION_REOPENED'},
-          ${JSON.stringify({ actionCompletedAt: before?.action_completed_at ?? null, note: before?.action_completed_note ?? null })}::jsonb,
-          ${JSON.stringify({ actionCompletedAt: completedAt, note, orgUnitId: school.id })}::jsonb, ${note})`)
+          ${JSON.stringify({ actionCompletedAt: before?.action_completed_at ?? null, note: before?.action_completed_note ?? null, outcome: before?.action_completed_outcome ?? null })}::jsonb,
+          ${JSON.stringify({ actionCompletedAt: completedAt, note, outcome, orgUnitId: school.id })}::jsonb, ${note},${utcTimestamp(now)})`)
       out.push({ schoolId: school.id, completedAt, changed: true })
     }
     return out

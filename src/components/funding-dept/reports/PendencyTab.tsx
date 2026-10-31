@@ -16,6 +16,7 @@ import {
 } from './hubKit'
 
 type Row = {
+  workState: string
   callId: string; title: string; agency: string | null; deadline: string | null; daysToDeadline: number | null
   school: { id: string; name: string }; coordinator: { id: string; name: string } | null; state: PendencyState
   matchedFaculty: number; firstMatchedAt: string; daysUnallocated: number; releasedAllocations: number; escalated: string[]; lastActivityAt: string | null
@@ -45,7 +46,7 @@ export default function PendencyTab({ filters, setFilters, openTab }: { filters:
       <Stat title="Missed" value={s?.missed} active={filters.state === 'MISSED'} tone={s?.missed ? 'border-red-300' : ''} help={define(`Pendency: ${PENDENCY_STATE_LABELS.MISSED}`)} onClick={() => set('state', 'MISSED')} />
       <Stat title="Closed by coordinator, no allocation" value={s?.completedNoAllocation} active={filters.state === 'COMPLETED_NO_ALLOCATION'} help={define(`Pendency: ${PENDENCY_STATE_LABELS.COMPLETED_NO_ALLOCATION}`)} onClick={() => set('state', 'COMPLETED_NO_ALLOCATION')} />
     </div>
-    <p className="nk-sub text-xs" title={define('Pendency vs. escalation ladder')}>{define('Directly matched call')} Pendency counts at risk + pending + missed.</p>
+    <p className="nk-sub text-xs">All mapped school responsibilities and current matching calls awaiting a submission or reasoned closure. Missed records use activity and accountable ownership at entry closing; late completion does not erase them. Open work follows the available operational coordinator.</p>
 
     <div className="nk-panel flex flex-wrap items-end gap-3 p-4">
       <ScopeFilters options={data?.options} lens={data?.lens} filters={filters} patch={setMany} />
@@ -54,10 +55,13 @@ export default function PendencyTab({ filters, setFilters, openTab }: { filters:
       <label className="flex flex-col gap-1 text-xs" title="Useful for a post-mortem: which calls were missed in a given month.">Deadline from<input type="date" className={field} value={filters.deadlineFrom || ''} onChange={e => set('deadlineFrom', e.target.value)} /></label>
       <label className="flex flex-col gap-1 text-xs">Deadline to<input type="date" className={field} value={filters.deadlineTo || ''} onChange={e => set('deadlineTo', e.target.value)} /></label>
       <Select label="Matched faculty" value={filters.minMatches || ''} onChange={v => set('minMatches', v)} all="Any number" options={[['2', '2 or more'], ['3', '3 or more'], ['5', '5 or more']]} />
+      <label className="flex items-center gap-2 pb-2 text-xs"><input type="checkbox" checked={filters.matchedOnly==='true'} onChange={e=>set('matchedOnly',e.target.checked?'true':'')} />Matched faculty, no allocation only</label>
+      <label className="flex items-center gap-2 pb-2 text-xs"><input type="checkbox" checked={filters.noCoordinator==='true' || filters.coordinatorId==='none'} onChange={e=>setMany({noCoordinator:e.target.checked?'true':'',memberId:'',coordinatorId:''})} />No coordinator recorded</label>
       <Search value={filters.q || ''} onChange={v => set('q', v)} placeholder="Call title, agency or ID" />
       <div className="ml-auto"><ExportButtons report="pendency" filters={filters} /></div>
     </div>
     <Status loading={loading && !data} refreshing={loading && !!data} error={error} />
+    {filters.coordinatorId&&<p className="text-sm">Responsible coordinator: {data?.members[0]?.name || 'Recorded coordinator'} <button className="text-cobalt-700 underline" onClick={()=>setMany({coordinatorId:'',noCoordinator:'',memberId:''})}>Clear</button></p>}
 
     {data?.lens === 'department' && data.members.length > 0 && <section className="nk-panel overflow-x-auto">
       <div className="flex items-baseline justify-between p-3"><h2 className="font-semibold">By DSR member</h2><span className="nk-sub text-xs">Click a number to list those calls below</span></div>
@@ -65,8 +69,8 @@ export default function PendencyTab({ filters, setFilters, openTab }: { filters:
         <tbody>{data.members.map(m => {
           const key = m.coordinatorId || 'none'; const mid = memberIdOf(m.coordinatorId)
           // Each number opens exactly its rows: this coordinator's calls (in this school, for a school row).
-          const num = (n: number, state: string, schoolId?: string) => <button className="tabular-nums text-cobalt-700 disabled:text-nickel-400" disabled={!n || !mid && !schoolId}
-            onClick={() => setMany({ state, memberId: mid || filters.memberId || '', schoolId: schoolId || filters.schoolId || '' })}>{n}</button>
+          const num = (n: number, state: string, schoolId?: string) => <button className="tabular-nums text-cobalt-700 disabled:text-nickel-400" disabled={!n}
+            onClick={() => setMany({ state, coordinatorId:m.coordinatorId || 'none', noCoordinator:'', memberId: mid || '', schoolId: schoolId || filters.schoolId || '' })}>{n}</button>
           return <Fragment key={key}><tr>
             <Td><button className="text-left font-medium" aria-expanded={!!expanded[key]} onClick={() => setExpanded(e => ({ ...e, [key]: !e[key] }))}>{expanded[key] ? '−' : '+'} {m.name}</button>
               {!m.coordinatorId && <p className="text-xs text-amber-700">Schools nobody covers — assign coverage</p>}</Td>
@@ -83,17 +87,18 @@ export default function PendencyTab({ filters, setFilters, openTab }: { filters:
 
     {data && <p className="nk-sub text-xs">{plural(data.total, 'call–school pair')} · at risk first, then pending, then the most recent misses</p>}
     {data && <section className="nk-panel overflow-x-auto">
-      <table className="min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Call</Th><Th>School · coordinator</Th><Th>State</Th><Th>Deadline</Th><Th className="text-right">Matched faculty</Th><Th>Unallocated for</Th><Th>DSR activity</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
+      <table className="min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Call</Th><Th>School · coordinator</Th><Th>State</Th><Th>Entry deadline</Th><Th className="text-right">Matched faculty</Th><Th>Outstanding for</Th><Th>DSR activity</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
         <tbody>{data.rows.map(r => {
           const dl = daysLeftLabel(r.daysToDeadline); const href = `/funding-dept/calls/${encodeURIComponent(r.callId)}?school=${encodeURIComponent(r.school.id)}`
           return <tr key={`${r.callId}:${r.school.id}`}>
             <Td><Link href={href} target="_blank" className="font-medium text-cobalt-700 hover:underline">{r.title}</Link><p className="nk-sub text-xs">{r.agency || 'Agency not recorded'}</p></Td>
             <Td>{r.school.name}<p className="nk-sub text-xs">{r.coordinator?.name || <span className="text-amber-700">No coordinator</span>}</p></Td>
             <Td><span className={TONE[r.state]} title={define(`Pendency: ${PENDENCY_STATE_LABELS[r.state]}`)}>{PENDENCY_STATE_LABELS[r.state]}</span>
+              <p className="mt-1 text-xs">{{NOT_REVIEWED:'Not reviewed',ALLOCATION_PENDING:'Allocation pending',ALLOCATED_NOT_SUBMITTED:'Allocated, no on-time submission',NO_COORDINATOR:'No available coordinator',COMPLETED_NO_ALLOCATION:'Closed with a reason'}[r.workState] || r.workState}</p>
               {r.completed && <p className="mt-1 max-w-[16rem] text-xs">{r.completed.by || 'Coordinator'}: {r.completed.note || 'no note'}</p>}</Td>
             <Td className="whitespace-nowrap">{fmtDate(r.deadline)}<p className={`text-xs ${dl.tone}`}>{dl.text}</p></Td>
             <Td className="text-right"><Link href={href} target="_blank" className="tabular-nums text-cobalt-700 underline" title="Open the call window to see and allocate the matched faculty.">{r.matchedFaculty}</Link>
-              <p className="nk-sub text-xs">since {fmtDate(r.firstMatchedAt)}</p></Td>
+              <p className="nk-sub text-xs">Responsibility since {fmtDate(r.firstMatchedAt)}</p></Td>
             <Td className="tabular-nums">{plural(r.daysUnallocated, 'day')}{r.state === 'MISSED' && <p className="nk-sub text-xs">until the deadline</p>}
               {r.releasedAllocations > 0 && <p className="text-xs text-amber-700">{plural(r.releasedAllocations, 'allocation')} fell through</p>}</Td>
             <Td>{r.lastActivityAt ? <span className="text-xs">Last {fmtDate(r.lastActivityAt)}</span> : <span className="text-xs text-red-700">Nothing recorded</span>}
@@ -105,7 +110,7 @@ export default function PendencyTab({ filters, setFilters, openTab }: { filters:
                 defaults={{ title: `Missed call: ${r.title}`, waitingWith: 'DSR' }} help="Record a corrective action for this missed call, with a named owner and due date." />}
             </div></Td>
           </tr>
-        })}{!data.rows.length && <tr><td colSpan={8} className="p-8 text-center nk-sub">Nothing here. Every directly matched call in scope has someone allocated, or was judged not relevant.</td></tr>}</tbody></table>
+        })}{!data.rows.length && <tr><td colSpan={8} className="p-8 text-center nk-sub">No outstanding school responsibilities match these filters.</td></tr>}</tbody></table>
       <Pager page={page} total={data.total} pageSize={data.pageSize} onChange={setPage} /></section>}
   </div>
 }

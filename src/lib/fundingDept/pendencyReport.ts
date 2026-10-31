@@ -1,32 +1,26 @@
 /**
- * Pendency: calls that directly matched faculty in a school, where nobody from
- * that school was ever allocated — the DSR action that did not happen.
- *
- * "Directly matched" is a strong or moderate automatic faculty match first seen
- * by the deadline day (`qualifyingMatchSql`). Weak, reconstructed and manual
- * matches never count, so every row is one a head can put to a coordinator
- * without argument. A coordinator who closed the call with the manual
- * "action completed" mark but allocated nobody is listed separately, with their
- * note, and is not counted.
- *
- * This is deliberately not `getUnallocatedBacklog`: that list drives the
- * escalation reminders and counts any relevant call nobody has *looked at*. This
- * one counts matched calls nobody was *allocated to*, whether or not somebody
- * looked. The glossary says so wherever the two could be read side by side.
+ * Complete school responsibility backlog, including zero-match calls and
+ * allocated work awaiting submission. matchedOnly retains the narrower view.
+ * Missed outcomes and ownership use evidence at entry closing; late activity
+ * stays visible without rewriting the deadline outcome.
  */
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
 import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
-import { textArray, utcTimestamp, visibleCallSql } from './callSql'
+import { callDaysToDeadlineSql, effectiveCallDeadlineSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
 import { coordinatorSql } from './hubScope'
-import { COUNTED_PENDENCY_STATES, PENDENCY_STATES, indiaDaysToDeadlineSql, pendencyStateSql, qualifyingMatchSql, type PendencyState } from './reportDefinitions'
+import { COUNTED_PENDENCY_STATES, PENDENCY_STATES, currentQualifyingMatchSql, dsrApplicationSubmittedSql, responsibilityPendencyStateSql, type PendencyState } from './reportDefinitions'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { DEFAULT_MATCH_WIDTH, type MatchWidth } from './matchBands'
+import { deadlineCoordinatorSql, schoolDeadlineFactsSql } from './deadlineOutcomeSql'
 
 export type PendencyFilters = {
   /** The tenant's zone for deadline days; filled by getPendency. */
   timeZone?: string
   schoolIds: string[]
+  width?: MatchWidth
+  matchedOnly?: boolean
   /**
    * Only rows this user is the responsible coordinator for (the head's Member
    * filter). The by-member table groups by responsible coordinator, so its
@@ -48,6 +42,7 @@ export type PendencyFilters = {
 export class PendencyError extends Error { constructor(message: string, public status = 400) { super(message) } }
 
 export type PendencyRow = {
+  workState: 'NOT_REVIEWED' | 'ALLOCATION_PENDING' | 'ALLOCATED_NOT_SUBMITTED' | 'NO_COORDINATOR' | 'COMPLETED_NO_ALLOCATION'
   callId: string; title: string; agency: string | null; deadline: Date | null; daysToDeadline: number | null
   school: { id: string; name: string }; coordinator: { id: string; name: string } | null
   state: PendencyState; matchedFaculty: number; firstMatchedAt: Date; daysUnallocated: number
@@ -61,46 +56,58 @@ export type PendencyMember = {
 
 const NOT_TAKEN_UP = NOT_TAKEN_UP_STATUSES.map(s => `'${s}'`).join(',')
 
-function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
-  const deadline = 'COALESCE(fc.close_date, fc."deadlineAt")'
-  const state = pendencyStateSql({ daysToDeadline: 'r.days_to_deadline', qualifyingMatches: 'r.matched_faculty', takenUpAllocations: 'r.taken_up',
-    independentApplications: 'r.independent', dismissed: `(r.triage_status = 'NOT_RELEVANT' AND r.triage_decided_at IS NOT NULL)`, actionCompleted: '(r.action_completed_at IS NOT NULL)' })
+export function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
+  const state = responsibilityPendencyStateSql({ daysToDeadline:'r.days_to_deadline',submissionsAtDeadline:'r.submissions_at_deadline',allocationsAtDeadline:'r.allocations_at_deadline',closedAtDeadline:'r.closed_at_deadline',submissions:'r.submissions',takenUp:'r.taken_up',closedNow:`(r.triage_status='NOT_RELEVANT' AND r.triage_decided_at IS NOT NULL)
+      OR r.disposition_reason IN ('NO_SUITABLE_FACULTY','DECLINED','CAPACITY','OTHER')
+      OR (r.action_completed_at IS NOT NULL AND r.action_completed_outcome IN ('NO_SUITABLE_FACULTY','NOT_RELEVANT','CAPACITY','OTHER') AND length(btrim(r.action_completed_note))>0)` })
   return Prisma.sql`
     WITH pairs AS (
+      SELECT m.call_id, m.school_id FROM dsr_call_school_mappings m
+       WHERE m.tenant_id=${tenantId} AND m.is_active AND m.school_id=ANY(${textArray(f.schoolIds)})
+      UNION
       SELECT DISTINCT fom.funding_call_id call_id, fom.school_id FROM funding_opportunity_matches fom
-       WHERE fom.tenant_id=${tenantId} AND fom.school_id = ANY(${textArray(f.schoolIds)}) AND fom.inferred = false
+       WHERE fom.tenant_id=${tenantId} AND fom.school_id = ANY(${textArray(f.schoolIds)}) AND ${currentQualifyingMatchSql('fom',f.width ?? DEFAULT_MATCH_WIDTH)}
     ), facts AS (
       SELECT p.call_id, p.school_id, s.name school_name,
-        COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency, ${Prisma.raw(deadline)} deadline,
-        ${indiaDaysToDeadlineSql(deadline, f.asOf, f.timeZone)} days_to_deadline,
-        q.n matched_faculty, q.first_seen first_matched_at,
+        COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency, ${effectiveCallDeadlineSql('fc',f.timeZone)} deadline,
+        ${callDaysToDeadlineSql(f.asOf,'fc',f.timeZone)} days_to_deadline,
+        q.n matched_faculty, COALESCE(mapping.mapped_at,q.first_seen,fc."publishedAt",fc."createdAt") first_matched_at,
+        history.allocations allocations_at_deadline, history.submissions submissions_at_deadline, history.closed closed_at_deadline,
+        (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=p.call_id AND a.school_id=p.school_id AND ${dsrApplicationSubmittedSql('a')}) submissions,
+        disp.reason disposition_reason,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id
           WHERE ca.tenant_id=${tenantId} AND ca.funding_call_id=p.call_id AND au.path[1]=p.school_id AND ca.status::text NOT IN (${Prisma.raw(NOT_TAKEN_UP)})) taken_up,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id
           WHERE ca.tenant_id=${tenantId} AND ca.funding_call_id=p.call_id AND au.path[1]=p.school_id AND ca.status::text IN (${Prisma.raw(NOT_TAKEN_UP)})) released,
         (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=p.call_id AND a.school_id=p.school_id AND a.assignment_id IS NULL) independent,
-        tri.status triage_status, tri.decided_at triage_decided_at, tri.escalation_stages, tri.action_completed_at, tri.action_completed_note, COALESCE(cu.name, cu.email) completed_by,
+        tri.status triage_status, tri.decided_at triage_decided_at, tri.escalation_stages, tri.action_completed_at, tri.action_completed_note, tri.action_completed_outcome, COALESCE(cu.name, cu.email) completed_by,
         GREATEST(tri.decided_at,
           (SELECT max(fu.happened_at) FROM assignment_follow_ups fu JOIN tenant_org_units fuu ON fuu.id=fu.org_unit_id
             WHERE fu.tenant_id=${tenantId} AND fu.funding_call_id=p.call_id AND fuu.path[1]=p.school_id),
           (SELECT max(x.created_at) FROM dsr_actions x WHERE x.tenant_id=${tenantId} AND x.call_id=p.call_id AND x.school_id=p.school_id)) last_activity_at,
-        ${coordinatorSql(tenantId, 'p.school_id', 'p.call_id')} coordinator_id
+        CASE WHEN ${callDaysToDeadlineSql(f.asOf,'fc',f.timeZone)} < 0
+          THEN ${deadlineCoordinatorSql(tenantId,'p.school_id','fc',f.timeZone)}
+          ELSE ${coordinatorSql(tenantId, 'p.school_id', 'p.call_id')} END coordinator_id
       FROM pairs p
       JOIN funding_calls fc ON fc.id = p.call_id
       JOIN tenant_org_units s ON s.id = p.school_id
+      LEFT JOIN dsr_call_school_mappings mapping ON mapping.tenant_id=${tenantId} AND mapping.call_id=p.call_id AND mapping.school_id=p.school_id AND mapping.is_active
+      LEFT JOIN dsr_opportunity_dispositions disp ON disp.tenant_id=${tenantId} AND disp.call_id=p.call_id AND disp.school_id=p.school_id
+      CROSS JOIN LATERAL (${schoolDeadlineFactsSql(tenantId,'p.school_id','fc',f.timeZone)}) history
       CROSS JOIN LATERAL (SELECT count(*)::int n, min(m.first_seen_at) first_seen FROM funding_opportunity_matches m
-        WHERE m.tenant_id=${tenantId} AND m.funding_call_id=p.call_id AND m.school_id=p.school_id AND ${qualifyingMatchSql('m', deadline, undefined, f.timeZone)}) q
+        WHERE m.tenant_id=${tenantId} AND m.funding_call_id=p.call_id AND m.school_id=p.school_id AND ${currentQualifyingMatchSql('m',f.width ?? DEFAULT_MATCH_WIDTH)}) q
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = p.call_id AND tri.org_unit_id = p.school_id
       LEFT JOIN users cu ON cu.id = tri.action_completed_by_user_id
       WHERE ${visibleCallSql(tenantId, 'fc')}
         ${f.search ? Prisma.sql`AND (COALESCE(fc.scheme_title, fc.title) ILIKE ${`%${f.search}%`} OR COALESCE(fc.agency_name, fc."agencyName") ILIKE ${`%${f.search}%`} OR fc.id = ${f.search})` : Prisma.empty}
-        ${f.deadlineFrom ? Prisma.sql`AND ${Prisma.raw(deadline)} >= ${utcTimestamp(f.deadlineFrom)}` : Prisma.empty}
-        ${f.deadlineTo ? Prisma.sql`AND ${Prisma.raw(deadline)} < ${utcTimestamp(f.deadlineTo)}` : Prisma.empty}
+        ${f.deadlineFrom ? Prisma.sql`AND ${effectiveCallDeadlineSql('fc',f.timeZone)} >= ${utcTimestamp(f.deadlineFrom)}` : Prisma.empty}
+        ${f.deadlineTo ? Prisma.sql`AND ${effectiveCallDeadlineSql('fc',f.timeZone)} < ${utcTimestamp(f.deadlineTo)}` : Prisma.empty}
     ), resp AS (
       SELECT r.*, ${state} state FROM facts r
     ), pend AS (
       SELECT * FROM resp WHERE state IS NOT NULL ${f.minMatches ? Prisma.sql`AND matched_faculty >= ${f.minMatches}` : Prisma.empty}
-        ${f.coordinatorUserId ? Prisma.sql`AND coordinator_id = ${f.coordinatorUserId}` : Prisma.empty}
+        ${f.matchedOnly ? Prisma.sql`AND matched_faculty > 0 AND taken_up=0 AND independent=0` : Prisma.empty}
+        ${f.coordinatorUserId==='none' ? Prisma.sql`AND coordinator_id IS NULL` : f.coordinatorUserId ? Prisma.sql`AND coordinator_id = ${f.coordinatorUserId}` : Prisma.empty}
     )`
 }
 
@@ -147,6 +154,8 @@ export async function getPendency(tenantId: string, f: PendencyFilters) {
       // Missed calls stopped accruing at the deadline; open ones are still accruing.
       const end = r.state === 'MISSED' && r.deadline ? new Date(r.deadline) : f.asOf
       return {
+        workState: !r.coordinator_id ? 'NO_COORDINATOR' : r.state==='COMPLETED_NO_ALLOCATION' ? 'COMPLETED_NO_ALLOCATION'
+          : r.taken_up>0 ? 'ALLOCATED_NOT_SUBMITTED' : r.triage_decided_at ? 'ALLOCATION_PENDING' : 'NOT_REVIEWED',
         callId: r.call_id, title: r.title, agency: r.agency, deadline: r.deadline, daysToDeadline: r.days_to_deadline,
         school: { id: r.school_id, name: r.school_name }, coordinator: r.coordinator_id ? { id: r.coordinator_id, name: r.coordinator_name } : null,
         state: r.state, matchedFaculty: r.matched_faculty, firstMatchedAt: r.first_matched_at,
@@ -163,9 +172,9 @@ export function pendencyExportTables(rows: PendencyRow[], members: PendencyMembe
   return [
     { name: 'By member', rows: [['DSR member', 'School', 'Missed', 'At risk', 'Pending', 'Completed without allocation'],
       ...members.flatMap(m => m.schools.map(s => [m.name, s.name, s.missed, s.atRisk, s.pending, s.completedNoAllocation]))] },
-    { name: 'Calls', rows: [['Call ID', 'Call', 'Agency', 'School', 'Coordinator', 'State', 'Deadline', 'Days to deadline', 'Matched faculty', 'First matched', 'Days unallocated',
+    { name: 'Calls', rows: [['Call ID', 'Call', 'Agency', 'School', 'Responsible coordinator (at closing for missed work)', 'State', 'Work remaining', 'Entry deadline', 'Days to deadline', 'Matched faculty', 'Responsibility since', 'Days outstanding',
       'Allocations that fell through', 'Escalated to', 'Last DSR activity', 'Completion note'],
-      ...rows.map(r => [r.callId, r.title, r.agency, r.school.name, r.coordinator?.name || 'No coordinator', r.state, r.deadline?.toISOString().slice(0, 10), r.daysToDeadline,
+      ...rows.map(r => [r.callId, r.title, r.agency, r.school.name, r.coordinator?.name || 'No recorded coordinator', r.state, r.workState, r.deadline?.toISOString().slice(0, 10), r.daysToDeadline,
         r.matchedFaculty, r.firstMatchedAt.toISOString().slice(0, 10), r.daysUnallocated, r.releasedAllocations, r.escalated.join(' → '),
         r.lastActivityAt?.toISOString().slice(0, 10), r.completed?.note])] },
   ]

@@ -1,4 +1,4 @@
-import type { Prisma } from '@/lib/prisma-generated'
+import { Prisma } from '@/lib/prisma-generated'
 
 /**
  * The one canonical answer to "which funding calls may this viewer see?".
@@ -45,4 +45,13 @@ export function visibleFundingCallWhere(
     })
   }
   return { OR: branches }
+}
+
+/** SQL equivalent for operational readers; keep lifecycle rules identical to the ORM reader. */
+export function visibleFundingCallSql(tenantId: string | Prisma.Sql, alias = 'fc'): Prisma.Sql {
+  const a = Prisma.raw(alias)
+  return Prisma.sql`(${a}.is_active IS DISTINCT FROM false
+    AND (${a}.status = 'PUBLISHED' OR ${a}.catalog_status = 'PUBLISHED')
+    AND (${a}.visibility = 'GLOBAL_PUBLISHED'
+      OR (${a}.visibility = 'TENANT_PRIVATE' AND ${a}."tenantId" = ${tenantId})))`
 }

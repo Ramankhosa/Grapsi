@@ -12,8 +12,8 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { textArray, utcTimestamp, visibleCallSql } from './callSql'
-import { transferOwnerSql } from './hubScope'
+import { callDaysToDeadlineSql, effectiveCallDeadlineSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
+import { coordinatorSql, transferOwnerSql } from './hubScope'
 import type { ApplicationRow } from './managementRules'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import {
@@ -21,9 +21,22 @@ import {
   type DeadlineState, type ReviewState,
 } from './reportDefinitions'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
+import { schoolDeadlineFactsSql } from './deadlineOutcomeSql'
 
 export const REGISTER_SUBMISSION_FILTERS = ['NO_ALLOCATION', 'NONE_SUBMITTED', 'PARTLY_SUBMITTED', 'ALL_SUBMITTED'] as const
 export type RegisterSubmissionFilter = (typeof REGISTER_SUBMISSION_FILTERS)[number]
+export const REGISTER_ATTENTION_FILTERS = ['MISSED', 'REVIEWS_OVERDUE', 'CLOSING_UNALLOCATED', 'UNASSIGNED'] as const
+
+/** Shared by overview counts, drill-down rows and exports. Counts are school responsibilities. */
+export function registerAttentionSql(kind: string, asOf: Date, untouchedDays: number): Prisma.Sql {
+  switch (kind) {
+    case 'MISSED': return Prisma.sql`deadline_state IN ('MISSED_NEVER_ALLOCATED','MISSED_ALLOCATED_NOT_SUBMITTED')`
+    case 'REVIEWS_OVERDUE': return Prisma.sql`review_state='NOT_REVIEWED' AND mapped_at < ${utcTimestamp(new Date(asOf.getTime()-untouchedDays*86400000))}`
+    case 'CLOSING_UNALLOCATED': return Prisma.sql`deadline_state='CLOSING_SOON' AND review_state IN ('NOT_REVIEWED','REVIEWED_ALLOCATION_PENDING')`
+    case 'UNASSIGNED': return Prisma.sql`coordinator_id IS NULL`
+    default: return Prisma.sql`TRUE`
+  }
+}
 
 export type RegisterFilters = {
   /** The tenant's zone for deadline days; filled by getCallRegister. */
@@ -40,6 +53,8 @@ export type RegisterFilters = {
   callId?: string | null
   /** Only responsibilities with an open named action past its due date. */
   overdueActions?: boolean
+  attention?: string | null
+  untouchedDays?: number
   /** Period rule: calls that entered in [start, end). Omit both for all time. */
   start?: Date | null
   end?: Date | null
@@ -53,18 +68,20 @@ export type RegisterFilters = {
 export class RegisterError extends Error { constructor(message: string, public status = 400) { super(message) } }
 
 /** Responsibilities with their facts and shared states, filtered. One CTE for rows, totals and export. */
-function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
+export function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
   const submitted = dsrApplicationSubmittedSql('a')
   const review = reviewStateSql({ triageStatus: 'r.triage_status', triageDecidedAt: 'r.triage_decided_at', dispositionReason: 'r.disposition_reason',
     formalAllocations: 'r.formal_allocations', namedActions: 'r.named_actions' })
-  const deadline = deadlineStateSql({ deadline: 'r.deadline', formalAllocations: 'r.formal_allocations', submissions: 'r.submissions',
-    closedWithReason: `(${review.sql} = 'CLOSED_NO_ALLOCATION')` }, f.asOf, f.timeZone)
+  const deadline = deadlineStateSql({ deadline: 'r.deadline', formalAllocations: 'r.allocations_at_deadline', submissions: 'r.submissions_at_deadline',
+    closedWithReason: 'r.closed_at_deadline', daysToDeadline: Prisma.sql`r.days_to_deadline` }, f.asOf, f.timeZone)
   return Prisma.sql`
     WITH facts AS (
       SELECT m.call_id, m.school_id, s.name school_name, m.source, m.tier, m.reason mapping_reason, m.is_origin, m.mapped_at, m.backfilled,
         COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency,
-        COALESCE(fc.close_date, fc."deadlineAt") deadline, COALESCE(fc."publishedAt", fc."createdAt") entered_at,
+        ${effectiveCallDeadlineSql('fc',f.timeZone)} deadline, ${callDaysToDeadlineSql(f.asOf,'fc',f.timeZone)} days_to_deadline,
+        COALESCE(fc."publishedAt", fc."createdAt") entered_at,
         tri.status triage_status, tri.decided_at triage_decided_at, disp.reason disposition_reason, disp.explanation disposition_explanation,
+        history.allocations allocations_at_deadline, history.submissions submissions_at_deadline, history.closed closed_at_deadline,
         (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=m.call_id AND a.school_id=m.school_id AND a.assignment_id IS NOT NULL) formal_allocations,
         (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=m.call_id AND a.school_id=m.school_id AND a.assignment_id IS NOT NULL AND ${submitted}) allocated_submissions,
         (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=m.call_id AND a.school_id=m.school_id AND ${submitted}) submissions,
@@ -73,12 +90,12 @@ function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
         (SELECT count(*)::int FROM dsr_actions x LEFT JOIN dsr_applications a ON a.id=x.application_id AND a.tenant_id=x.tenant_id
           WHERE x.tenant_id=${tenantId} AND x.school_id=m.school_id AND COALESCE(x.call_id, a.call_id)=m.call_id
             AND x.status IN ('OPEN','ACKNOWLEDGED') AND x.due_at < ${f.asOf}) overdue_actions,
-        COALESCE(tr.owner_user_id, (SELECT dm.user_id FROM funding_dept_school_assignments sa JOIN funding_dept_members dm ON dm.id=sa.member_id AND dm.is_active
-          WHERE sa.tenant_id=${tenantId} AND sa.org_unit_id=m.school_id AND NOT sa.is_deputy ORDER BY sa.id LIMIT 1)) coordinator_id,
+        ${coordinatorSql(tenantId,'m.school_id','m.call_id')} coordinator_id,
         tr.owner_user_id IS NOT NULL transferred
       FROM dsr_call_school_mappings m
       JOIN funding_calls fc ON fc.id = m.call_id
       JOIN tenant_org_units s ON s.id = m.school_id
+      CROSS JOIN LATERAL (${schoolDeadlineFactsSql(tenantId,'m.school_id','fc',f.timeZone)}) history
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = m.call_id AND tri.org_unit_id = m.school_id
       LEFT JOIN dsr_opportunity_dispositions disp ON disp.tenant_id=${tenantId} AND disp.school_id=m.school_id AND disp.call_id=m.call_id
       LEFT JOIN LATERAL (SELECT ${transferOwnerSql(tenantId, 'm.school_id', 'm.call_id')} owner_user_id) tr ON TRUE
@@ -98,6 +115,7 @@ function responsibilitiesSql(tenantId: string, f: RegisterFilters): Prisma.Sql {
         ${f.reviewState ? Prisma.sql`AND review_state = ${f.reviewState}` : Prisma.empty}
         ${f.deadlineState ? Prisma.sql`AND deadline_state = ${f.deadlineState}` : Prisma.empty}
         ${f.overdueActions ? Prisma.sql`AND overdue_actions > 0` : Prisma.empty}
+        ${f.attention ? Prisma.sql`AND (${registerAttentionSql(f.attention,f.asOf,f.untouchedDays ?? 7)})` : Prisma.empty}
     )`
 }
 
@@ -128,6 +146,7 @@ function validate(f: RegisterFilters) {
   if (f.deadlineState && !DEADLINE_STATES.includes(f.deadlineState as DeadlineState)) throw new RegisterError('Unknown deadline state.')
   if (f.submission && !REGISTER_SUBMISSION_FILTERS.includes(f.submission as RegisterSubmissionFilter)) throw new RegisterError('Unknown submission filter.')
   if (f.source && !(f.source in MAPPING_SOURCE_LABELS)) throw new RegisterError('Unknown mapping source.')
+  if (f.attention && !REGISTER_ATTENTION_FILTERS.includes(f.attention as never)) throw new RegisterError('Unknown attention filter.')
 }
 
 /** The most urgent deadline state among a call's schools, for the collapsed row. */
@@ -236,8 +255,9 @@ export function registerExportTables(rows: RegisterRow[]) {
  * counts via the Register filter named beside it.
  */
 export async function getOverview(tenantId: string, f: { scopeSchoolIds?: string[]; start: Date; end: Date; asOf: Date; untouchedDays: number }) {
-  const periodBase = responsibilitiesSql(tenantId, { scopeSchoolIds: f.scopeSchoolIds, start: f.start, end: f.end, asOf: f.asOf })
-  const allBase = responsibilitiesSql(tenantId, { scopeSchoolIds: f.scopeSchoolIds, asOf: f.asOf })
+  const timeZone = await getTenantTimeZone(tenantId)
+  const periodBase = responsibilitiesSql(tenantId, { scopeSchoolIds: f.scopeSchoolIds, start: f.start, end: f.end, asOf: f.asOf, timeZone })
+  const allBase = responsibilitiesSql(tenantId, { scopeSchoolIds: f.scopeSchoolIds, asOf: f.asOf, timeZone })
   const [period] = await prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`${periodBase}
     SELECT count(DISTINCT call_id)::int calls_mapped, count(*)::int responsibilities,
       count(*) FILTER (WHERE review_state='NOT_REVIEWED')::int reviews_pending,
@@ -248,10 +268,10 @@ export async function getOverview(tenantId: string, f: { scopeSchoolIds?: string
     WHERE ${visibleCallSql(tenantId, 'fc')} AND COALESCE(fc."publishedAt", fc."createdAt") >= ${utcTimestamp(f.start)} AND COALESCE(fc."publishedAt", fc."createdAt") < ${utcTimestamp(f.end)}
       ${f.scopeSchoolIds ? Prisma.sql`AND EXISTS (SELECT 1 FROM dsr_call_school_mappings m WHERE m.tenant_id=${tenantId} AND m.call_id=fc.id AND m.school_id = ANY(${textArray(f.scopeSchoolIds)}))` : Prisma.empty}`)
   const [attention] = await prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`${allBase}
-    SELECT count(*) FILTER (WHERE deadline_state='CLOSING_SOON' AND review_state IN ('NOT_REVIEWED','REVIEWED_ALLOCATION_PENDING'))::int closing_soon_unallocated,
+    SELECT count(*) FILTER (WHERE ${registerAttentionSql('CLOSING_UNALLOCATED',f.asOf,f.untouchedDays)})::int closing_soon_unallocated,
       count(*) FILTER (WHERE deadline_state='MISSED_NEVER_ALLOCATED')::int missed_never_allocated,
       count(*) FILTER (WHERE deadline_state='MISSED_ALLOCATED_NOT_SUBMITTED')::int missed_allocated_not_submitted,
-      count(*) FILTER (WHERE review_state='NOT_REVIEWED' AND mapped_at < ${new Date(f.asOf.getTime() - f.untouchedDays * 86400000)})::int reviews_overdue,
+      count(*) FILTER (WHERE ${registerAttentionSql('REVIEWS_OVERDUE',f.asOf,f.untouchedDays)})::int reviews_overdue,
       count(*) FILTER (WHERE coordinator_id IS NULL)::int without_coordinator,
       count(*) FILTER (WHERE overdue_actions > 0)::int overdue_actions
     FROM filtered`)
@@ -261,7 +281,7 @@ export async function getOverview(tenantId: string, f: { scopeSchoolIds?: string
       count(*) FILTER (WHERE review_state='REVIEWED_ALLOCATION_PENDING')::int reviewed_unallocated,
       count(*) FILTER (WHERE review_state='ALLOCATED')::int allocated, count(*) FILTER (WHERE review_state='CLOSED_NO_ALLOCATION')::int closed,
       COALESCE(sum(submissions),0)::int submissions,
-      count(*) FILTER (WHERE deadline_state IN ('MISSED_NEVER_ALLOCATED','MISSED_ALLOCATED_NOT_SUBMITTED'))::int missed
+      count(*) FILTER (WHERE ${registerAttentionSql('MISSED',f.asOf,f.untouchedDays)})::int missed
     FROM filtered f LEFT JOIN users u ON u.id = f.coordinator_id GROUP BY f.school_id ORDER BY min(f.school_name)`)
   return {
     totals: { callsEntered: entered?.n ?? 0, callsMapped: period?.calls_mapped ?? 0, reviewsPending: period?.reviews_pending ?? 0,

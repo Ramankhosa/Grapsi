@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
-import { zonedDayStart } from '@/lib/i18n/format'
 import { Prisma } from '@/lib/prisma-generated'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope, type TenantScopeContext } from '@/lib/auth/tenantAccess'
 import { canAssignToUser } from '@/lib/orgUnits/scope'
 import { tenantVisibleCallWhere } from './shared'
-import { allocationCallClosed, allocationDateKey, type AllocationSchool } from './manualAllocation'
+import { type AllocationSchool } from './manualAllocation'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryClosed, callEntryDeadline } from '@/lib/funding/callDeadline'
+import { effectiveCallDeadlineSql, openCallSql, visibleCallSql } from '@/lib/fundingDept/callSql'
 
 export class AllocationOptionsError extends Error {
   constructor(message: string, public status = 400) { super(message) }
@@ -48,29 +49,17 @@ export async function callOptions(context: TenantScopeContext, params: URLSearch
   const { limit, offset } = pagination(params)
   const q = (params.get('q') || '').trim().slice(0, 200)
   const callId = params.get('callId') || ''
-  const filters: Prisma.FundingCallWhereInput[] = [tenantVisibleCallWhere(context.tenantId)]
-  if (callId) filters.push({ id: callId })
-  else {
-    if (q) filters.push({ OR: ['id', 'programIdentifier', 'title', 'scheme_title', 'agencyName', 'agency_name', 'description', 'summary'].map(field => ({ [field]: { contains: q, mode: 'insensitive' } })) })
-    if (params.get('includeClosed') !== 'true') {
-      // The earlier of local midnight and UTC midnight of the local day: a
-      // date-only deadline (stored at 00:00 UTC) for today stays in, whichever
-      // side of UTC the zone is. For India this is India midnight, as before.
-      const todayKey = allocationDateKey(new Date(), timeZone)
-      const today = new Date(Math.min(zonedDayStart(todayKey, timeZone).getTime(), Date.parse(`${todayKey}T00:00:00Z`)))
-      filters.push({ OR: [
-        { close_date: { gte: today } },
-        { close_date: null, deadlineAt: { gte: today } },
-        { close_date: null, deadlineAt: null },
-      ] })
-    }
-  }
-  const where: Prisma.FundingCallWhereInput = { AND: filters }
-  const [rows, total] = await Promise.all([
-    prisma.fundingCall.findMany({ where, select: { id: true, title: true, scheme_title: true, agency_name: true, agencyName: true, close_date: true, deadlineAt: true },
-      orderBy: [{ close_date: { sort: 'asc', nulls: 'last' } }, { deadlineAt: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }], take: limit, skip: offset }),
-    prisma.fundingCall.count({ where }),
+  const eligibility=Prisma.sql`FROM funding_calls fc WHERE ${visibleCallSql(context.tenantId)}
+    ${callId ? Prisma.sql`AND fc.id=${callId}` : Prisma.empty}
+    ${!callId && q ? Prisma.sql`AND (fc.id ILIKE ${`%${q}%`} OR fc."programIdentifier" ILIKE ${`%${q}%`} OR fc.title ILIKE ${`%${q}%`} OR fc.scheme_title ILIKE ${`%${q}%`} OR fc.agency_name ILIKE ${`%${q}%`} OR fc."agencyName" ILIKE ${`%${q}%`} OR fc.description ILIKE ${`%${q}%`} OR fc.summary ILIKE ${`%${q}%`})` : Prisma.empty}
+    ${!callId && params.get('includeClosed')!=='true' ? Prisma.sql`AND ${openCallSql('fc',timeZone)}` : Prisma.empty}`
+  const [keys,[count]]=await Promise.all([
+    prisma.$queryRaw<Array<{id:string}>>(Prisma.sql`SELECT fc.id ${eligibility} ORDER BY ${effectiveCallDeadlineSql('fc',timeZone)} ASC NULLS LAST,fc.id LIMIT ${limit} OFFSET ${offset}`),
+    prisma.$queryRaw<Array<{n:number}>>(Prisma.sql`SELECT count(*)::int n ${eligibility}`),
   ])
+  const unordered=await prisma.fundingCall.findMany({where:{AND:[tenantVisibleCallWhere(context.tenantId),{id:{in:keys.map(k=>k.id)}}]},
+    select:{id:true,title:true,scheme_title:true,agency_name:true,agencyName:true,...CALL_ENTRY_DEADLINE_SELECT}})
+  const rows=unordered.sort((a,b)=>keys.findIndex(k=>k.id===a.id)-keys.findIndex(k=>k.id===b.id)),total=count?.n ?? 0
   if (callId && !rows.length) throw new AllocationOptionsError('This call is unavailable for allocation. It must be published and active.', 404)
   const ids = rows.map(row => row.id)
   const schoolId = person.researcher_profile?.org_unit?.path[0] || permission.assigneeUnitId
@@ -84,9 +73,9 @@ export async function callOptions(context: TenantScopeContext, params: URLSearch
   return { calls: rows.map(row => {
     const assignment = assignments.find(a => a.funding_call_id === row.id)
     const mapping = mappings.find(m => m.call_id === row.id)
-    const deadline = row.close_date || row.deadlineAt
+    const deadline = callEntryDeadline(row)
     return { id: row.id, title: row.scheme_title || row.title, agency: row.agency_name || row.agencyName,
-      closeDate: deadline, isClosed: allocationCallClosed(deadline, new Date(), timeZone),
+      closeDate: deadline, isClosed: callEntryClosed(row,new Date(),timeZone),
       existingAssignment: assignment ? { id: assignment.id, status: assignment.status } : null,
       responsibility: { schoolId, schoolName: school?.name || null, willReopen: mapping?.is_active === false, previousReason: mapping?.ended_reason || null } }
   }), total, limit, offset }

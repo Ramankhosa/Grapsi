@@ -36,7 +36,8 @@ beforeEach(() => {
   m.units.mockResolvedValue(units)
   m.school.mockResolvedValue({ name: 'Engineering' })
   m.assignments.mockResolvedValue([])
-  m.mappings.mockResolvedValue([])
+  m.mappings.mockImplementation(async (sql: any) => sql.text.includes('SELECT count(*)::int n') ? [{ n:60 }]
+    : sql.text.includes('SELECT fc.id') ? [{id:'call'}] : [])
 })
 
 describe('manual allocation options', () => {
@@ -81,13 +82,16 @@ describe('manual allocation options', () => {
     const body = await (await request('calls', 'assigneeUserId=person&q=Agency&offset=40')).json()
     expect(body.calls[0]).toMatchObject({ title: 'An unrelated call', isClosed: false, agency: 'Agency' })
     const args = m.calls.mock.calls[0][0]
-    expect(args).toMatchObject({ skip: 40, take: 20 })
+    const paged = m.mappings.mock.calls.find(([query]: any[])=>query.text.includes('SELECT fc.id'))![0]
+    expect(paged.text).toContain('LIMIT')
+    expect(paged.values.slice(-2)).toEqual([20,40])
     const query = JSON.stringify(args.where)
     expect(query).toContain('PUBLISHED')
     expect(query).toContain('TENANT_PRIVATE')
     expect(query).toContain('is_active')
-    expect(query).toContain('deadlineAt')
-    expect(query).toContain('"agency_name":{"contains":"Agency"')
+    expect(paged.text).toContain('entry_closes_at')
+    expect(paged.text).toContain('source_closed_at')
+    expect(paged.values).toContain('%Agency%')
     expect(query).not.toMatch(/match_score|research_area|org_unit/)
   })
   it('shows closed calls only when requested or resolving a preselected call', async () => {

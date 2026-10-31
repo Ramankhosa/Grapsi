@@ -12,6 +12,7 @@ import { Fragment, useEffect, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import ManualAllocationDetails from './ManualAllocationDetails'
+import RoutingStatusPanel from './RoutingStatusPanel'
 import {
   DEADLINE_STATE_LABELS, DEADLINE_STATES, REPORT_DEFINITIONS, REVIEW_STATE_LABELS, REVIEW_STATES, SUBMISSION_STATE_LABELS,
   type DeadlineState, type ReviewState, type SubmissionState,
@@ -86,8 +87,8 @@ export function OverviewView({ periodQuery, revision, openRegister, openActions,
       <div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="font-semibold">Needs attention now</h2><span className="nk-sub text-xs">Ignores the reporting period, so no backlog or missed call is filtered out of view</span></div>
       <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
         <Stat title="Overdue actions" value={n.overdueActions} help="School responsibilities with an open named action past its due date. My Actions also flags late first reviews and silent work." onClick={() => openRegister({ window: 'all', overdueActions: 'true' })} tone={n.overdueActions ? 'border-red-300' : ''} />
-        <Stat title="Reviews overdue" value={n.reviewsOverdue} help="School responsibilities not reviewed within the department's untouched threshold." onClick={() => openRegister({ ...all, reviewState: 'NOT_REVIEWED' })} />
-        <Stat title="Closing soon, not allocated" value={n.closingSoonUnallocated} help={define(`Deadline: ${DEADLINE_STATE_LABELS.CLOSING_SOON}`)} onClick={() => openRegister({ ...all, deadlineState: 'CLOSING_SOON' })} tone={n.closingSoonUnallocated ? 'border-amber-300' : ''} />
+        <Stat title="Reviews overdue" value={n.reviewsOverdue} help="School responsibilities not reviewed within the department's untouched threshold." onClick={() => openRegister({ ...all, attention: 'REVIEWS_OVERDUE' })} />
+        <Stat title="Closing soon, not allocated" value={n.closingSoonUnallocated} help={define(`Deadline: ${DEADLINE_STATE_LABELS.CLOSING_SOON}`)} onClick={() => openRegister({ ...all, attention: 'CLOSING_UNALLOCATED' })} tone={n.closingSoonUnallocated ? 'border-amber-300' : ''} />
         <Stat title="Missed, never allocated" value={n.missedNeverAllocated} help={define(`Deadline: ${DEADLINE_STATE_LABELS.MISSED_NEVER_ALLOCATED}`)} onClick={() => openRegister({ ...all, deadlineState: 'MISSED_NEVER_ALLOCATED' })} tone={n.missedNeverAllocated ? 'border-red-300' : ''} />
         <Stat title="Missed, allocated not submitted" value={n.missedAllocatedNotSubmitted} help={define(`Deadline: ${DEADLINE_STATE_LABELS.MISSED_ALLOCATED_NOT_SUBMITTED}`)} onClick={() => openRegister({ ...all, deadlineState: 'MISSED_ALLOCATED_NOT_SUBMITTED' })} tone={n.missedAllocatedNotSubmitted ? 'border-red-300' : ''} />
         <Stat title="Responsibilities with no coordinator" value={n.withoutCoordinator} help="Mapped calls in schools nobody covers. Assign coverage." onClick={() => openMapping('schools')} />
@@ -119,7 +120,7 @@ export function OverviewView({ periodQuery, revision, openRegister, openActions,
             <td className="border-t border-nickel-100 px-3 py-2">{s.coordinator_name || <button className="text-amber-700 underline" onClick={() => openMapping('schools')}>Assign coverage</button>}</td>
             {cell(s.responsibilities, {})}{cell(s.reviews_pending, { reviewState: 'NOT_REVIEWED' })}{cell(s.reviewed_unallocated, { reviewState: 'REVIEWED_ALLOCATION_PENDING' })}
             {cell(s.allocated, { reviewState: 'ALLOCATED' })}{cell(s.closed, { reviewState: 'CLOSED_NO_ALLOCATION' })}
-            <td className="border-t border-nickel-100 px-3 py-2">{s.submissions}</td>{cell(s.missed, { window: 'all', deadlineState: 'MISSED_NEVER_ALLOCATED' })}</tr>
+            <td className="border-t border-nickel-100 px-3 py-2">{s.submissions}</td>{cell(s.missed, { attention: 'MISSED' })}</tr>
         })}{!data.schools.length && <tr><td colSpan={9} className="p-5 text-center nk-sub">No school responsibilities in this period. Calls reach schools once they are classified and mapped.</td></tr>}</tbody></table>
     </section>
   </div>
@@ -156,6 +157,7 @@ export function RegisterView({ periodQuery, filters, setFilters, schools, revisi
       {pick('submission', 'Submission', SUBMISSION_FILTERS)}
       {pick('deadlineState', 'Deadline', DEADLINE_STATES.map(s => [s, DEADLINE_STATE_LABELS[s]]))}
       {pick('source', 'Mapping source', SOURCES)}
+      {pick('attention', 'Needs attention', [['MISSED','All missed'],['REVIEWS_OVERDUE','Reviews overdue'],['CLOSING_UNALLOCATED','Closing soon, not allocated'],['UNASSIGNED','No available coordinator']])}
       <label className="flex items-center gap-2 pb-2 text-xs"><input type="checkbox" checked={filters.overdueActions === 'true'} onChange={e => set('overdueActions', e.target.checked ? 'true' : '')} /> Overdue actions only</label>
       <label className="flex items-center gap-2 pb-2 text-xs"><input type="checkbox" checked={filters.window === 'all'} onChange={e => set('window', e.target.checked ? 'all' : '')} /> All periods</label>
       <div className="ml-auto flex gap-2">
@@ -211,6 +213,7 @@ export function MappingView({ tab, setTab, schools, isHead, revision, refresh }:
   }
   const tabs: Array<[string, string]> = [['mapped', 'Mapped'], ...(isHead ? [['unclassified', 'Unclassified queue'] as [string, string]] : []), ['schools', 'Schools without areas or coverage']]
   return <div className="space-y-4">
+    {isHead && <RoutingStatusPanel />}
     <div className="flex flex-wrap gap-2">{tabs.map(([id, name]) => <button key={id} className={tab === id ? 'nk-btn-primary nk-btn-sm' : 'nk-btn-secondary nk-btn-sm'} onClick={() => setTab(id)}>{name}</button>)}</div>
     {tab === 'mapped' && <div className="nk-panel flex flex-wrap items-end gap-3 p-4">
       <label className="flex flex-col gap-1 text-xs">School<select className={field} value={filters.schoolId || ''} onChange={e => setFilters({ ...filters, schoolId: e.target.value })}><option value="">All</option>{schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>

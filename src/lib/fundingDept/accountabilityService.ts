@@ -29,6 +29,7 @@ import {
 } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { effectiveCallDeadlineSql } from './callSql'
 import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
 
 import {
@@ -900,7 +901,7 @@ export async function getSchoolCallLedger(
     SELECT fc.id                                              AS call_id,
            COALESCE(fc.scheme_title, fc.title)                AS title,
            COALESCE(fc.agency_name, fc."agencyName")          AS agency_name,
-           COALESCE(fc.close_date, fc."deadlineAt")           AS closes_at,
+           ${effectiveCallDeadlineSql('fc',timeZone)}           AS closes_at,
            COALESCE(fc."publishedAt", fc."createdAt")          AS published_at,
            tri.status                                         AS triage_status,
            tri.decided_at                                     AS triage_decided_at,
@@ -947,7 +948,7 @@ export async function getSchoolCallLedger(
                   AND ca.assignee_org_unit_id = ANY(${scopeArray})
              )
            )
-     ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST
+     ORDER BY ${effectiveCallDeadlineSql('fc',timeZone)} ASC NULLS LAST
   `)
 
   const callIds = callRows.map((row) => row.call_id)

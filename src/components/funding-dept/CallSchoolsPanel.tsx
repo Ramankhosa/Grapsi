@@ -37,6 +37,7 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
   const { authFetch } = useAuth()
   const [data, setData] = useState<Payload | null>(null); const [error, setError] = useState(''); const [marking, setMarking] = useState(false)
   const [own, setOwn] = useState(0)
+  const [routingBusy,setRoutingBusy]=useState(false),[routingMessage,setRoutingMessage]=useState('')
   const latestLoad = useRef(0)
   const load = useCallback(async () => {
     const requestId = ++latestLoad.current
@@ -55,15 +56,25 @@ export default function CallSchoolsPanel({ callId, selectedSchoolId, onSelect, r
   }, [authFetch, callId, width])
   useEffect(() => { void load() }, [load, revision, own])
   const changed = () => { setOwn(v => v + 1); onChanged() }
+  const retryRouting=async()=>{
+    setRoutingBusy(true);setRoutingMessage('')
+    try{
+      const response=await authFetch('/api/funding-dept/routing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({callId})})
+      const body=await response.json();if(!response.ok)throw Error(body.error || 'Could not queue school mapping.')
+      setRoutingMessage('School mapping queued. Refresh schools shortly to see the result.')
+    }catch(e){setRoutingMessage((e as Error).message)}finally{setRoutingBusy(false)}
+  }
 
   if (error) return <p role="alert" className="nk-panel p-3 text-sm text-red-700">{error}</p>
   if (!data) return <p className="nk-sub text-sm">Loading schools…</p>
   const schools = data.row?.schools || []
 
   return <section className="nk-panel mt-6 overflow-x-auto">
+    {routingMessage&&<p role="status" className="px-3 pt-3 text-sm">{routingMessage}</p>}
     <div className="flex flex-wrap items-baseline justify-between gap-2 p-3">
       <h2 className="nk-title text-lg">All schools for this call</h2>
       <div className="flex flex-wrap items-center gap-2">
+        {data.canAddSchool&&<><button className="nk-btn-secondary nk-btn-xs" disabled={routingBusy} onClick={()=>void retryRouting()}>{routingBusy?'Queuing…':'Retry school mapping'}</button><button className="nk-btn-secondary nk-btn-xs" onClick={changed}>Refresh schools</button></>}
         {/* How generous "matched" is, applied to the counts and the list at
             once. It re-counts what is already stored, so nothing is re-scored
             and the office can try a width before settling on one. */}

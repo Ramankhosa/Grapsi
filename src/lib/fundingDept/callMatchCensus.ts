@@ -26,8 +26,7 @@ import { randomUUID } from 'node:crypto'
 
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { researcherSearchService, RESEARCHER_SEARCH_SCORING_VERSION, type RerankScoreCache } from '@/lib/services/researcherSearchService'
-import { callAreaRowsSql } from '@/lib/researchAreas/queries'
+import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
@@ -41,11 +40,13 @@ import { currentQualifyingMatchSql, UNCOUNTED_MATCH_VERSIONS } from './reportDef
  * Written to `source_version`. Reports count only this version, so switching it
  * retires the previous census rather than mixing two scorings in one number.
  */
-export const CALL_MATCH_CENSUS_VERSION = 'call-people-census-v2'
+export { CALL_MATCH_CENSUS_VERSION } from '@/lib/researcherMatching/config'
 /** Versions whose scoring has been retired; never counted, kept for history. */
 export const SUPERSEDED_CENSUS_VERSIONS = ['person-call-census-v1'] as const
 
-const CENSUS_FRESH_MS = 6 * 60 * 60 * 1000
+import { CALL_MATCH_CENSUS_VERSION, CENSUS_FRESH_MS } from '@/lib/researcherMatching/config'
+import { callFingerprint } from './callMatchFingerprint'
+export { callFingerprint } from './callMatchFingerprint'
 /** Calls refreshed in one background pass, so a sweep cannot run unbounded. */
 const CENSUS_CALLS_PER_PASS = 25
 
@@ -55,33 +56,6 @@ export type CallMatchState = {
   basis: string | null
   matched: number
   candidates: number
-}
-
-/**
- * Everything the scoring depends on, as one hash: the call's own text and the
- * tenant's people. A changed profile re-censuses the calls, a changed call
- * re-censuses that call, and nothing else moves.
- */
-export async function callFingerprint(tenantId: string, callId: string) {
-  const rows = await prisma.$queryRaw<Array<{ fingerprint: string }>>(Prisma.sql`
-    SELECT md5(concat_ws('|', ${CALL_MATCH_CENSUS_VERSION}, ${RESEARCHER_SEARCH_SCORING_VERSION},
-      (SELECT concat_ws(':', id, "updatedAt", xmin::text) FROM funding_calls WHERE id = ${callId}),
-      (SELECT string_agg(concat_ws(':', a.taxonomy_area_id, a.taxonomy_level2_name, a.taxonomy_level1_name), ',' ORDER BY a.taxonomy_area_id)
-         FROM ${callAreaRowsSql()} a WHERE a.funding_call_id=${callId}),
-      (SELECT string_agg(concat_ws(':', u.id, u."updatedAt", p.updated_at, p.org_unit_id, u.status, u.xmin::text, p.xmin::text)::text, ',' ORDER BY u.id)
-         FROM users u LEFT JOIN researcher_profiles p ON p.user_id = u.id WHERE u."tenantId" = ${tenantId}),
-      (SELECT string_agg(concat_ws(':', a.id, a.updated_at, a.xmin::text)::text, ',' ORDER BY a.id)
-         FROM researcher_saved_research_areas a JOIN users u ON u.id = a.user_id WHERE u."tenantId" = ${tenantId}),
-      (SELECT string_agg(concat_ws(':', r.id, r."updatedAt", r.xmin::text)::text, ',' ORDER BY r.id)
-         FROM reference_library r JOIN users u ON u.id = r.user_id WHERE u."tenantId" = ${tenantId}),
-      (SELECT string_agg(concat_ws(':', id, updated_at, xmin::text)::text, ',' ORDER BY id) FROM tenant_org_units WHERE tenant_id = ${tenantId}),
-      ${process.env.RESEARCHER_MATCH_MIN_SIMILARITY || ''}, ${process.env.RESEARCHER_MATCH_RERANK_GATE || ''},
-      ${process.env.RESEARCHER_MATCH_RERANK_STRONG || ''}, ${process.env.RESEARCHER_MATCH_RERANK_MODERATE || ''},
-      ${process.env.RESEARCHER_MATCH_VECTOR_GAP || ''},
-      ${process.env.EMBEDDING_PROVIDER || 'gemini'}, ${process.env.VOYAGE_OUTPUT_DIMENSIONS || '1024'},
-      ${process.env.GOOGLE_EMBEDDINGS_DIMENSIONS || '768'}
-    )) fingerprint`)
-  return rows[0].fingerprint
 }
 
 /** Reranker scores already held for this call, keyed by what was scored. */

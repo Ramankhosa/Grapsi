@@ -20,7 +20,7 @@ import { SCOPE_KEYS, type Filters, type HubTab } from './hubKit'
 const TABS: Array<{ id: HubTab; label: string; help: string }> = [
   { id: 'incoming', label: 'Incoming Calls', help: 'Open calls that concern your schools, which schools they reach, and whether each school’s DSR action is completed.' },
   { id: 'assigned', label: 'Assigned Calls', help: 'Every allocation in your schools: the faculty response, deadlines, last follow-up and submission. Mark submitted, follow up or unallocate.' },
-  { id: 'pendency', label: 'Pendency', help: 'Calls that directly matched faculty in your schools but nobody was allocated: at risk now, or already missed.' },
+  { id: 'pendency', label: 'Pendency', help: 'All outstanding school responsibilities: not reviewed, awaiting allocation, or allocated without submission. Includes calls without faculty matches.' },
   { id: 'followups', label: 'Follow-ups', help: 'Week-by-week follow-up effort on allocated calls, by DSR member and by assignment.' },
 ]
 const isTab = (v: string | null): v is HubTab => TABS.some(t => t.id === v)

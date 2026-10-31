@@ -28,6 +28,7 @@ import {
 } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
+import { effectiveCallDeadlineSql } from './callSql'
 
 import type { ActivityWindow } from './accountabilityService'
 import { callEnteredAtSql, openCallSql, liveCallWorkSql, subtreeUnitIds, textArray, visibleCallSql } from './callSql'
@@ -157,7 +158,7 @@ async function backlogForSchool(
            COALESCE(fc.scheme_title, fc.title)       AS title,
            COALESCE(fc.agency_name, fc."agencyName") AS agency_name,
            ${callEnteredAtSql('fc')}                 AS entered_at,
-           COALESCE(fc.close_date, fc."deadlineAt")  AS closes_at,
+           ${effectiveCallDeadlineSql('fc',timeZone)}  AS closes_at,
            tri.status                                AS triage_status,
            tri.escalation_stages                     AS escalation_stages,
            tri.last_escalated_at                     AS last_escalated_at,
@@ -174,7 +175,7 @@ async function backlogForSchool(
        AND ${options.includeClosed ? Prisma.sql`TRUE` : Prisma.sql`(${openCallSql('fc', timeZone)} OR ${liveCallWorkSql(tenantId,school.id)})`}
        AND ${relevant}
        AND ${untouched}
-     ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST
+     ORDER BY ${effectiveCallDeadlineSql('fc',timeZone)} ASC NULLS LAST
      LIMIT 400
   `)
 }

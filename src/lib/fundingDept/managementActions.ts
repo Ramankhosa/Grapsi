@@ -5,6 +5,9 @@ import { applicationState, evidenceFingerprint, hasSubmissionEvidence, type Appl
 import type { ActionRow } from './managementService'
 import { getDeptSettings } from './settings'
 import { isMemberAway } from './shared'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryDeadline } from '@/lib/funding/callDeadline'
+import { coordinatorSql } from './hubScope'
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 
 export class ManagementError extends Error { constructor(message:string,public status=400){super(message)} }
 export async function resolveTarget(tenantId:string,schoolId:string,applicationId?:string|null,callId?:string|null) {
@@ -14,7 +17,7 @@ export async function resolveTarget(tenantId:string,schoolId:string,applicationI
     return {applicationId:rows[0].id,callId:rows[0].call_id,application:rows[0]}
   }
   if(!callId)throw new ManagementError('Select a call or application.')
-  const call=await prisma.fundingCall.findFirst({where:{id:callId,OR:[{tenantId},{tenantId:null,visibility:'GLOBAL_PUBLISHED',status:'PUBLISHED'}]},select:{id:true}})
+  const call=await prisma.fundingCall.findFirst({where:{AND:[{id:callId},visibleFundingCallWhere(tenantId)]},select:{id:true}})
   if(!call)throw new ManagementError('Call not found.',404)
   return {applicationId:null,callId:call.id,application:null}
 }
@@ -103,12 +106,12 @@ export async function ensureAllocationAction(tenantId: string, schoolId: string,
   if (open.length) return null
   const [settings, call, cover] = await Promise.all([
     getDeptSettings(tenantId),
-    prisma.fundingCall.findUnique({ where: { id: callId }, select: { close_date: true, deadlineAt: true } }),
-    prisma.fundingDeptSchoolAssignment.findFirst({ where: { tenant_id: tenantId, org_unit_id: schoolId, is_deputy: false, member: { is_active: true } }, include: { member: true } }),
+    prisma.fundingCall.findUnique({ where: { id: callId }, select: CALL_ENTRY_DEADLINE_SELECT }),
+    prisma.$queryRaw<Array<{user_id:string|null}>>(Prisma.sql`SELECT ${coordinatorSql(tenantId,'school_scope.id','fc.id')} user_id FROM funding_calls fc CROSS JOIN LATERAL(SELECT ${schoolId}::text id) school_scope WHERE fc.id=${callId}`),
   ])
-  const owner = cover && !isMemberAway(cover.member) ? cover.member.user_id : actorId
+  const owner = cover[0]?.user_id || actorId
   const byThreshold = Date.now() + settings.untouchedDays * 86400000
-  const deadline = (call?.close_date || call?.deadlineAt)?.getTime()
+  const deadline = call ? callEntryDeadline(call)?.getTime() : null
   const due = new Date(deadline && deadline > Date.now() ? Math.min(byThreshold, deadline) : byThreshold)
   return saveAction(tenantId, schoolId, actorId, { callId, title: 'Allocate faculty, or close with a reason', ownerUserId: owner, waitingWith: 'DSR', dueAt: due.toISOString(), isNext: true })
 }

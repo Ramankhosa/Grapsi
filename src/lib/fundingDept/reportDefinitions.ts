@@ -18,7 +18,7 @@
  */
 import { Prisma } from '@/lib/prisma-generated'
 import { DEFAULT_TIMEZONE, dayKey, deadlineDayKey } from '@/lib/i18n/format'
-import { deadlineDayRaw, timeZoneLiteral } from '@/lib/i18n/sql'
+import { deadlineDayRaw, deadlineDaySql, timeZoneLiteral } from '@/lib/i18n/sql'
 
 import { applicationState, deadlineAttention, type ApplicationRow } from './managementRules'
 import {
@@ -207,19 +207,20 @@ export function deadlineState(facts: DeadlineFacts, asOf: Date, timeZone: string
  * Whole India calendar days from `asOf` to the deadline expression, negative
  * once it has passed. Deadlines are stored as UTC timestamps without zone.
  */
-export function indiaDaysToDeadlineSql(deadline: string, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+export function indiaDaysToDeadlineSql(deadline: string | Prisma.Sql, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
   // asOf is bound as an ISO string: a bound Date arrives zone-less and would be
   // read in the session time zone, which is not UTC on every server. The
   // deadline day follows deadlineDayKey (date-only deadlines keep their date).
-  return Prisma.sql`(${Prisma.raw(deadlineDayRaw(deadline, timeZone))}
+  const day=typeof deadline==='string' ? Prisma.raw(deadlineDayRaw(deadline,timeZone)) : deadlineDaySql(deadline,timeZone)
+  return Prisma.sql`(${day}
     - (${asOf.toISOString()}::timestamptz AT TIME ZONE ${Prisma.raw(timeZoneLiteral(timeZone))})::date)`
 }
 
 /** `deadlineState` in SQL. */
-export function deadlineStateSql(cols: { deadline: string; formalAllocations: string; submissions: string; closedWithReason: string }, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
-  const days = indiaDaysToDeadlineSql(cols.deadline, asOf, timeZone)
+export function deadlineStateSql(cols: { deadline: string | Prisma.Sql; formalAllocations: string; submissions: string; closedWithReason: string; daysToDeadline?: Prisma.Sql }, asOf: Date, timeZone: string = DEFAULT_TIMEZONE): Prisma.Sql {
+  const days = cols.daysToDeadline ?? indiaDaysToDeadlineSql(cols.deadline, asOf, timeZone)
   return Prisma.sql`(CASE
-    WHEN ${Prisma.raw(cols.deadline)} IS NULL THEN 'NO_DEADLINE'
+    WHEN ${typeof cols.deadline==='string' ? Prisma.raw(cols.deadline) : cols.deadline} IS NULL THEN 'NO_DEADLINE'
     WHEN ${days} > ${CLOSING_SOON_DAYS} THEN 'OPEN'
     WHEN ${days} >= 0 THEN 'CLOSING_SOON'
     WHEN ${Prisma.raw(cols.submissions)} > 0 OR (${Prisma.raw(cols.closedWithReason)} AND ${Prisma.raw(cols.formalAllocations)} = 0) THEN 'PASSED_HANDLED'
@@ -274,6 +275,29 @@ export function rollupActionStatus(states: ActionStatus[]): ActionStatus {
 /* -------------------------------------------------------------------------- */
 /* Pendency — directly matched, never allocated                               */
 /* -------------------------------------------------------------------------- */
+
+export type ResponsibilityPendencyFacts = {
+  daysToDeadline: number | null; submissionsAtDeadline: number; allocationsAtDeadline: number
+  closedAtDeadline: boolean; submissions: number; takenUp: number; closedNow: boolean
+}
+
+export function responsibilityPendencyState(f: ResponsibilityPendencyFacts): PendencyState | null {
+  if (f.daysToDeadline!==null && f.daysToDeadline<0) {
+    if (f.submissionsAtDeadline>0) return null
+    return f.closedAtDeadline && f.allocationsAtDeadline===0 ? 'COMPLETED_NO_ALLOCATION' : 'MISSED'
+  }
+  if (f.submissions>0) return null
+  if (f.takenUp===0 && f.closedNow) return 'COMPLETED_NO_ALLOCATION'
+  return f.daysToDeadline!==null && f.daysToDeadline<=PENDENCY_AT_RISK_DAYS ? 'AT_RISK' : 'PENDING'
+}
+
+export function responsibilityPendencyStateSql(cols: { daysToDeadline:string; submissionsAtDeadline:string; allocationsAtDeadline:string; closedAtDeadline:string; submissions:string; takenUp:string; closedNow:string }): Prisma.Sql {
+  return Prisma.raw(`CASE
+    WHEN ${cols.daysToDeadline}<0 THEN CASE WHEN ${cols.submissionsAtDeadline}>0 THEN NULL WHEN ${cols.closedAtDeadline} AND ${cols.allocationsAtDeadline}=0 THEN 'COMPLETED_NO_ALLOCATION' ELSE 'MISSED' END
+    WHEN ${cols.submissions}>0 THEN NULL
+    WHEN ${cols.takenUp}=0 AND (${cols.closedNow}) THEN 'COMPLETED_NO_ALLOCATION'
+    WHEN ${cols.daysToDeadline}<=${PENDENCY_AT_RISK_DAYS} THEN 'AT_RISK' ELSE 'PENDING' END`)
+}
 
 export type PendencyFacts = {
   /** India calendar days to the deadline; null when none is recorded. */

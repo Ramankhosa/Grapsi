@@ -3849,6 +3849,7 @@ model CallSchoolTriage {
   action_completed_at         DateTime?
   action_completed_by_user_id String?
   action_completed_note       String?
+  action_completed_outcome    String?
 
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt

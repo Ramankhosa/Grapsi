@@ -2,13 +2,14 @@ import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { isExpiredInIndia } from './responsibility'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
-import { textArray } from './callSql'
+import { effectiveCallDeadlineSql, textArray } from './callSql'
 import { REVIEW_STATE_LABELS, countIntakeEvents, reviewStateSql, type ReviewState } from './reportDefinitions'
 
 export type IncomingRow={id:string;callId:string|null;schoolId:string|null;schoolName:string|null;title:string;status:string;error:string|null;enteredAt:Date;deadline:Date|null;source:string|null;ownerName:string|null;triage:string|null;live:boolean;reviewComplete:boolean;reviewState:ReviewState|null;actionClass:string;nextAction:string;duplicate:boolean;repeatArrival?:boolean}
 const REVIEW_SQL=reviewStateSql({triageStatus:'tri.status',triageDecidedAt:'tri.decided_at',dispositionReason:'facts.disposition_reason',formalAllocations:'facts.formal_allocations',namedActions:'facts.named_actions'})
 
 export async function getIncomingReport(tenantId:string,schoolIds:string[]|undefined,filters:{includeExpired?:boolean;callSearch?:string|null;schoolId?:string|null;callId?:string|null;actionClass?:string|null;asOf?:Date;start?:Date;end?:Date}) {
+  const timeZone=await getTenantTimeZone(tenantId)
   const rows=await prisma.$queryRaw<IncomingRow[]>(Prisma.sql`
     WITH arrivals AS (
       SELECT 'import:'||j.id id,j."fundingCallId" call_id,j.origin_school_id school_id,j.status::text status,j."errorMessage" error,j."createdAt" entered_at,j.origin_school_source source,(j.outcome::text='REUSED_EXISTING') duplicate
@@ -23,7 +24,7 @@ export async function getIncomingReport(tenantId:string,schoolIds:string[]|undef
         AND NOT EXISTS(SELECT 1 FROM funding_intake_jobs j WHERE j.linked_funding_call_id=c.id)
     )
     SELECT a.id,a.call_id "callId",a.school_id "schoolId",s.name "schoolName",COALESCE(fc.scheme_title,fc.title,'Intake awaiting extraction') title,
-      a.status,a.error,a.entered_at "enteredAt",COALESCE(fc.close_date,fc."deadlineAt") deadline,a.source,a.duplicate,
+      a.status,a.error,a.entered_at "enteredAt",${effectiveCallDeadlineSql('fc',timeZone)} deadline,a.source,a.duplicate,
       COALESCE(u.name,u.email) "ownerName",tri.status::text triage,
       (EXISTS(SELECT 1 FROM dsr_actions x WHERE x.tenant_id=${tenantId} AND x.call_id=a.call_id AND (a.school_id IS NULL OR x.school_id=a.school_id) AND x.status IN ('OPEN','ACKNOWLEDGED')) OR
        EXISTS(SELECT 1 FROM dsr_applications x WHERE x.tenant_id=${tenantId} AND x.call_id=a.call_id AND (a.school_id IS NULL OR x.school_id=a.school_id) AND COALESCE(x.assignment_status,'') NOT IN ('DECLINED','CANCELLED','LAPSED') AND COALESCE(x.proposal_status,'') NOT IN ('CLOSED','WITHDRAWN','REJECTED','SANCTIONED') AND COALESCE(x.outcome,'') NOT IN ('AWARDED','WITHDRAWN','REJECTED')) OR EXISTS(SELECT 1 FROM assignment_follow_ups f JOIN tenant_org_units unit ON unit.id=f.org_unit_id WHERE f.tenant_id=${tenantId} AND f.funding_call_id=a.call_id AND (a.school_id IS NULL OR unit.path[1]=a.school_id) AND f.remind_at IS NOT NULL)) live,
@@ -45,7 +46,6 @@ export async function getIncomingReport(tenantId:string,schoolIds:string[]|undef
   // An arrival of a call that had already arrived is a duplicate even when the
   // intake pipeline did not flag it (reportDefinitions.countIntakeEvents).
   const repeats=countIntakeEvents(rows.map(r=>({id:r.id,callId:r.callId,duplicate:r.duplicate,enteredAt:r.enteredAt}))).duplicateIds
-  const timeZone=await getTenantTimeZone(tenantId)
   return rows.filter(r=>(filters.includeExpired||!isExpiredInIndia(r.deadline,filters.asOf,timeZone)||r.live)&&(!filters.schoolId||r.schoolId===filters.schoolId)&&(!filters.callId||r.callId===filters.callId)&&(!filters.callSearch||`${r.title} ${r.id}`.toLowerCase().includes(filters.callSearch.toLowerCase()))).map(r=>{
     const processing=['queued','processing','fetching','extracting','PENDING','PROCESSING'].includes(r.status)
     // Reviewing a call is not completing it: an intake is done only once the

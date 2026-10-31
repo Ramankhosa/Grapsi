@@ -29,7 +29,9 @@ import { callEnteredAtSql, subtreeUnitIds, textArray, visibleCallSql } from './c
 import { listMembers } from './membershipService'
 import { applicationSubmittedSql } from './reportDefinitions'
 import { getDeptSettings, type DeptSettings } from './settings'
-import { isMemberAway, memberReachSchoolIds, serializeMember } from './shared'
+import { isMemberAway, serializeMember } from './shared'
+
+const primarySchoolIds = (member: ReturnType<typeof serializeMember>): string[] => member.schools.map((s: {id:string})=>s.id)
 
 export interface EfficiencySchoolRow {
   schoolId: string
@@ -164,17 +166,21 @@ async function timingsForSchools(
     WITH arrivals AS (
       SELECT s.id AS school_id,
              fc.id AS call_id,
-             ${callEnteredAtSql('fc')} AS entered_at
+             COALESCE(mapping.mapped_at,${callEnteredAtSql('fc')}) AS entered_at
         FROM funding_calls fc
         CROSS JOIN tenant_org_units s
+        LEFT JOIN dsr_call_school_mappings mapping ON mapping.tenant_id=${tenantId} AND mapping.call_id=fc.id AND mapping.school_id=s.id
        WHERE s.tenant_id = ${tenantId}
          AND s.id = ANY(${roots})
          AND ${visibleCallSql(tenantId, 'fc')}
-         AND ${callEnteredAtSql('fc')} BETWEEN ${window.start} AND ${window.end}
+         AND COALESCE(mapping.mapped_at,${callEnteredAtSql('fc')}) BETWEEN ${window.start} AND ${window.end}
          -- Only calls this school actually engaged with or was escalated about.
          -- Without this every school is credited with every call in the catalog,
          -- and the medians describe the catalog rather than the officer.
          AND (
+           mapping.call_id IS NOT NULL
+           OR fc.origin_school_id=s.id
+           OR
            EXISTS (
              SELECT 1 FROM call_school_triage t
               WHERE t.funding_call_id = fc.id AND t.org_unit_id = s.id
@@ -210,7 +216,10 @@ async function timingsForSchools(
                    AND f.org_unit_id IN (
                      SELECT cu.id FROM tenant_org_units cu
                       WHERE cu.tenant_id = ${tenantId} AND cu.path && ARRAY[a.school_id]::text[]
-                   ))
+                   )),
+               (SELECT MIN(ca.created_at) FROM call_assignments ca JOIN tenant_org_units u ON u.id=ca.assignee_org_unit_id
+                 WHERE ca.tenant_id=${tenantId} AND ca.funding_call_id=a.call_id AND u.path[1]=a.school_id),
+               (SELECT MIN(x.created_at) FROM dsr_actions x WHERE x.tenant_id=${tenantId} AND x.call_id=a.call_id AND x.school_id=a.school_id)
              ) AS first_touch_at,
              (SELECT MIN(ca.created_at) FROM call_assignments ca
                WHERE ca.funding_call_id = a.call_id
@@ -225,10 +234,10 @@ async function timingsForSchools(
            COUNT(*)::int AS calls_arrived,
            COUNT(*) FILTER (WHERE first_touch_at IS NULL)::int AS never_touched,
            PERCENTILE_CONT(0.5) WITHIN GROUP (
-             ORDER BY EXTRACT(EPOCH FROM (first_touch_at - entered_at)) / 86400
+             ORDER BY GREATEST(0,EXTRACT(EPOCH FROM (first_touch_at - entered_at)) / 86400)
            ) FILTER (WHERE first_touch_at IS NOT NULL) AS median_first_touch,
            PERCENTILE_CONT(0.5) WITHIN GROUP (
-             ORDER BY EXTRACT(EPOCH FROM (first_allocated_at - entered_at)) / 86400
+             ORDER BY GREATEST(0,EXTRACT(EPOCH FROM (first_allocated_at - entered_at)) / 86400)
            ) FILTER (WHERE first_allocated_at IS NOT NULL) AS median_allocate
       FROM touched
      GROUP BY school_id
@@ -366,7 +375,7 @@ export async function getOfficerEfficiency(
   const reachBySchool = new Map<string, string[]>()
   for (const member of members) {
     const serialized = serializeMember(member)
-    for (const schoolId of memberReachSchoolIds(serialized)) {
+    for (const schoolId of primarySchoolIds(serialized)) {
       if (options.schoolIds && !options.schoolIds.includes(schoolId)) continue
       const existing = reachBySchool.get(schoolId)
       if (existing) existing.push(member.id)
@@ -418,7 +427,7 @@ export async function getOfficerEfficiency(
 
   const memberRows: EfficiencyMemberRow[] = members.map((member) => {
     const serialized = serializeMember(member)
-    const mine = memberReachSchoolIds(serialized).filter(
+    const mine = primarySchoolIds(serialized).filter(
       (schoolId) => !options.schoolIds || options.schoolIds.includes(schoolId)
     )
     const rows = mine.map(schoolRowFor)

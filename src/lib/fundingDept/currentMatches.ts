@@ -29,13 +29,13 @@ export async function reportSchoolMatchStates(tenantId: string, schoolIds: strin
   const state = new Map<string, { fresh: boolean; complete: boolean; unprofiled: string[] }>()
   if (!schoolIds.length) return state
   const rows = await prisma.$queryRaw<Array<{ school_id: string; complete: boolean; unprofiled: string[]; refreshed_at: Date }>>(Prisma.sql`
-    SELECT school_id, complete, unprofiled, refreshed_at FROM dsr_match_projection_state
+    SELECT school_id, complete, unprofiled, (refreshed_at AT TIME ZONE current_setting('TimeZone')) refreshed_at FROM dsr_match_projection_state
      WHERE tenant_id = ${tenantId} AND school_id IN (${Prisma.join(schoolIds)})`)
   const stored = new Map(rows.map((row) => [row.school_id, row]))
   for (const schoolId of schoolIds) {
     const row = stored.get(schoolId)
     const fresh = Boolean(row && Date.now() - row.refreshed_at.getTime() < REPORT_FRESH_MS)
-    state.set(schoolId, { fresh, complete: fresh && Boolean(row?.complete), unprofiled: fresh ? row?.unprofiled || [] : [] })
+    state.set(schoolId, { fresh, complete: Boolean(row?.complete), unprofiled: row?.unprofiled || [] })
     if (!fresh) queueSchoolMatchRefresh(tenantId, schoolId)
   }
   return state

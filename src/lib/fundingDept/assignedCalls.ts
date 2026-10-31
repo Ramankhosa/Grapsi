@@ -11,7 +11,8 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { textArray, utcTimestamp } from './callSql'
+import { callDaysToDeadlineSql, effectiveCallDeadlineSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
+import { coordinatorSql } from './hubScope'
 import { indiaDaysToDeadlineSql } from './reportDefinitions'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { safeTimeZone } from '@/lib/i18n/sql'
@@ -29,6 +30,7 @@ export type AssignedFilters = {
   /** The tenant's zone for deadline days and "this month"; filled by getAssignedCalls. */
   timeZone?: string
   schoolIds: string[]
+  coordinatorUserId?: string | null
   status?: string | null
   due?: string | null
   silent?: boolean
@@ -63,15 +65,17 @@ export type AssignedRow = {
 const ACTIVE = `('ASSIGNED','ACCEPTED','IN_PROGRESS')`
 
 function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
-  const due = 'COALESCE(ca.deadline_at, COALESCE(fc.close_date, fc."deadlineAt"))'
+  const callDays = callDaysToDeadlineSql(f.asOf, 'fc', f.timeZone)
+  const dueDays = Prisma.sql`CASE WHEN ca.deadline_at IS NULL THEN ${callDays}
+    ELSE ${indiaDaysToDeadlineSql('ca.deadline_at', f.asOf, f.timeZone)} END`
   return Prisma.sql`
     WITH base AS (
       SELECT ca.id, ca.status::text status, ca.outcome::text outcome, ca.created_at, ca.responded_at, ca.declined_reason, ca.deadline_at, ca.submitted_at, ca.completed_at,
         ca.submission_reference, ca.submission_url, ca.submission_evidence_status, ca.lapsed_at, ca.allocation_method, ca.allocation_reason, ca.allocation_note,
         ca.assignee_user_id, ca.assigned_by_user_id, ca.previous_assignment_id, ca.funding_call_id,
-        COALESCE(fc.scheme_title, fc.title) call_title, COALESCE(fc.agency_name, fc."agencyName") agency, COALESCE(fc.close_date, fc."deadlineAt") call_deadline,
-        ${indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf, f.timeZone)} call_days,
-        ${indiaDaysToDeadlineSql(due, f.asOf, f.timeZone)} due_days,
+        COALESCE(fc.scheme_title, fc.title) call_title, COALESCE(fc.agency_name, fc."agencyName") agency, ${effectiveCallDeadlineSql('fc', f.timeZone)} call_deadline,
+        ${callDays} call_days,
+        ${dueDays} due_days,
         su.id school_id, su.name school_name,
         COALESCE(fu.name, fu.email) faculty_name, fu.email faculty_email, COALESCE(bu.name, bu.email) assigned_by_name,
         lf.happened_at last_at, lf.kind last_kind, lf.note last_note, COALESCE(lu.name, lu.email) last_by,
@@ -88,6 +92,8 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
         WHERE x.assignment_id=ca.id AND x.kind <> 'TRIAGE' ORDER BY x.happened_at DESC, x.id DESC LIMIT 1) lf ON TRUE
       LEFT JOIN users lu ON lu.id = lf.created_by_user_id
       WHERE ca.tenant_id=${tenantId} AND au.path[1] = ANY(${textArray(f.schoolIds)})
+        AND ${visibleCallSql(tenantId)}
+        ${f.coordinatorUserId ? Prisma.sql`AND ${coordinatorSql(tenantId, 'su.id', 'fc.id')} = ${f.coordinatorUserId}` : Prisma.empty}
         ${f.assignedByUserId ? Prisma.sql`AND ca.assigned_by_user_id = ${f.assignedByUserId}` : Prisma.empty}
         ${f.callId ? Prisma.sql`AND ca.funding_call_id = ${f.callId}` : Prisma.empty}
         ${f.assignmentId ? Prisma.sql`AND ca.id = ${f.assignmentId}` : Prisma.empty}

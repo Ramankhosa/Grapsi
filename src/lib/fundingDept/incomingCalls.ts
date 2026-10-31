@@ -18,7 +18,7 @@
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { openCallSql, textArray, visibleCallSql } from './callSql'
+import { callDaysToDeadlineSql, effectiveCallDeadlineSql, openCallSql, textArray, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { MAPPING_SOURCE_LABELS, type MappingSource } from './callSchoolMapping'
 import { queueSchoolMatchRefresh } from './currentMatches'
@@ -26,7 +26,7 @@ import { coordinatorSql } from './hubScope'
 import { DEFAULT_MATCH_WIDTH, type MatchWidth } from './matchBands'
 import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
 import {
-  ACTION_STATUSES, actionStatusSql, currentQualifyingMatchSql, indiaDaysToDeadlineSql, rollupActionStatus,
+  ACTION_STATUSES, actionStatusSql, currentQualifyingMatchSql, rollupActionStatus,
   type ActionStatus,
 } from './reportDefinitions'
 
@@ -36,6 +36,7 @@ export const MATCHED_FACULTY_SOURCE = 'MATCHED_FACULTY'
 
 export type IncomingFilters = {
   schoolIds: string[]
+  coordinatorUserId?: string | null
   includeExpired?: boolean
   action?: string | null
   closingWithin?: number | null
@@ -79,7 +80,7 @@ function validate(f: IncomingFilters) {
 function pairsSql(tenantId: string, f: IncomingFilters, timeZone: string): Prisma.Sql {
   const width = f.width ?? DEFAULT_MATCH_WIDTH
   const scope = textArray(f.schoolIds)
-  const days = indiaDaysToDeadlineSql('COALESCE(fc.close_date, fc."deadlineAt")', f.asOf, timeZone)
+  const days = callDaysToDeadlineSql(f.asOf, 'fc', timeZone)
   const action = actionStatusSql({ actionCompletedAt: 'r.action_completed_at', triageDecidedAt: 'r.triage_decided_at', shortlisted: 'r.shortlisted',
     allocations: 'r.allocations', followUps: 'r.follow_ups', namedActions: 'r.named_actions' })
   const sourceFilter = f.source === 'ORIGIN' ? Prisma.sql`AND 'ORIGIN' = ANY(p.sources)`
@@ -97,7 +98,7 @@ function pairsSql(tenantId: string, f: IncomingFilters, timeZone: string): Prism
     ), facts AS (
       SELECT p.call_id, p.school_id, s.name school_name, p.sources,
         COALESCE(fc.scheme_title, fc.title) title, COALESCE(fc.agency_name, fc."agencyName") agency,
-        COALESCE(fc.close_date, fc."deadlineAt") deadline, ${days} days_to_deadline, COALESCE(fc."publishedAt", fc."createdAt") entered_at,
+        ${effectiveCallDeadlineSql('fc', timeZone)} deadline, ${days} days_to_deadline, COALESCE(fc."publishedAt", fc."createdAt") entered_at,
         tri.status triage_status, tri.decided_at triage_decided_at, tri.action_completed_at, tri.action_completed_note,
         COALESCE(cu.name, cu.email) completed_by,
         (SELECT count(*)::int FROM funding_opportunity_matches fm WHERE fm.tenant_id=${tenantId} AND fm.funding_call_id=p.call_id AND fm.school_id=p.school_id AND ${currentDirectMatch('fm', width)}) matched_faculty,
@@ -125,6 +126,7 @@ function pairsSql(tenantId: string, f: IncomingFilters, timeZone: string): Prism
         ${sourceFilter}
     ), resp AS (
       SELECT r.*, ${action} action_status FROM facts r
+       WHERE ${f.coordinatorUserId ? Prisma.sql`coordinator_id = ${f.coordinatorUserId}` : Prisma.sql`TRUE`}
     )`
 }
 
@@ -197,7 +199,8 @@ export async function getIncomingCalls(tenantId: string, f: IncomingFilters) {
     const at = refreshed.get(id)
     if (!at || Date.now() - at.getTime() > 6 * 3600 * 1000) queueSchoolMatchRefresh(tenantId, id)
   }
-  const oldest = f.schoolIds.map(id => refreshed.get(id)).reduce<Date | null>((min, at) => !at ? min : !min || at < min ? at : min, null)
+  const oldest = f.schoolIds.some(id=>!refreshed.has(id)) ? null
+    : f.schoolIds.map(id => refreshed.get(id)).reduce<Date | null>((min, at) => !at ? min : !min || at < min ? at : min, null)
 
   return {
     rows, total: count?.n ?? 0, page: f.page, pageSize: f.pageSize,

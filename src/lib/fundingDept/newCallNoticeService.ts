@@ -1,182 +1,85 @@
-import { createNotifications } from '@/lib/notifications/notificationService'
+import { randomUUID } from 'node:crypto'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryDeadline } from '@/lib/funding/callDeadline'
 import { formatDeadlineDate } from '@/lib/i18n/format'
 import { getTenantLocale } from '@/lib/tenant/locale'
+import { planTenantMappings } from './callSchoolMapping'
+import { coordinatorSql } from './hubScope'
+import { textArray, visibleCallSql } from './callSql'
 
-import { isMemberAway } from './shared'
-
-/**
- * Tells the officer covering a school that a call landed in their disciplines.
- *
- * Researcher alerts already go out on publish, but they go to researchers. The
- * department officer answerable for chasing that school learned about the call
- * only by opening the queue, which means an unwatched queue is an unworked one.
- *
- * Coverage is per school, so this fans out per school rather than per call:
- * one call relevant to three schools notifies three officers, each about their
- * own school, and each with a link that lands on that school's queue.
- */
-
-export interface NewCallNoticeResult {
-  fundingCallId: string
-  schoolsMatched: number
-  notified: number
-  reroutedForLeave: number
-}
-
-/**
- * Who should hear about work landing in this school right now.
- *
- * Identical in intent to `ticklerRecipients` in reminderService: while the
- * covering officer is away, their deputy hears instead, and if there is no
- * deputy the officer still hears — an unread notice beats a dropped one.
- */
-async function recipientsForSchool(
-  tenantId: string,
-  orgUnitId: string,
-  member: { user_id: string; away_from: Date | null; away_until: Date | null }
-): Promise<{ userIds: string[]; rerouted: boolean }> {
-  if (!isMemberAway(member)) {
-    return { userIds: [member.user_id], rerouted: false }
-  }
-
-  const deputy = await prisma.fundingDeptSchoolAssignment.findFirst({
-    where: {
-      tenant_id: tenantId,
-      org_unit_id: orgUnitId,
-      is_deputy: true,
-      member: { is_active: true },
-    },
-    select: { member: { select: { user_id: true } } },
-  })
-
-  const deputyUserId = deputy?.member?.user_id
-  if (!deputyUserId || deputyUserId === member.user_id) {
-    return { userIds: [member.user_id], rerouted: false }
-  }
-  return { userIds: [deputyUserId], rerouted: true }
-}
-
+export interface NewCallNoticeResult { fundingCallId: string; schoolsMatched: number; notified: number; reroutedForLeave: number }
 type CoverageRow = {
-  tenant_id: string
-  org_unit_id: string
-  org_unit: { id: string; name: string; is_active: boolean } | null
+  tenant_id: string; org_unit_id: string
+  org_unit: { id: string; name: string; is_active: boolean }
   member: { user_id: string; away_from: Date | null; away_until: Date | null }
+  rerouted: boolean
 }
 
-/**
- * The covered schools a call is relevant to (primary coverage, mapped schools
- * only), by the same rule the notice below uses, so a preview of who would be
- * told and the notice itself cannot disagree.
- */
+/** Preview and delivery use the mapper's exact responsibilities and the queue's operational owner. */
 export async function coveredSchoolsForCall(callId: string, tenantIds?: string[]): Promise<CoverageRow[]> {
-  // Primary coverage only. A deputy is a standby for absence, not a second
-  // person to notify about every publish.
-  const coverage = await prisma.fundingDeptSchoolAssignment.findMany({
-    where: { is_deputy: false, member: { is_active: true }, ...(tenantIds ? { tenant_id: { in: tenantIds } } : {}) },
-    select: {
-      tenant_id: true,
-      org_unit_id: true,
-      org_unit: { select: { id: true, name: true, is_active: true } },
-      member: { select: { user_id: true, away_from: true, away_until: true } },
-    },
-  })
-  const relevant: CoverageRow[] = []
-  for (const row of coverage) {
-    if (!row.org_unit?.is_active) continue
-    const profile = await loadUnitAreaProfile(row.tenant_id, [row.org_unit_id])
-    // An unmapped school matches everything, which would make this notice a
-    // firehose rather than a signal. Silence until the school is mapped is the
-    // right trade: the call is still in their queue either way.
-    if (profile.isUnmapped) continue
-    const matches = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT fc.id FROM funding_calls fc
-       WHERE fc.id = ${callId}
-         AND ${relevantCallWhereSql(profile, 'fc', { includeUnclassified: false })}
-    `)
-    if (matches.length > 0) relevant.push(row)
-  }
-  return relevant
+  if (tenantIds?.length === 0) return []
+  const call = await prisma.fundingCall.findUnique({ where: { id: callId }, select: { id: true, tenantId: true, visibility: true } })
+  if (!call) return []
+  const tenants = call.visibility === 'TENANT_PRIVATE'
+    ? call.tenantId && (!tenantIds || tenantIds.includes(call.tenantId)) ? [call.tenantId] : []
+    : tenantIds
+  if (tenants?.length === 0) return []
+
+  // A catalogue promotion preview is explicitly scoped by the curator's eligible tenants.
+  // It plans mappings without inserting them; catalogue entries are never sent notices.
+  const preview = call.visibility === 'GLOBAL_CATALOG'
+  if (preview && !tenants) return []
+  const planned = preview ? (await Promise.all(tenants!.map(id => planTenantMappings(id,[callId],{ignoreVisibility:true})))).flat() : []
+  if (preview && !planned.length) return []
+  const mappings = preview
+    ? Prisma.sql`(VALUES ${Prisma.join(planned.map(m => Prisma.sql`(${m.tenantId}::text,${m.schoolId}::text,${callId}::text)`))}) AS m(tenant_id,school_id,call_id)`
+    : Prisma.sql`dsr_call_school_mappings m`
+  const rows = await prisma.$queryRaw<Array<{ tenant_id: string; school_id: string; school_name: string; user_id: string; rerouted: boolean }>>(Prisma.sql`
+    SELECT DISTINCT m.tenant_id,m.school_id,s.name school_name,owner.user_id,
+      NOT EXISTS(SELECT 1 FROM funding_dept_school_assignments primary_cover JOIN funding_dept_members primary_member ON primary_member.id=primary_cover.member_id
+        WHERE primary_cover.tenant_id=m.tenant_id AND primary_cover.org_unit_id=m.school_id AND NOT primary_cover.is_deputy AND primary_member.user_id=owner.user_id) rerouted
+    FROM ${mappings} JOIN funding_calls fc ON fc.id=m.call_id
+    JOIN tenant_org_units s ON s.id=m.school_id AND s.tenant_id=m.tenant_id AND s.is_active
+    CROSS JOIN LATERAL(SELECT ${coordinatorSql(Prisma.raw('m.tenant_id'),'m.school_id','m.call_id')} user_id) owner
+    JOIN users u ON u.id=owner.user_id AND u."tenantId"=m.tenant_id AND u.status='ACTIVE'
+    WHERE m.call_id=${callId} ${preview ? Prisma.empty : Prisma.sql`AND m.is_active AND ${visibleCallSql(Prisma.raw('m.tenant_id'))}`}
+      ${tenants ? Prisma.sql`AND m.tenant_id=ANY(${textArray(tenants)})` : Prisma.empty}`)
+  return rows.filter(r=>!tenants || tenants.includes(r.tenant_id)).map(r => ({ tenant_id:r.tenant_id,org_unit_id:r.school_id,
+    org_unit:{id:r.school_id,name:r.school_name,is_active:true},
+    member:{user_id:r.user_id,away_from:null,away_until:null},rerouted:r.rerouted }))
 }
 
-export async function notifyCoveringOfficers(
-  fundingCallId: string
-): Promise<NewCallNoticeResult> {
-  const result: NewCallNoticeResult = {
-    fundingCallId,
-    schoolsMatched: 0,
-    notified: 0,
-    reroutedForLeave: 0,
-  }
-
-  const call = await prisma.fundingCall.findUnique({
-    where: { id: fundingCallId },
-    select: {
-      id: true,
-      title: true,
-      scheme_title: true,
-      agency_name: true,
-      agencyName: true,
-      close_date: true,
-      deadlineAt: true,
-      notification_policy: true,
-      visibility: true,
-    },
-  })
-  if (!call) return result
-  // Bulk-imported catalogue calls never notify officers (and are not
-  // funding-department calls at all until a curator promotes one).
-  if (call.notification_policy === 'SUPPRESSED' || call.visibility === 'GLOBAL_CATALOG') return result
-
-  const title = call.scheme_title || call.title || 'A new funding call'
-  const agency = call.agency_name || call.agencyName
-  const closesAt = call.close_date || call.deadlineAt
-
+export async function notifyCoveringOfficers(fundingCallId: string): Promise<NewCallNoticeResult> {
+  const result: NewCallNoticeResult = { fundingCallId,schoolsMatched:0,notified:0,reroutedForLeave:0 }
+  const call = await prisma.fundingCall.findUnique({ where:{id:fundingCallId}, select:{id:true,tenantId:true,title:true,scheme_title:true,
+    agency_name:true,agencyName:true,notification_policy:true,visibility:true,...CALL_ENTRY_DEADLINE_SELECT} })
+  if (!call || call.notification_policy==='SUPPRESSED' || call.visibility==='GLOBAL_CATALOG') return result
   for (const row of await coveredSchoolsForCall(call.id)) {
-    if (!row.org_unit) continue
-    result.schoolsMatched += 1
-
-    const { userIds, rerouted } = await recipientsForSchool(
-      row.tenant_id,
-      row.org_unit_id,
-      row.member
-    )
-    if (rerouted) result.reroutedForLeave += 1
-
-    // The deadline in the tenant's zone and date style; a date-only deadline keeps its date.
-    const tenantLocale = await getTenantLocale(row.tenant_id)
-    const closes = formatDeadlineDate(closesAt, { timeZone: tenantLocale.timezone, locale: tenantLocale.locale })
-    const bodyParts = [
-      agency ? `From ${agency}.` : null,
-      closes ? `Closes ${closes}.` : null,
-      `Matches ${row.org_unit.name}.`,
-    ].filter(Boolean)
-
-    result.notified += await createNotifications({
-      tenantId: row.tenant_id,
-      userIds,
-      title: `New call for ${row.org_unit.name}: ${title}`,
-      body: bodyParts.join(' '),
-      category: 'FUNDING_MATCH',
-      linkUrl: `/funding-dept/calls/${call.id}?school=${row.org_unit_id}`,
+    result.schoolsMatched++
+    if (row.rerouted) result.reroutedForLeave++
+    const locale=await getTenantLocale(row.tenant_id)
+    const closes=formatDeadlineDate(callEntryDeadline(call),{timeZone:call.deadline_timezone || locale.timezone,locale:locale.locale})
+    const title=`New call for ${row.org_unit.name}: ${call.scheme_title || call.title || 'A new funding call'}`
+    const body=[call.agency_name || call.agencyName ? `From ${call.agency_name || call.agencyName}.` : null,
+      closes ? `Closes ${closes}.` : null,`Matches ${row.org_unit.name}.`].filter(Boolean).join(' ')
+    // Claim and notification are atomic. Failed transactions can retry, completed deliveries cannot duplicate.
+    const sent=await prisma.$transaction(async tx => {
+      const claimed=await tx.$queryRaw<Array<{user_id:string}>>(Prisma.sql`
+        INSERT INTO dsr_call_notice_deliveries(tenant_id,call_id,school_id,user_id)
+        SELECT ${row.tenant_id},fc.id,${row.org_unit_id},u.id FROM funding_calls fc JOIN users u ON u.id=${row.member.user_id} AND u."tenantId"=${row.tenant_id} AND u.status='ACTIVE'
+        WHERE fc.id=${call.id} AND ${visibleCallSql(row.tenant_id)} AND COALESCE(fc.notification_policy,'') <> 'SUPPRESSED'
+        ON CONFLICT DO NOTHING RETURNING user_id`)
+      if (!claimed.length) return 0
+      await tx.notification.create({data:{id:randomUUID(),tenant_id:row.tenant_id,user_id:row.member.user_id,title,body,category:'FUNDING_MATCH',
+        link_url:`/funding-dept/calls/${call.id}?school=${row.org_unit_id}`}})
+      return 1
     })
+    result.notified+=sent
   }
-
   return result
 }
 
-/**
- * Fire-and-forget wrapper for the publish path, matching
- * `dispatchFundingAlertsQuietly`: a notification failure must never fail or
- * delay a publish.
- */
 export function notifyCoveringOfficersQuietly(fundingCallId: string): void {
-  void notifyCoveringOfficers(fundingCallId).catch((error) => {
-    console.warn(
-      `[DEPT-NOTICE] Could not notify covering officers for call ${fundingCallId}:`,
-      error instanceof Error ? error.message : String(error)
-    )
-  })
+  void notifyCoveringOfficers(fundingCallId).catch(error => console.warn('[DEPT-NOTICE] Delivery failed:',error instanceof Error ? error.message : String(error)))
 }

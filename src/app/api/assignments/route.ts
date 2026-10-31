@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryClosed } from '@/lib/funding/callDeadline'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { Prisma } from '@/lib/prisma-generated'
 import { createAssignmentSchema, ALLOCATION_REASON_LABELS } from '@/lib/assignments/manualAllocation'
 import { ensureManualAllocationMapping } from '@/lib/assignments/manualAllocationMapping'
@@ -172,15 +174,19 @@ export async function POST(request: NextRequest) {
 
   const call = await prisma.fundingCall.findFirst({
     where: { AND: [{ id: payload.fundingCallId }, tenantVisibleCallWhere(context.tenantId)] },
-    select: { id: true },
+    select: { id: true, ...CALL_ENTRY_DEADLINE_SELECT },
   })
   if (!call) {
     return NextResponse.json({ error: 'Funding call not found or not accessible.' }, { status: 404 })
   }
 
+  if (callEntryClosed(call,new Date(),await getTenantTimeZone(context.tenantId))) {
+    return NextResponse.json({ error: 'This call is closed for new applications. Correct its entry deadline or reopen it before allocating faculty.' },{status:409})
+  }
+
   const assignee = await prisma.user.findFirst({
     where: { id: payload.assigneeUserId, tenantId: context.tenantId,
-      ...(payload.allocationMethod === 'MANUAL' ? { status: 'ACTIVE' as const, NOT: { roles: { hasSome: ['SUPER_ADMIN' as const, 'SUPER_ADMIN_VIEWER' as const] } } } : {}),
+      status: 'ACTIVE' as const, NOT: { roles: { hasSome: ['SUPER_ADMIN' as const, 'SUPER_ADMIN_VIEWER' as const] } },
     },
     select: { id: true, name: true, email: true },
   })

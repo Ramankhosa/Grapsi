@@ -100,11 +100,11 @@ export default function IncomingCallsTab({ filters, setFilters, openTab }: { fil
 export function MarkCompleted({ row, onDone }: { row: { callId: string; schools: Array<Pick<School, 'schoolId' | 'schoolName' | 'actionStatus' | 'completed'>> }; onDone: () => void }) {
   const { authFetch } = useAuth()
   const open = row.schools.filter(s => s.actionStatus !== 'COMPLETED')
-  const [picked, setPicked] = useState<string[]>(open.map(s => s.schoolId)); const [note, setNote] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('')
+  const [picked, setPicked] = useState<string[]>(open.map(s => s.schoolId)); const [note, setNote] = useState(''); const [outcome,setOutcome] = useState('WORK_RECORDED'); const [busy, setBusy] = useState(false); const [error, setError] = useState('')
   const send = async (schoolIds: string[], completed: boolean) => {
     setBusy(true); setError('')
     try {
-      const r = await authFetch(`/api/funding-dept/calls/${encodeURIComponent(row.callId)}/action-status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schoolIds, completed, note: note.trim() || null }) })
+      const r = await authFetch(`/api/funding-dept/calls/${encodeURIComponent(row.callId)}/action-status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schoolIds, completed, note: note.trim() || null, outcome }) })
       if (!r.ok) throw Error((await r.json().catch(() => null))?.error || 'Could not save.')
       onDone()
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
@@ -113,8 +113,12 @@ export function MarkCompleted({ row, onDone }: { row: { callId: string; schools:
     {open.length > 0 && <form className="flex flex-wrap items-end gap-3" onSubmit={e => { e.preventDefault(); if (picked.length) void send(picked, true) }}>
       <fieldset className="flex flex-wrap gap-3 text-sm"><legend className="mb-1 text-xs text-nickel-600">Mark the DSR action completed for</legend>
         {open.map(s => <label key={s.schoolId} className="flex items-center gap-1.5"><input type="checkbox" checked={picked.includes(s.schoolId)} onChange={e => setPicked(p => e.target.checked ? [...p, s.schoolId] : p.filter(id => id !== s.schoolId))} />{s.schoolName}</label>)}</fieldset>
-      <label className="flex min-w-[240px] flex-1 flex-col gap-1 text-xs">What was done (optional)<input className={field} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. circulated to HoDs; two faculty allocated" /></label>
-      <button className="nk-btn-primary nk-btn-sm" disabled={busy || !picked.length}>{busy ? 'Saving…' : 'Mark completed'}</button>
+      <label className="flex min-w-[240px] flex-1 flex-col gap-1 text-xs">What was done and the result<input required className={field} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Explain the action taken and its outcome" /></label>
+      <label className="flex flex-col gap-1 text-xs">Outcome<select className={field} value={outcome} onChange={e=>setOutcome(e.target.value)}>
+        <option value="WORK_RECORDED">Work recorded; track allocations separately</option><option value="NO_SUITABLE_FACULTY">Closed: no suitable faculty</option>
+        <option value="NOT_RELEVANT">Closed: not relevant</option><option value="CAPACITY">Closed: capacity unavailable</option><option value="OTHER">Closed: other reason</option>
+      </select></label>
+      <button className="nk-btn-primary nk-btn-sm" disabled={busy || !picked.length || !note.trim()}>{busy ? 'Saving…' : 'Mark completed'}</button>
     </form>}
     {row.schools.filter(s => s.actionStatus === 'COMPLETED').map(s => <p key={s.schoolId} className="flex flex-wrap items-center gap-2 text-sm">
       <span className="nk-badge nk-badge-ok">Completed</span>{s.schoolName} · {fmtDate(s.completed?.at)}{s.completed?.by ? ` by ${s.completed.by}` : ''}{s.completed?.note ? ` — ${s.completed.note}` : ''}

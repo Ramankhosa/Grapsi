@@ -17,7 +17,7 @@ import { callAreaRowsSql } from '@/lib/researchAreas/queries';
 
 const embeddingService = new EmbeddingService();
 /** Included in census fingerprints when the scored document or population changes. */
-export const RESEARCHER_SEARCH_SCORING_VERSION = 'profile-and-retrieved-evidence-v1';
+export { RESEARCHER_SEARCH_SCORING_VERSION } from '@/lib/researcherMatching/config';
 
 const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const VECTOR_BRANCH_LIMIT = 80;
