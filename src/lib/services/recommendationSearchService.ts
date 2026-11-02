@@ -84,6 +84,51 @@ const RERANK_CANDIDATE_LIMIT = MERGED_CANDIDATE_LIMIT;
 const NO_RESULT_SCORE_THRESHOLD = 0.2;
 const LOW_CONFIDENCE_THRESHOLD = 0.35;
 const TOPIC_RELEVANCE_SEMANTIC_THRESHOLD = 0.45;
+
+/**
+ * Which semantic signal Finder scores with.
+ *
+ *  - max (default): max(retrieval similarity, reranker score), as shipped. The
+ *    reranker can raise a call but never lower one, so a call it judges
+ *    irrelevant keeps a high first-stage similarity.
+ *  - rerank: the reranker's score replaces the similarity whenever it judged
+ *    the whole candidate list. Its scale differs from cosine similarity, so it
+ *    comes with its own cutoffs (finderThresholds).
+ *
+ * Off until the comparison in scripts/compare-finder-scoring.ts has been read:
+ * set FINDER_SEMANTIC_SCORE=rerank to switch.
+ */
+export function finderSemanticMode(): 'max' | 'rerank' {
+  return String(process.env.FINDER_SEMANTIC_SCORE || '').toLowerCase() === 'rerank' ? 'rerank' : 'max';
+}
+
+export type FinderThresholds = { topic: number; semanticPresence: number; noResult: number; lowConfidence: number };
+
+function envThreshold(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
+/**
+ * Cutoffs for the semantic scale a search actually used. Retrieval scale is the
+ * shipped tuning. Reranker scale is tunable from the comparison output.
+ */
+export function finderThresholds(scale: 'retrieval' | 'rerank'): FinderThresholds {
+  if (scale === 'retrieval') {
+    return { topic: TOPIC_RELEVANCE_SEMANTIC_THRESHOLD, semanticPresence: 0.08, noResult: NO_RESULT_SCORE_THRESHOLD, lowConfidence: LOW_CONFIDENCE_THRESHOLD };
+  }
+  return {
+    topic: envThreshold('FINDER_RERANK_TOPIC_THRESHOLD', 0.5),
+    semanticPresence: envThreshold('FINDER_RERANK_PRESENCE_THRESHOLD', 0.05),
+    noResult: envThreshold('FINDER_RERANK_NO_RESULT_THRESHOLD', NO_RESULT_SCORE_THRESHOLD),
+    lowConfidence: envThreshold('FINDER_RERANK_LOW_CONFIDENCE_THRESHOLD', LOW_CONFIDENCE_THRESHOLD),
+  };
+}
+
+/** The scale this candidate's semanticSimilarity is on. */
+function semanticScale(candidate: Pick<RecommendationCandidate, 'rerankScore'>): 'retrieval' | 'rerank' {
+  return finderSemanticMode() === 'rerank' && typeof candidate.rerankScore === 'number' ? 'rerank' : 'retrieval';
+}
 const RESEARCH_AREA_ENRICHMENT_MODEL = 'gemini-2.0-flash-lite';
 const QUERY_ENRICHMENT_CACHE_VERSION = 'v1';
 const QUERY_EMBEDDING_CACHE_VERSION_PREFIX = 'funding-query-v1';
@@ -904,7 +949,7 @@ function hasRequiredTopicRelevance(
     return true;
   }
 
-  if (candidate.semanticSimilarity >= TOPIC_RELEVANCE_SEMANTIC_THRESHOLD) {
+  if (candidate.semanticSimilarity >= finderThresholds(semanticScale(candidate)).topic) {
     return true;
   }
 
@@ -1191,7 +1236,7 @@ function buildMatchReasons(candidate: RecommendationCandidate, normalized: Norma
 
   if (disciplineHits.length > 0) {
     reasons.push(`Matched discipline: ${disciplineHits.slice(0, 2).join(', ')}`);
-  } else if (candidate.semanticSimilarity >= TOPIC_RELEVANCE_SEMANTIC_THRESHOLD) {
+  } else if (candidate.semanticSimilarity >= finderThresholds(semanticScale(candidate)).topic) {
     reasons.push('High semantic match to the query text');
   } else {
     const topicHits = findCandidateTopicHits(candidate, normalized);
@@ -1992,9 +2037,14 @@ export class RecommendationSearchService {
     execution: SearchExecutionResult,
     profileContext: RecommendationProfileSnapshot | null = null
   ): RankedExecution {
-    const hasSemanticCandidates = execution.candidates.some((candidate) => candidate.semanticSimilarity >= 0.08);
-    const scoreThreshold = hasSemanticCandidates ? NO_RESULT_SCORE_THRESHOLD : 0.08;
-    const lowConfidenceThreshold = hasSemanticCandidates ? LOW_CONFIDENCE_THRESHOLD : 0.2;
+    // One scale per search: reranked only when the reranker judged every candidate.
+    const scale = execution.candidates.length > 0 && execution.candidates.every((candidate) => semanticScale(candidate) === 'rerank')
+      ? 'rerank'
+      : 'retrieval';
+    const thresholds = finderThresholds(scale);
+    const hasSemanticCandidates = execution.candidates.some((candidate) => candidate.semanticSimilarity >= thresholds.semanticPresence);
+    const scoreThreshold = hasSemanticCandidates ? thresholds.noResult : 0.08;
+    const lowConfidenceThreshold = hasSemanticCandidates ? thresholds.lowConfidence : 0.2;
     const scored = sortCandidates(
       execution.candidates.map((candidate) => {
         const profileMatch = buildProfileMatch(candidate, profileContext);
@@ -2615,7 +2665,10 @@ Rules:
     normalized: NormalizedRecommendationSearchRequest,
     candidates: RecommendationCandidate[]
   ) {
-    if (!voyageRerankService.isConfigured() || candidates.length <= 1) {
+    const mode = finderSemanticMode();
+    // The reranker-scale formula judges a sole candidate too; the legacy
+    // formula kept its retrieval score.
+    if (!voyageRerankService.isConfigured() || candidates.length === 0 || (mode === 'max' && candidates.length <= 1)) {
       return candidates;
     }
 
@@ -2640,16 +2693,29 @@ Rules:
       }
 
       const seen = new Set<number>();
-      const ordered = reranked
+      const ordered: RecommendationCandidate[] = reranked
         .filter((item) => item.index >= 0 && item.index < rerankWindow.length)
         .map((item) => {
           seen.add(item.index);
           const candidate = rerankWindow[item.index];
+          const rerankScore = Math.max(0, Math.min(item.relevanceScore, 1));
+          // Both stages are kept. The legacy formula takes the larger, which
+          // means the reranker can never lower a false positive; the flagged
+          // formula uses the reranker's judgement as the semantic signal.
           return {
             ...candidate,
-            semanticSimilarity: Math.max(candidate.semanticSimilarity, Math.max(0, Math.min(item.relevanceScore, 1))),
+            retrievalSimilarity: candidate.semanticSimilarity,
+            rerankScore,
+            semanticSimilarity: mode === 'rerank' ? rerankScore : Math.max(candidate.semanticSimilarity, rerankScore),
           };
         });
+
+      // The reranker-scale formula is all or nothing: one search must not mix
+      // reranker scores with retrieval similarities, which sit on another scale.
+      if (mode === 'rerank' && (seen.size < rerankWindow.length || remaining.length > 0)) {
+        console.warn('Voyage rerank was partial; using first-stage funding results for this search.');
+        return candidates;
+      }
 
       rerankWindow.forEach((candidate, index) => {
         if (!seen.has(index)) {

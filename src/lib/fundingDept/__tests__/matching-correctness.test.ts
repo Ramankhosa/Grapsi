@@ -188,6 +188,56 @@ describe('match-width preview', () => {
   })
 })
 
+describe('Finder semantic scoring', () => {
+  const candidate = (id: string, score: number) => ({ id, schemeTitle: id, agencyName: 'Synthetic agency',
+    disciplines: [], fundingKinds: [], semanticSimilarity: score, textRank: 0 })
+  async function rerank(mode: string | undefined) {
+    const { RecommendationSearchService } = await import('@/lib/services/recommendationSearchService')
+    const { normalizeRecommendationSearchRequest } = await import('@/lib/recommendations/utils')
+    const previous = process.env.FINDER_SEMANTIC_SCORE
+    if (mode) process.env.FINDER_SEMANTIC_SCORE = mode; else delete process.env.FINDER_SEMANTIC_SCORE
+    try {
+      const service = new RecommendationSearchService() as any
+      const normalized = normalizeRecommendationSearchRequest({ inputMode: 'research_area', query: { researchArea: 'quantum sensing' } } as any)
+      return await service.rerankCandidates(normalized, [candidate('false-positive', .9), candidate('relevant', .5)])
+    } finally {
+      if (previous === undefined) delete process.env.FINDER_SEMANTIC_SCORE; else process.env.FINDER_SEMANTIC_SCORE = previous
+    }
+  }
+
+  it('keeps the shipped formula by default, but records both stages', async () => {
+    m.rerank.mockResolvedValue([{ index: 0, relevanceScore: .01 }, { index: 1, relevanceScore: .8 }])
+    const result = await rerank(undefined)
+    expect(result.find((r: any) => r.id === 'false-positive')).toMatchObject({ semanticSimilarity: .9, retrievalSimilarity: .9, rerankScore: .01 })
+  })
+
+  it('lets the reranker downgrade a false positive when the flag is on', async () => {
+    m.rerank.mockResolvedValue([{ index: 0, relevanceScore: .01 }, { index: 1, relevanceScore: .8 }])
+    const result = await rerank('rerank')
+    expect(result.find((r: any) => r.id === 'false-positive').semanticSimilarity).toBe(.01)
+    expect(result.find((r: any) => r.id === 'relevant').semanticSimilarity).toBe(.8)
+  })
+
+  it('never mixes scales: a partial rerank falls back to retrieval scores for the whole search', async () => {
+    m.rerank.mockResolvedValue([{ index: 1, relevanceScore: .8 }])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await rerank('rerank')
+    expect(result.map((r: any) => r.semanticSimilarity)).toEqual([.9, .5])
+    expect(result.every((r: any) => r.rerankScore === undefined)).toBe(true)
+  })
+
+  it('uses reranker-scale cutoffs only for a reranker-scored search', async () => {
+    const { finderThresholds } = await import('@/lib/services/recommendationSearchService')
+    expect(finderThresholds('retrieval')).toEqual({ topic: .45, semanticPresence: .08, noResult: .2, lowConfidence: .35 })
+    process.env.FINDER_RERANK_TOPIC_THRESHOLD = '0.6'
+    try {
+      expect(finderThresholds('rerank').topic).toBe(.6)
+    } finally {
+      delete process.env.FINDER_RERANK_TOPIC_THRESHOLD
+    }
+  })
+})
+
 describe('Funding in my areas', () => {
   const calls = Array.from({ length: 150 }, (_, i) => ({
     id: `call-${String(i).padStart(3, '0')}`, title: 'Quantum sensing grant', score: .9 - i * .001, source: 'profile',

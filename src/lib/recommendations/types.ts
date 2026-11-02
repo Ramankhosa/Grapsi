@@ -257,6 +257,10 @@ export interface RecommendationCandidate {
   /** The call's stored eligibility dimensions (snake_case), when any is evaluated. */
   eligibilityDimensions?: Record<string, unknown> | null;
   semanticSimilarity: number;
+  /** The first-stage similarity, kept once the reranker has scored the candidate. */
+  retrievalSimilarity?: number;
+  /** The reranker's own score, when it judged this candidate. */
+  rerankScore?: number | null;
   textRank: number;
 }
 
