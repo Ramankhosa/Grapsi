@@ -57,9 +57,11 @@ export function matchedAlertKeywords(call: AlertCallText, alertKeywords: string[
     }
     seen.add(keyword)
 
+    // Letter/number lookarounds rather than \b: JavaScript's \b only knows
+    // ASCII word characters, so "énergie" or "café" could never match.
     const wordLike = /^[\p{L}\p{N} ]+$/u.test(keyword)
     const matched = wordLike
-      ? new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'u').test(haystack)
+      ? new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(keyword)}(?![\\p{L}\\p{N}])`, 'u').test(haystack)
       : haystack.includes(keyword)
     if (matched) {
       hits.push(raw.trim())

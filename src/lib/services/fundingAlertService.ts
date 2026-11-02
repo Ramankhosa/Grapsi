@@ -1,5 +1,9 @@
 import prisma from '../prisma';
-import { sendEmail, SITE_URL } from '../mailer';
+import { Prisma } from '../prisma-generated';
+import { EmailDeliveryError, sendEmail, SITE_URL } from '../mailer';
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryClosed, callEntryDeadline, type CallEntryDates } from '../funding/callDeadline';
+import { openCallSql } from '../fundingDept/callSql';
+import { DEFAULT_TIMEZONE } from '../i18n/format';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
 import { filterTenantsWithFeature } from '../entitlement-service';
 import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
@@ -55,6 +59,14 @@ const TIER_RANK: Record<FundingAlertTier, number> = { strong: 3, moderate: 2, we
 const MAX_ALERT_RECIPIENTS_PER_TENANT = 50;
 /** Pause between instant emails so the mail provider is not burst-hit. */
 const EMAIL_DELAY_MS = 250;
+/** Instant and digest emails give up after this many definite failures. */
+const EMAIL_MAX_ATTEMPTS = 5;
+/** First retry delay for a definite failure; doubles each attempt. */
+const EMAIL_RETRY_BASE_MS = 5 * 60_000;
+/** A row still "sending" after this died mid-send; it becomes "uncertain". */
+const EMAIL_SENDING_LEASE_MS = 10 * 60_000;
+/** A row still "pending" after this was interrupted before delivery; resume it. */
+const ALERT_RESUME_AFTER_MS = 10 * 60_000;
 const NOTIFICATION_CATEGORY = 'FUNDING_MATCH';
 /** Plan feature that sells alert delivery (see access/modules.ts FUNDING_ALERTS). */
 const ALERTS_FEATURE_CODE = 'FUNDING_ALERTS';
@@ -160,9 +172,10 @@ type AlertableCall = {
   amount_max: number | null;
   currency: string | null;
   metadata: unknown;
-};
+} & CallEntryDates;
 
 const CALL_SELECT = {
+  ...CALL_ENTRY_DEADLINE_SELECT,
   id: true,
   tenantId: true,
   visibility: true,
@@ -210,8 +223,9 @@ function callAgency(call: AlertableCall): string | null {
   return (call.agency_name || call.agencyName || '').trim() || null;
 }
 
+/** The entry deadline every department report uses (entry date, source closure, funder zone). */
 function callDeadline(call: AlertableCall): Date | null {
-  return call.close_date || call.deadlineAt || call.expiration_date || null;
+  return callEntryDeadline(call) || call.expiration_date || null;
 }
 
 function callAmountLabel(call: AlertableCall): string | null {
@@ -238,9 +252,9 @@ function isAlertable(call: AlertableCall): { ok: boolean; reason?: string } {
   if (call.is_active === false) {
     return { ok: false, reason: 'inactive' };
   }
-  const now = Date.now();
-  const closes = call.close_date || call.expiration_date;
-  if (closes && closes.getTime() < now) {
+  // The shared entry-deadline rule, so an imported call closed by its entry
+  // date or its source is not alerted while reports already call it closed.
+  if (callEntryClosed(call, new Date()) || (call.expiration_date && call.expiration_date.getTime() < Date.now())) {
     return { ok: false, reason: 'expired' };
   }
   return { ok: true };
@@ -254,7 +268,7 @@ function formatDeadline(value: Date | null, timeZone?: string): string | null {
   return formatDeadlineDate(value, { timeZone, locale: 'en-US', month: 'long' });
 }
 
-function notificationBody(call: AlertableCall, match: ResearcherSearchResult, timeZone?: string): string {
+function notificationBody(call: AlertableCall, matchReason: string | null, timeZone?: string): string {
   const parts: string[] = [];
   const agency = callAgency(call);
   if (agency) {
@@ -264,10 +278,145 @@ function notificationBody(call: AlertableCall, match: ResearcherSearchResult, ti
   if (deadline) {
     parts.push(`Deadline ${deadline}`);
   }
-  if (match.matchReason) {
-    parts.push(match.matchReason);
+  if (matchReason) {
+    parts.push(matchReason);
   }
   return parts.join(' · ');
+}
+
+type AlertRecipient = { id: string; email: string; name: string | null; tenantId: string | null };
+
+/** One claimed alert and everything needed to deliver its channels. */
+type AlertDelivery = {
+  alertId: string;
+  call: AlertableCall;
+  user: AlertRecipient;
+  preferences: AlertPreferences;
+  matchReason: string | null;
+  matchTier: string | null;
+  recipientZone: string;
+};
+
+/**
+ * The bell entry. The conditional claim and the notification commit together,
+ * so a resumed or concurrent delivery can never create a second one.
+ */
+async function deliverInApp(delivery: AlertDelivery): Promise<boolean> {
+  const { alertId, call, user } = delivery;
+  if (!user.tenantId) {
+    return false;
+  }
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const claimed = await tx.fundingCallAlert.updateMany({
+        where: { id: alertId, in_app_status: 'pending' },
+        data: { in_app_status: 'created' },
+      });
+      if (claimed.count === 0) {
+        return false;
+      }
+      await tx.notification.create({
+        data: {
+          tenant_id: user.tenantId!,
+          user_id: user.id,
+          title: `New funding match: ${callTitle(call).slice(0, 120)}`,
+          body: notificationBody(call, delivery.matchReason, delivery.recipientZone) || null,
+          category: NOTIFICATION_CATEGORY,
+          link_url: `/finder/calls/${encodeURIComponent(call.id)}`,
+        },
+      });
+      return true;
+    });
+  } catch (error) {
+    await prisma.fundingCallAlert
+      .updateMany({ where: { id: alertId, in_app_status: 'pending' }, data: { in_app_status: 'failed' } })
+      .catch(() => undefined);
+    console.warn(
+      `[FUNDING-ALERT] In-app notification failed for user ${user.id}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+    return false;
+  }
+}
+
+type EmailOutcome = 'sent' | 'skipped' | 'failed' | 'uncertain' | 'not_claimed';
+
+/**
+ * One instant email, claimed before sending. While a row is "sending",
+ * email_retry_at is its lease: a row still sending after it died mid-send and
+ * becomes "uncertain" rather than being sent twice. A definite failure is
+ * retried with a doubling delay; a rejection or an uncertain outcome is not.
+ */
+async function deliverInstantEmail(delivery: AlertDelivery, priorAttempts = 0): Promise<EmailOutcome> {
+  const { alertId, call, user, preferences } = delivery;
+  const now = new Date();
+  const claimed = await prisma.fundingCallAlert.updateMany({
+    where: {
+      id: alertId,
+      OR: [
+        { email_status: 'pending' },
+        { email_status: 'failed', email_retry_at: { lte: now }, email_attempts: { lt: EMAIL_MAX_ATTEMPTS } },
+      ],
+    },
+    data: {
+      email_status: 'sending',
+      email_attempts: { increment: 1 },
+      email_retry_at: new Date(now.getTime() + EMAIL_SENDING_LEASE_MS),
+    },
+  });
+  if (claimed.count === 0) {
+    return 'not_claimed';
+  }
+
+  const attempt = priorAttempts + 1;
+  const to = preferences.emailAddress || user.email;
+  const template = fundingOpportunityTemplate({
+    email: to,
+    name: user.name,
+    callTitle: callTitle(call),
+    agency: callAgency(call),
+    deadline: formatDeadline(callDeadline(call), delivery.recipientZone),
+    amount: callAmountLabel(call),
+    matchReason: delivery.matchReason,
+    matchTier: delivery.matchTier || 'moderate',
+    callUrl: `${SITE_URL}/finder/calls/${encodeURIComponent(call.id)}`,
+  });
+  try {
+    const sent = await sendEmail({ to, toName: user.name || undefined, ...template });
+    if (sent && (sent as { sent?: boolean }).sent === false) {
+      // No mail provider configured: nothing left the building, so do not
+      // record it as delivered.
+      await prisma.fundingCallAlert.update({
+        where: { id: alertId },
+        data: { email_status: 'skipped', email_error: 'Email delivery is not configured', email_retry_at: null },
+      });
+      return 'skipped';
+    }
+    await prisma.fundingCallAlert.update({
+      where: { id: alertId },
+      data: { email_status: 'sent', emailed_at: new Date(), email_error: null, email_retry_at: null },
+    });
+    return 'sent';
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const kind = error instanceof EmailDeliveryError ? error.kind : 'retryable';
+    console.warn(`[FUNDING-ALERT] Email failed for ${to} (${kind}):`, message);
+    if (kind === 'uncertain') {
+      await prisma.fundingCallAlert.update({
+        where: { id: alertId },
+        data: { email_status: 'uncertain', email_error: message, email_retry_at: null },
+      });
+      return 'uncertain';
+    }
+    const retryAt = kind === 'retryable' && attempt < EMAIL_MAX_ATTEMPTS
+      ? new Date(Date.now() + EMAIL_RETRY_BASE_MS * 2 ** (attempt - 1))
+      : null;
+    await prisma.fundingCallAlert.update({
+      where: { id: alertId },
+      data: { email_status: 'failed', email_error: message, email_retry_at: retryAt },
+    });
+    return 'failed';
+  }
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -374,7 +523,7 @@ async function ineligibleUserIds(call: AlertableCall, userIds: string[]): Promis
 }
 
 async function stampDispatched(call: AlertableCall, summary: FundingAlertDispatchResult) {
-  const metadata = asMetadataObject(call.metadata);
+  const metadata: Record<string, unknown> = {};
   metadata.alerts_dispatched_at = new Date().toISOString();
   metadata.alerts_summary = {
     matched: summary.matched,
@@ -389,10 +538,12 @@ async function stampDispatched(call: AlertableCall, summary: FundingAlertDispatc
     ineligible: summary.skippedIneligible,
     tenants_searched: summary.tenantsSearched,
   };
-  await prisma.fundingCall.update({
-    where: { id: call.id },
-    data: { metadata: metadata as any },
-  });
+  // Merged in the database, not read-modify-written from the snapshot loaded
+  // at the start of dispatch: anything else written to the call's metadata
+  // while alerts were going out must survive the stamp.
+  await prisma.$executeRaw(Prisma.sql`
+    UPDATE funding_calls SET metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
+     WHERE id = ${call.id}`);
 }
 
 export class FundingAlertService {
@@ -540,12 +691,6 @@ export class FundingAlertService {
       ALERTS_FEATURE_CODE
     );
 
-    const title = callTitle(call);
-    const linkUrl = `/finder/calls/${encodeURIComponent(call.id)}`;
-    const callUrl = `${SITE_URL}${linkUrl}`;
-    const amountLabel = callAmountLabel(call);
-    const agency = callAgency(call);
-
     for (const match of matches) {
       if (alreadyAlerted.has(match.userId)) {
         result.skippedExisting += 1;
@@ -560,9 +705,14 @@ export class FundingAlertService {
         continue;
       }
       const preferences = preferencesByUser.get(match.userId) || DEFAULT_PREFERENCES;
+      // Notification rows require a tenant, so tenantless accounts are email-only.
+      const inAppWanted = preferences.inAppEnabled && Boolean(user.tenantId);
+      const instantEmail = preferences.emailEnabled && preferences.frequency === 'instant';
 
       // Claim the (call, user) pair first — the unique key makes concurrent
-      // dispatches collapse into one alert.
+      // dispatches collapse into one alert. Channels still to deliver start
+      // "pending", so a crash before delivery is resumed by the healing sweep
+      // instead of reading as a deliberate skip.
       let alertId: string;
       try {
         const alert = await prisma.fundingCallAlert.create({
@@ -575,6 +725,8 @@ export class FundingAlertService {
             score_basis: match.scoreBasis,
             matched_sources: match.matchedSources,
             match_reason: match.matchReason || null,
+            in_app_status: inAppWanted ? 'pending' : 'skipped',
+            email_status: !preferences.emailEnabled ? 'skipped' : instantEmail ? 'pending' : 'queued',
           },
           select: { id: true },
         });
@@ -603,79 +755,27 @@ export class FundingAlertService {
       }
 
       result.alerted += 1;
-      const recipientZone = (await getTenantLocale(user.tenantId)).timezone;
-      const deadlineLabel = formatDeadline(callDeadline(call), recipientZone);
-      let inAppStatus = 'skipped';
-      let emailStatus = 'skipped';
-      let emailError: string | null = null;
-      let emailedAt: Date | null = null;
-
-      // In-app notification. Notification rows require a tenant, so tenantless
-      // accounts fall back to email-only.
-      if (preferences.inAppEnabled && user.tenantId) {
-        try {
-          await prisma.notification.create({
-            data: {
-              tenant_id: user.tenantId,
-              user_id: user.id,
-              title: `New funding match: ${title.slice(0, 120)}`,
-              body: notificationBody(call, match, recipientZone) || null,
-              category: NOTIFICATION_CATEGORY,
-              link_url: linkUrl,
-            },
-          });
-          inAppStatus = 'created';
-          result.inAppCreated += 1;
-        } catch (error) {
-          inAppStatus = 'failed';
-          console.warn(
-            `[FUNDING-ALERT] In-app notification failed for user ${user.id}:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        }
+      const delivery: AlertDelivery = {
+        alertId,
+        call,
+        user,
+        preferences,
+        matchReason: match.matchReason || null,
+        matchTier: match.matchTier,
+        recipientZone: (await getTenantLocale(user.tenantId)).timezone,
+      };
+      if (inAppWanted && await deliverInApp(delivery)) {
+        result.inAppCreated += 1;
       }
-
-      if (preferences.emailEnabled) {
-        if (preferences.frequency === 'instant') {
-          const to = preferences.emailAddress || user.email;
-          const template = fundingOpportunityTemplate({
-            email: to,
-            name: user.name,
-            callTitle: title,
-            agency,
-            deadline: deadlineLabel,
-            amount: amountLabel,
-            matchReason: match.matchReason || null,
-            matchTier: match.matchTier,
-            callUrl,
-          });
-          try {
-            await sendEmail({ to, toName: user.name || undefined, ...template });
-            emailStatus = 'sent';
-            emailedAt = new Date();
-            result.emailsSent += 1;
-          } catch (error) {
-            emailStatus = 'failed';
-            emailError = error instanceof Error ? error.message : String(error);
-            result.emailsFailed += 1;
-            console.warn(`[FUNDING-ALERT] Email failed for ${to}:`, emailError);
-          }
-          await sleep(EMAIL_DELAY_MS);
-        } else {
-          emailStatus = 'queued';
-          result.emailsQueued += 1;
-        }
+      if (preferences.emailEnabled && !instantEmail) {
+        result.emailsQueued += 1;
       }
-
-      await prisma.fundingCallAlert.update({
-        where: { id: alertId },
-        data: {
-          in_app_status: inAppStatus,
-          email_status: emailStatus,
-          email_error: emailError,
-          emailed_at: emailedAt,
-        },
-      });
+      if (instantEmail) {
+        const outcome = await deliverInstantEmail(delivery);
+        if (outcome === 'sent') result.emailsSent += 1;
+        if (outcome === 'failed' || outcome === 'uncertain') result.emailsFailed += 1;
+        await sleep(EMAIL_DELAY_MS);
+      }
     }
 
     result.dispatched = true;
@@ -694,21 +794,19 @@ export class FundingAlertService {
    */
   async sweepPendingFundingCallAlerts(options: { limit?: number } = {}) {
     const limit = Math.max(1, Math.min(Number(options.limit || 25), 100));
-    const rows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-      `
-      SELECT id
-      FROM funding_calls
-      WHERE (catalog_status::text = 'PUBLISHED' OR status::text = 'PUBLISHED')
-        AND COALESCE(is_active, true) = true
-        AND COALESCE(metadata ->> 'alerts_dispatched_at', '') = ''
-        AND COALESCE(notification_policy, 'NORMAL') NOT IN ('SUPPRESSED', 'OFFICERS_ONLY')
-        AND (close_date IS NULL OR close_date > NOW())
-        AND (expiration_date IS NULL OR expiration_date > NOW())
-      ORDER BY "updatedAt" DESC
-      LIMIT $1
-      `,
-      limit
-    );
+    // Open by the shared entry-deadline rule (entry date, source closure,
+    // funder zone), the same one every department report uses.
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT fc.id
+      FROM funding_calls fc
+      WHERE (fc.catalog_status::text = 'PUBLISHED' OR fc.status::text = 'PUBLISHED')
+        AND COALESCE(fc.is_active, true) = true
+        AND COALESCE(fc.metadata ->> 'alerts_dispatched_at', '') = ''
+        AND COALESCE(fc.notification_policy, 'NORMAL') NOT IN ('SUPPRESSED', 'OFFICERS_ONLY')
+        AND ${openCallSql('fc', DEFAULT_TIMEZONE)}
+        AND (fc.expiration_date IS NULL OR fc.expiration_date > (now() AT TIME ZONE 'UTC'))
+      ORDER BY fc."updatedAt" DESC
+      LIMIT ${limit}`);
 
     const results: FundingAlertDispatchResult[] = [];
     for (const row of rows) {
@@ -736,7 +834,127 @@ export class FundingAlertService {
         });
       }
     }
-    return { scanned: rows.length, results };
+    const resumed = await this.resumeInterruptedAlerts();
+    return { scanned: rows.length, results, resumed };
+  }
+
+  /**
+   * Finish deliveries a crash or deploy interrupted, and retry definite email
+   * failures that have waited out their backoff. Rides the hourly healing sweep.
+   *
+   *  - "sending" past its lease: the process died mid-send and the provider may
+   *    already have the mail, so it becomes "uncertain" and is never resent.
+   *  - "pending" for longer than a dispatch takes: delivered now, after the
+   *    same entitlement, account and call checks dispatch makes.
+   *  - "failed" with a due retry: sent again, up to EMAIL_MAX_ATTEMPTS.
+   */
+  async resumeInterruptedAlerts(options: { limit?: number } = {}) {
+    const limit = Math.max(1, Math.min(Number(options.limit || 100), 500));
+    const now = new Date();
+    const summary = { uncertain: 0, considered: 0, inAppCreated: 0, emailsSent: 0, emailsFailed: 0, closedOut: 0 };
+
+    const abandoned = await prisma.fundingCallAlert.updateMany({
+      where: { email_status: 'sending', email_retry_at: { lte: now } },
+      data: {
+        email_status: 'uncertain',
+        email_error: 'Interrupted while sending. The provider may have accepted it, so it is not sent again.',
+        email_retry_at: null,
+      },
+    });
+    summary.uncertain = abandoned.count;
+
+    const interruptedBefore = new Date(now.getTime() - ALERT_RESUME_AFTER_MS);
+    const rows = await prisma.fundingCallAlert.findMany({
+      where: {
+        OR: [
+          { in_app_status: 'pending', created_at: { lte: interruptedBefore } },
+          { email_status: 'pending', created_at: { lte: interruptedBefore } },
+          { email_status: 'failed', email_retry_at: { lte: now }, email_attempts: { lt: EMAIL_MAX_ATTEMPTS } },
+        ],
+      },
+      orderBy: { created_at: 'asc' },
+      take: limit,
+      select: {
+        id: true,
+        user_id: true,
+        match_reason: true,
+        match_tier: true,
+        in_app_status: true,
+        email_status: true,
+        email_attempts: true,
+        funding_call: { select: CALL_SELECT },
+        user: { select: { id: true, email: true, name: true, status: true, tenantId: true } },
+      },
+    });
+    summary.considered = rows.length;
+    if (rows.length === 0) {
+      return summary;
+    }
+
+    const preferenceRows = await prisma.researcherNotificationPreference.findMany({
+      where: { user_id: { in: Array.from(new Set(rows.map((row) => row.user_id))) } },
+      select: {
+        user_id: true,
+        in_app_enabled: true,
+        email_enabled: true,
+        email_address: true,
+        notification_frequency: true,
+        alert_keywords: true,
+      },
+    });
+    const preferencesByUser = new Map(preferenceRows.map((row) => [row.user_id, toPreferences(row)]));
+    const entitledTenants = await filterTenantsWithFeature(rows.map((row) => row.user?.tenantId), ALERTS_FEATURE_CODE);
+
+    for (const row of rows) {
+      const call = row.funding_call as AlertableCall;
+      const user = row.user;
+      const closeOutReason =
+        !user || user.status !== 'ACTIVE' ? 'Recipient is no longer active'
+          : !user.tenantId || !entitledTenants.has(user.tenantId) ? 'Plan no longer includes funding alerts'
+            : call.notification_policy === 'SUPPRESSED' || call.notification_policy === 'OFFICERS_ONLY' ? 'Call notifications are suppressed'
+              : !isAlertable(call).ok ? 'Call closed before delivery'
+                : null;
+      if (closeOutReason) {
+        await prisma.fundingCallAlert.update({
+          where: { id: row.id },
+          data: {
+            ...(row.in_app_status === 'pending' ? { in_app_status: 'skipped' } : {}),
+            ...(['pending', 'failed'].includes(row.email_status) ? { email_status: 'skipped', email_retry_at: null } : {}),
+            email_error: closeOutReason,
+          },
+        });
+        summary.closedOut += 1;
+        continue;
+      }
+
+      const preferences = preferencesByUser.get(row.user_id) || DEFAULT_PREFERENCES;
+      const delivery: AlertDelivery = {
+        alertId: row.id,
+        call,
+        user: user!,
+        preferences,
+        matchReason: row.match_reason,
+        matchTier: row.match_tier,
+        recipientZone: (await getTenantLocale(user!.tenantId)).timezone,
+      };
+      if (row.in_app_status === 'pending' && await deliverInApp(delivery)) {
+        summary.inAppCreated += 1;
+      }
+      if (row.email_status === 'pending' || row.email_status === 'failed') {
+        if (!preferences.emailEnabled) {
+          await prisma.fundingCallAlert.update({
+            where: { id: row.id },
+            data: { email_status: 'skipped', email_error: 'Email alerts turned off', email_retry_at: null },
+          });
+          continue;
+        }
+        const outcome = await deliverInstantEmail(delivery, row.email_attempts);
+        if (outcome === 'sent') summary.emailsSent += 1;
+        if (outcome === 'failed' || outcome === 'uncertain') summary.emailsFailed += 1;
+        await sleep(EMAIL_DELAY_MS);
+      }
+    }
+    return summary;
   }
 
   /**
@@ -753,8 +971,17 @@ export class FundingAlertService {
       alertsCovered: 0,
     };
 
+    // Only this run's users are read, so rows waiting for the other schedule
+    // cannot fill the window and starve this one. Weekly means a weekly
+    // preference; everyone else (daily, no preference row, or switched to
+    // instant since queueing) goes out on the daily run rather than never.
+    const weeklyUser = { user: { researcher_notification_preference: { is: { notification_frequency: 'weekly' } } } };
     const queued = await prisma.fundingCallAlert.findMany({
-      where: { email_status: 'queued' },
+      where: {
+        email_status: 'queued',
+        email_attempts: { lt: EMAIL_MAX_ATTEMPTS },
+        ...(frequency === 'weekly' ? weeklyUser : { NOT: weeklyUser }),
+      },
       orderBy: { created_at: 'asc' },
       take: 500,
       select: {
@@ -786,20 +1013,28 @@ export class FundingAlertService {
     const preferencesByUser = new Map(preferenceRows.map((row) => [row.user_id, toPreferences(row)]));
 
     const byUser = new Map<string, typeof queued>();
+    const emailOff: string[] = [];
     for (const alert of queued) {
       const preferences = preferencesByUser.get(alert.user_id);
-      // Queued alerts always came from an explicit daily/weekly preference; if
-      // the row disappeared, deliver on the daily run rather than never.
-      const effective = preferences?.frequency || 'daily';
+      const effective = preferences?.frequency === 'weekly' ? 'weekly' : 'daily';
       if (effective !== frequency) {
         continue;
       }
       if (preferences && !preferences.emailEnabled) {
+        emailOff.push(alert.id);
         continue;
       }
       const list = byUser.get(alert.user_id) || [];
       list.push(alert);
       byUser.set(alert.user_id, list);
+    }
+    // Email turned off after queueing: close these out rather than leaving
+    // them queued for ever.
+    if (emailOff.length > 0) {
+      await prisma.fundingCallAlert.updateMany({
+        where: { id: { in: emailOff } },
+        data: { email_status: 'skipped', email_error: 'Email alerts turned off' },
+      });
     }
 
     result.usersConsidered = byUser.size;
@@ -863,22 +1098,43 @@ export class FundingAlertService {
         }),
       });
 
+      const liveIds = live.map((alert) => alert.id);
       try {
-        await sendEmail({ to, toName: user.name || undefined, ...template });
+        const sent = await sendEmail({ to, toName: user.name || undefined, ...template });
+        if (sent && (sent as { sent?: boolean }).sent === false) {
+          // No mail provider configured: leave the rows queued for when it is.
+          result.emailsFailed += 1;
+          continue;
+        }
         await prisma.fundingCallAlert.updateMany({
-          where: { id: { in: live.map((alert) => alert.id) } },
+          where: { id: { in: liveIds } },
           data: { email_status: 'sent', emailed_at: new Date(), email_error: null },
         });
         result.emailsSent += 1;
         result.alertsCovered += live.length;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await prisma.fundingCallAlert.updateMany({
-          where: { id: { in: live.map((alert) => alert.id) } },
-          data: { email_error: message },
-        });
+        const kind = error instanceof EmailDeliveryError ? error.kind : 'retryable';
+        if (kind === 'uncertain') {
+          // The digest may have arrived; sending it again would duplicate it.
+          await prisma.fundingCallAlert.updateMany({
+            where: { id: { in: liveIds } },
+            data: { email_status: 'uncertain', email_error: message },
+          });
+        } else {
+          // Stays queued for the next run, until it has failed too often or
+          // was refused outright.
+          await prisma.fundingCallAlert.updateMany({
+            where: { id: { in: liveIds } },
+            data: { email_error: message, email_attempts: { increment: kind === 'rejected' ? EMAIL_MAX_ATTEMPTS : 1 } },
+          });
+          await prisma.fundingCallAlert.updateMany({
+            where: { id: { in: liveIds }, email_attempts: { gte: EMAIL_MAX_ATTEMPTS } },
+            data: { email_status: 'failed' },
+          });
+        }
         result.emailsFailed += 1;
-        console.warn(`[FUNDING-ALERT] Digest email failed for ${to}:`, message);
+        console.warn(`[FUNDING-ALERT] Digest email failed for ${to} (${kind}):`, message);
       }
       await sleep(EMAIL_DELAY_MS);
     }

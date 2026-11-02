@@ -25,6 +25,13 @@ describe('matchedAlertKeywords', () => {
     expect(matchedAlertKeywords(CALL, ['synthetic biology'])).toEqual(['synthetic biology'])
   })
 
+  it('matches keywords that start or end with a non-ASCII letter, still on word boundaries', () => {
+    const call = { title: 'Transition énergétique et énergie solaire', summary: 'Un café scientifique' }
+    expect(matchedAlertKeywords(call, ['énergie'])).toEqual(['énergie'])
+    expect(matchedAlertKeywords(call, ['café'])).toEqual(['café'])
+    expect(matchedAlertKeywords(call, ['énerg'])).toEqual([])
+  })
+
   it('matches multi-word phrases as phrases', () => {
     expect(matchedAlertKeywords(CALL, ['climate monitoring'])).toEqual(['climate monitoring'])
     expect(matchedAlertKeywords(CALL, ['monitoring climate'])).toEqual([])

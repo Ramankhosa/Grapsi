@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   search: vi.fn(),
   filterTenantsWithFeature: vi.fn(),
   queryRaw: vi.fn(),
+  executeRaw: vi.fn(),
   profileFindMany: vi.fn(),
 }))
 
@@ -38,6 +39,8 @@ const prismaMock = {
   notification: { create: mocks.notificationCreate },
   researcherProfile: { findMany: mocks.profileFindMany },
   $queryRaw: mocks.queryRaw,
+  $executeRaw: mocks.executeRaw,
+  $transaction: async (fn: (tx: unknown) => unknown) => fn(prismaMock),
 }
 
 vi.mock('@/lib/prisma', () => ({ default: prismaMock, prisma: prismaMock }))
@@ -45,6 +48,9 @@ vi.mock('@/lib/prisma', () => ({ default: prismaMock, prisma: prismaMock }))
 vi.mock('@/lib/mailer', () => ({
   sendEmail: mocks.sendEmail,
   SITE_URL: 'https://app.example.org',
+  EmailDeliveryError: class EmailDeliveryError extends Error {
+    constructor(message: string, readonly kind: string) { super(message) }
+  },
 }))
 
 vi.mock('@/lib/email-templates', () => ({
@@ -105,7 +111,8 @@ describe('funding alert entitlement gating', () => {
     mocks.fundingCallAlertFindMany.mockResolvedValue([])
     mocks.fundingCallAlertCreate.mockResolvedValue({ id: 'alert-1' })
     mocks.fundingCallAlertUpdate.mockResolvedValue({})
-    mocks.fundingCallAlertUpdateMany.mockResolvedValue({ count: 0 })
+    mocks.fundingCallAlertUpdateMany.mockResolvedValue({ count: 1 })
+    mocks.executeRaw.mockResolvedValue(1)
     mocks.preferenceFindMany.mockResolvedValue([])
     mocks.notificationCreate.mockResolvedValue({})
     mocks.sendEmail.mockResolvedValue({})
@@ -168,8 +175,10 @@ describe('funding alert entitlement gating', () => {
     expect(mocks.search).not.toHaveBeenCalled()
     expect(mocks.fundingCallAlertCreate).not.toHaveBeenCalled()
     expect(mocks.sendEmail).not.toHaveBeenCalled()
-    // The dispatch stamp still lands so the healing sweep does not rescan forever.
-    expect(mocks.fundingCallUpdate).toHaveBeenCalledTimes(1)
+    // The dispatch stamp still lands so the healing sweep does not rescan forever,
+    // merged into the stored metadata rather than overwriting it.
+    expect(mocks.executeRaw).toHaveBeenCalledTimes(1)
+    expect(mocks.executeRaw.mock.calls[0][0].sql).toContain("COALESCE(metadata, '{}'::jsonb) ||")
   })
 
   it('skips matched users of an unentitled tenant on a tenant-private call', async () => {

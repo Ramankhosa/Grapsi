@@ -25,6 +25,32 @@ export interface EmailMessage {
   text?: string
 }
 
+/**
+ * Why a send failed, for callers that retry.
+ *  - retryable: Mailjet definitely did not take the message (rate limit, 5xx,
+ *    or the connection never opened) — sending again cannot duplicate it.
+ *  - rejected:  Mailjet refused this message; sending it again will not help.
+ *  - uncertain: the request went out but no clear answer came back (timeout,
+ *    unreadable 200). Mailjet may have accepted it, so do not resend blindly.
+ */
+export type EmailFailureKind = 'retryable' | 'rejected' | 'uncertain'
+
+export class EmailDeliveryError extends Error {
+  constructor(message: string, readonly kind: EmailFailureKind) {
+    super(message)
+    this.name = 'EmailDeliveryError'
+  }
+}
+
+const NOT_SENT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH'])
+
+function transportFailure(error: unknown): EmailDeliveryError {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = (error as { cause?: { code?: string } })?.cause?.code
+  return new EmailDeliveryError(`Mailjet request failed: ${message}`,
+    code && NOT_SENT_CODES.has(code) ? 'retryable' : 'uncertain')
+}
+
 export async function sendEmail(msg: EmailMessage) {
   if (!MAILJET_KEY || !MAILJET_SECRET) {
     console.warn('Mailjet keys missing; logging email instead of sending:', msg.subject, '->', msg.to)
@@ -42,23 +68,30 @@ export async function sendEmail(msg: EmailMessage) {
       }
     ]
   }
-  const res = await fetch(MAILJET_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
-  })
+  let res: Response
+  try {
+    res = await fetch(MAILJET_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    })
+  } catch (error) {
+    throw transportFailure(error)
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => '')
-    throw new Error(`Mailjet send failed (${res.status}): ${t}`)
+    throw new EmailDeliveryError(`Mailjet send failed (${res.status}): ${t}`,
+      res.status === 429 || res.status >= 500 ? 'retryable' : 'rejected')
   }
   const result = await res.json().catch(() => null)
   // Mailjet can return HTTP 200 while rejecting an individual message.
   if (!Array.isArray(result?.Messages) || result.Messages.length !== 1 || result.Messages[0]?.Status !== 'success') {
-    throw new Error('Mailjet did not confirm message acceptance')
+    const refused = Array.isArray(result?.Messages) && result.Messages[0]?.Status === 'error'
+    throw new EmailDeliveryError('Mailjet did not confirm message acceptance', refused ? 'rejected' : 'uncertain')
   }
   return { sent: true }
 }

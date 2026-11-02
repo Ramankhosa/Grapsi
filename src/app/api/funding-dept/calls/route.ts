@@ -266,7 +266,7 @@ export async function GET(request: NextRequest) {
             COUNT(*)::int AS matched,
             COUNT(*) FILTER (WHERE email_status = 'sent')::int AS emails_sent,
             COUNT(*) FILTER (WHERE email_status = 'queued')::int AS emails_queued,
-            COUNT(*) FILTER (WHERE email_status = 'failed')::int AS emails_failed,
+            COUNT(*) FILTER (WHERE email_status IN ('failed', 'uncertain'))::int AS emails_failed,
             MAX(created_at) AS last_alert_at
           FROM funding_call_alerts alert
           WHERE funding_call_id = ANY(${idArray})
