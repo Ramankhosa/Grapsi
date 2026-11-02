@@ -37,6 +37,8 @@ interface Person {
   matchTier: string | null
   matchReason: string | null
   researchAreas: string[]
+  /** Eligibility beside research fit: passes the recorded checks, a known conflict, or still to check. */
+  eligibility?: { group: 'PASS' | 'CONFLICT' | 'CHECK'; conflicts: string[]; toCheck: string[] }
   liveAssignments: number
   /** Calls handed to this person inside the tenant's period of consideration. */
   assignedInPeriod: number
@@ -574,6 +576,13 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               This call reached the matching ceiling, so the lowest-ranked researchers were not screened.
             </p>
           )}
+          {data.people.length > 0 && (
+            <p className="nk-sub mt-2 text-xs tabular-nums">
+              Of these research matches: {data.people.filter((person) => person.eligibility?.group === 'PASS').length} pass recorded checks ·{' '}
+              {data.people.filter((person) => person.eligibility?.group === 'CONFLICT').length} known conflicts ·{' '}
+              {data.people.filter((person) => !person.eligibility || person.eligibility.group === 'CHECK').length} need an eligibility check
+            </p>
+          )}
           <div className="nk-panel mt-3">
             {data.peopleError ? (
               <p className="nk-sub p-4">{data.peopleError}</p>
@@ -610,6 +619,16 @@ export default function CallDossierPage({ params }: { params: { callId: string }
                             }
                           >
                             {person.matchTier}
+                          </span>
+                        )}
+                        {person.eligibility?.group === 'CONFLICT' && (
+                          <span className="nk-badge nk-badge-warn" title={person.eligibility.conflicts.join(' · ')}>
+                            eligibility conflict
+                          </span>
+                        )}
+                        {person.eligibility?.group === 'CHECK' && (
+                          <span className="nk-badge" title={person.eligibility.toCheck.join(' · ')}>
+                            check eligibility
                           </span>
                         )}
                         {person.assignmentStatus && (

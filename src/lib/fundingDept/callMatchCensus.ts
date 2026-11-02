@@ -30,6 +30,7 @@ import {
   getProfileEmbeddingColumn, getPublicationEmbeddingColumn, researcherSearchService, type RerankScoreCache,
 } from '@/lib/services/researcherSearchService'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
+import { readEligibilityAssessment, type EligibilityAssessmentResult } from '@/lib/funding/eligibilityAssessment'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
@@ -195,6 +196,9 @@ async function scoreAndStore(tenantId: string, callId: string, fingerprint: stri
       score: result.score,
       tier: result.matchTier,
       reason: result.matchReason,
+      // Research fit and eligibility are stored side by side, so a report can
+      // separate "matched" from "matched and passes the recorded checks".
+      eligibility: result.eligibility ?? null,
     }]
   })
 
@@ -207,15 +211,15 @@ async function scoreAndStore(tenantId: string, callId: string, fingerprint: stri
     if (rows.length) {
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO funding_opportunity_matches(id, tenant_id, funding_call_id, user_id, org_unit_id, school_id,
-          match_score, match_tier, match_reason, score_basis, source, source_version, inferred, is_current, match_run_id,
+          match_score, match_tier, match_reason, score_basis, eligibility, source, source_version, inferred, is_current, match_run_id,
           refreshed_at, first_seen_at, last_seen_at, created_at, updated_at)
-        SELECT r.id, ${tenantId}, ${callId}, r."userId", r."unitId", r."schoolId", r.score, r.tier, r.reason, ${search.scoreBasis},
+        SELECT r.id, ${tenantId}, ${callId}, r."userId", r."unitId", r."schoolId", r.score, r.tier, r.reason, ${search.scoreBasis}, r.eligibility,
                'matching', ${CALL_MATCH_CENSUS_VERSION}, false, true, ${runId}, ${stamp}, ${stamp}, ${stamp}, ${stamp}, ${stamp}
           FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb)
-            AS r(id text, "userId" text, "unitId" text, "schoolId" text, score double precision, tier text, reason text)
+            AS r(id text, "userId" text, "unitId" text, "schoolId" text, score double precision, tier text, reason text, eligibility jsonb)
         ON CONFLICT(tenant_id, funding_call_id, user_id, school_id) DO UPDATE SET
           org_unit_id = EXCLUDED.org_unit_id, match_score = EXCLUDED.match_score, match_tier = EXCLUDED.match_tier,
-          match_reason = EXCLUDED.match_reason, score_basis = EXCLUDED.score_basis, source = EXCLUDED.source,
+          match_reason = EXCLUDED.match_reason, score_basis = EXCLUDED.score_basis, eligibility = EXCLUDED.eligibility, source = EXCLUDED.source,
           source_version = EXCLUDED.source_version, inferred = false, is_current = true, match_run_id = EXCLUDED.match_run_id,
           refreshed_at = EXCLUDED.refreshed_at, last_seen_at = EXCLUDED.last_seen_at, updated_at = EXCLUDED.updated_at`)
     }
@@ -292,6 +296,7 @@ export type StoredMatch = {
   matchTier: string | null
   matchReason: string | null
   researchAreas: string[]
+  eligibility: EligibilityAssessmentResult | null
 }
 
 /**
@@ -310,7 +315,7 @@ export async function storedCallMatches(
   if (!schoolIds.length) return []
   const rows = await prisma.$queryRaw<Array<Record<string, any>>>(Prisma.sql`
     SELECT m.user_id, COALESCE(u.name, u.email) name, u.email, p.department, m.org_unit_id, m.school_id,
-           m.match_score, m.match_tier, m.match_reason, COALESCE(p.research_areas, ARRAY[]::text[]) research_areas
+           m.match_score, m.match_tier, m.match_reason, m.eligibility, COALESCE(p.research_areas, ARRAY[]::text[]) research_areas
       FROM funding_opportunity_matches m
       JOIN users u ON u.id = m.user_id AND u.status = 'ACTIVE'
       LEFT JOIN researcher_profiles p ON p.user_id = m.user_id
@@ -332,6 +337,7 @@ export async function storedCallMatches(
     matchTier: bandForScore(row.match_score, width, row.match_tier),
     matchReason: row.match_reason,
     researchAreas: row.research_areas ?? [],
+    eligibility: readEligibilityAssessment(row.eligibility),
   }))
 }
 

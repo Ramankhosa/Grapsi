@@ -14,6 +14,14 @@ import {
 import { EmbeddingService } from './embeddingService';
 import { voyageRerankService } from './voyageRerankService';
 import { callAreaRowsSql } from '@/lib/researchAreas/queries';
+import {
+  ELIGIBILITY_CALL_COLUMNS,
+  assessEligibility,
+  eligibilityConflictTexts,
+  type EligibilityAssessmentResult,
+  type EligibilityCallFacts,
+  type EligibilityPersonFacts,
+} from '@/lib/funding/eligibilityAssessment';
 
 const embeddingService = new EmbeddingService();
 /** Included in census fingerprints when the scored document or population changes. */
@@ -180,8 +188,10 @@ export interface ResearcherSearchResult {
   matchReason: string;
   evidence: ResearcherMatchEvidence[];
   sharedTerms: string[];
-  /** Reasons this person may not qualify for the call, if it declares any. */
+  /** Known conflicts with the call's stated restrictions, worded for a card. */
   eligibilityFlags: string[];
+  /** The shared assessment (src/lib/funding/eligibilityAssessment.ts), when searching for a call. */
+  eligibility?: EligibilityAssessmentResult | null;
 }
 
 /**
@@ -745,55 +755,44 @@ export async function buildFundingCallQuery(fundingCallId: string) {
   ].filter(Boolean).join(' | '));
 }
 
-/** The call's declared eligibility, empty arrays when it declares none. */
-async function loadCallEligibility(fundingCallId: string): Promise<CallEligibility | null> {
-  const rows = await prisma.$queryRaw<
-    Array<{ careerStages: string[]; institutionTypes: string[] }>
-  >(Prisma.sql`
-    SELECT
-      COALESCE(career_stages, ARRAY[]::text[]) AS "careerStages",
-      COALESCE(institution_types, ARRAY[]::text[]) AS "institutionTypes"
+/** The call's declared restrictions, for the shared eligibility assessment. */
+async function loadCallEligibility(fundingCallId: string): Promise<{ summary: CallEligibility | null; facts: EligibilityCallFacts } | null> {
+  const rows = await prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
+    SELECT ${Prisma.raw(ELIGIBILITY_CALL_COLUMNS.join(', '))}
     FROM funding_calls
     WHERE id = ${fundingCallId}
     LIMIT 1
   `);
   const row = rows[0];
   if (!row) return null;
-  if (row.careerStages.length === 0 && row.institutionTypes.length === 0) return null;
-  return { careerStages: row.careerStages, institutionTypes: row.institutionTypes };
+  const list = (value: unknown) => (Array.isArray(value) ? (value as string[]) : []);
+  const careerStages = list(row.career_stages);
+  const institutionTypes = list(row.institution_types);
+  return {
+    summary: careerStages.length || institutionTypes.length ? { careerStages, institutionTypes } : null,
+    facts: { row, careerStages, institutionTypes },
+  };
 }
 
-/**
- * Why this person might not qualify.
- *
- * Only fires when BOTH sides state something: a call that lists no career
- * stages restricts nobody, and a profile with no career stage recorded is a
- * gap in our data, not evidence of ineligibility.
- */
-function eligibilityFlagsFor(
-  result: { careerStage: string | null; institutionType: string | null },
-  eligibility: CallEligibility | null
-): string[] {
-  if (!eligibility) return [];
-  const flags: string[] = [];
-  const matches = (allowed: string[], value: string | null) =>
-    allowed.some((entry) => entry.toLowerCase() === (value || '').toLowerCase());
-
-  if (eligibility.careerStages.length > 0 && result.careerStage) {
-    if (!matches(eligibility.careerStages, result.careerStage)) {
-      flags.push(
-        `Call is for ${eligibility.careerStages.join(', ').replace(/_/g, ' ')} — this is ${result.careerStage.replace(/_/g, ' ')}`
-      );
-    }
-  }
-  if (eligibility.institutionTypes.length > 0 && result.institutionType) {
-    if (!matches(eligibility.institutionTypes, result.institutionType)) {
-      flags.push(
-        `Call is for ${eligibility.institutionTypes.join(', ').replace(/_/g, ' ')} institutions`
-      );
-    }
-  }
-  return flags;
+/** The profile facts eligibility is judged on, for the people a search returns. */
+async function loadPersonEligibilityFacts(userIds: string[]): Promise<Map<string, EligibilityPersonFacts>> {
+  if (userIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<Array<{
+    user_id: string; country_of_residence: string | null; citizenship_countries: string[] | null;
+    residence_country_code: string | null; citizenship_country_codes: string[] | null;
+    career_stage: string | null; institution_type: string | null;
+  }>>(Prisma.sql`
+    SELECT user_id, country_of_residence, citizenship_countries, residence_country_code, citizenship_country_codes,
+           career_stage, institution_type
+      FROM researcher_profiles WHERE user_id = ANY(${userIds}::text[])`);
+  return new Map(rows.map((row) => [row.user_id, {
+    countryOfResidence: row.country_of_residence,
+    citizenshipCountries: row.citizenship_countries,
+    residenceCountryCode: row.residence_country_code,
+    citizenshipCountryCodes: row.citizenship_country_codes,
+    careerStage: row.career_stage,
+    institutionType: row.institution_type,
+  }]));
 }
 
 export class ResearcherSearchService {
@@ -1125,6 +1124,11 @@ export class ResearcherSearchService {
     const callEligibility = input.fundingCallId
       ? await loadCallEligibility(input.fundingCallId).catch(() => null)
       : null;
+    const shown = gated.slice(0, limit);
+    const personFacts = callEligibility
+      ? await loadPersonEligibilityFacts(shown.map((result) => result.userId)).catch(() => new Map<string, EligibilityPersonFacts>())
+      : new Map<string, EligibilityPersonFacts>();
+    const assessedAt = new Date();
 
     // A census writes its own durable rows; a bounded search records evidence.
     if (!census && input.recordRun !== false && input.fundingCallId && input.requesterTenantId) {
@@ -1133,9 +1137,19 @@ export class ResearcherSearchService {
         orgUnitIds:input.filters?.orgUnitIds,filters:input.filters || {},candidateCount:merged.length,
         results:gated.filter(r=>r.matchTier!=='weak').map(r=>({userId:r.userId,score:r.score,matchTier:r.matchTier,matchReason:r.matchReason}))});
     }
-    const results = gated.slice(0, limit).map((result) => ({
+    const results = shown.map((result) => {
+      const eligibility = callEligibility
+        ? assessEligibility(callEligibility.facts, {
+            countryOfResidence: result.countryOfResidence,
+            careerStage: result.careerStage,
+            institutionType: result.institutionType,
+            ...personFacts.get(result.userId),
+          }, assessedAt)
+        : null;
+      return {
       ...result,
-      eligibilityFlags: eligibilityFlagsFor(result, callEligibility),
+      eligibility,
+      eligibilityFlags: eligibilityConflictTexts(eligibility),
       sharedTerms: extractSharedTerms(query, [...result.keywords, ...result.researchAreas]),
       score: roundScore(result.score),
       rerankScore: result.rerankScore === null ? null : roundScore(result.rerankScore),
@@ -1145,12 +1159,13 @@ export class ResearcherSearchService {
         ...entry,
         similarity: roundScore(entry.similarity),
       })),
-    }));
+      };
+    });
 
     return {
       query,
       fundingCallId: input.fundingCallId || null,
-      callEligibility,
+      callEligibility: callEligibility?.summary ?? null,
       totalResults: results.length,
       totalCandidates: merged.length,
       scoreBasis: basis,

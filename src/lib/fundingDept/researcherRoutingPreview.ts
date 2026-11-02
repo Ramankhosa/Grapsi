@@ -62,7 +62,7 @@ export async function researcherRoutingPreview(tenantId: string, options: Previe
         FROM tenant_org_units s WHERE s.tenant_id=${tenantId} AND s.is_active AND s.depth=0 ORDER BY s.name`),
       tx.$queryRaw<PreviewMatch[]>(Prisma.sql`SELECT m.user_id "userId",COALESCE(nullif(p.display_name,''),u.name,u.email) name,m.school_id "schoolId",
         p.org_unit_id "unitId",unit.name "unitName",CASE WHEN unit.is_active AND unit.tenant_id=${tenantId} AND root.is_active AND root.tenant_id=${tenantId} AND root.depth=0 THEN root.id ELSE NULL END "actualSchoolId",
-        m.match_score score,m.match_tier "storedBand",m.match_reason reason,m.inferred,m.source_version "sourceVersion",m.is_current current,p.career_stage "careerStage",p.institution_type "institutionType"
+        m.match_score score,m.match_tier "storedBand",m.match_reason reason,m.inferred,m.source_version "sourceVersion",m.is_current current,p.career_stage "careerStage",p.institution_type "institutionType",m.eligibility
         FROM funding_opportunity_matches m JOIN users u ON u.id=m.user_id AND u."tenantId"=${tenantId} AND u.status='ACTIVE'
         JOIN researcher_profiles p ON p.user_id=u.id LEFT JOIN tenant_org_units unit ON unit.id=p.org_unit_id LEFT JOIN tenant_org_units root ON root.id=unit.path[1]
         WHERE m.tenant_id=${tenantId} AND m.funding_call_id=${selected.id} AND m.is_current`),

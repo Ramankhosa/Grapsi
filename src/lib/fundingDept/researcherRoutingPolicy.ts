@@ -1,6 +1,7 @@
 import { CALL_MATCH_CENSUS_VERSION, CENSUS_FRESH_MS } from '@/lib/researcherMatching/config'
 import { bandForScore, type MatchWidth } from './matchBands'
 import { isQualifyingMatch } from './reportDefinitions'
+import { eligibilityConflictTexts, readEligibilityAssessment } from '@/lib/funding/eligibilityAssessment'
 
 export type RoutingSnapshot = {
   version: string; fingerprint: string; basis: string; refreshedAt: string
@@ -18,6 +19,8 @@ export type PreviewMatch = {
   actualSchoolId: string | null; score: number | null; storedBand: string | null
   reason: string | null; inferred: boolean; sourceVersion: string | null; current: boolean
   careerStage: string | null; institutionType: string | null
+  /** The shared assessment the census stored with this match, when it has one. */
+  eligibility?: unknown
 }
 export type PreviewSchool = { id: string; name: string; coordinator: string | null; institutional: boolean }
 export type PreviewPerson = {
@@ -31,6 +34,10 @@ export type SchoolRoutingPreview = PreviewSchool & {
 }
 
 function eligibilityNotes(person: PreviewMatch, call: { careerStages: string[]; institutionTypes: string[] }) {
+  // The census's stored assessment is the shared rule (geography included).
+  // Rows scored before it existed fall back to the old list comparison.
+  const stored = readEligibilityAssessment(person.eligibility)
+  if (stored) return eligibilityConflictTexts(stored)
   const notes: string[] = []
   const matches = (values: string[], value: string) => values.some(v => v.toLowerCase() === value.toLowerCase())
   if (call.careerStages.length && person.careerStage && !matches(call.careerStages, person.careerStage)) notes.push('Recorded career stage does not match the call.')

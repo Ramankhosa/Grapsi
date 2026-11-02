@@ -7,12 +7,8 @@ import { DEFAULT_TIMEZONE } from '../i18n/format';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
 import { filterTenantsWithFeature } from '../entitlement-service';
 import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
-import {
-  ELIGIBILITY_DIMENSIONS,
-  applicantGeographyFromProfile,
-  dimensionFromRow,
-  eligibilityVerdictForRow,
-} from '../funding/eligibility';
+import { ELIGIBILITY_DIMENSIONS, dimensionFromRow } from '../funding/eligibility';
+import { assessEligibility } from '../funding/eligibilityAssessment';
 import { snapshotFundingOpportunity } from '../fundingDept/opportunitySnapshot';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
@@ -508,14 +504,23 @@ async function ineligibleUserIds(call: AlertableCall, userIds: string[]): Promis
   }
   const profiles = await prisma.researcherProfile.findMany({
     where: { user_id: { in: userIds } },
-    select: { user_id: true, country_of_residence: true, citizenship_countries: true },
+    select: {
+      user_id: true, country_of_residence: true, citizenship_countries: true,
+      residence_country_code: true, citizenship_country_codes: true,
+    },
   });
+  // The shared assessment, so alerts, reports and the routing preview agree.
+  // Only an explicit geographic exclusion is INELIGIBLE; career-stage and
+  // institution-type conflicts are shown to officers but never block an alert.
+  const facts = { row, careerStages: [], institutionTypes: [] };
   for (const profile of profiles) {
-    const applicant = applicantGeographyFromProfile({
+    const assessment = assessEligibility(facts, {
       countryOfResidence: profile.country_of_residence,
       citizenshipCountries: profile.citizenship_countries,
+      residenceCountryCode: profile.residence_country_code,
+      citizenshipCountryCodes: profile.citizenship_country_codes,
     });
-    if (eligibilityVerdictForRow(row, applicant) === 'INELIGIBLE') {
+    if (assessment.verdict === 'INELIGIBLE') {
       ruledOut.add(profile.user_id);
     }
   }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eligibilityConflictTexts, eligibilityGroup, type EligibilityGroup } from '@/lib/funding/eligibilityAssessment'
 
 import { assignmentInclude, isTakenUp, serializeAssignment } from '@/lib/assignments/shared'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
@@ -397,11 +398,18 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     const requestedWidth = new URL(request.url).searchParams.get('width')
     matchWidth = isMatchWidth(requestedWidth) ? requestedWidth : await getMatchWidth(context.tenantId)
     const censusState = (await callMatchStates(context.tenantId, [call.id])).get(call.id)
-    const matched: Array<{ userId: string; name: string; department: string | null; score: number | null; matchTier: string | null; matchReason: string | null; researchAreas: string[] }> =
+    const matched: Array<{ userId: string; name: string; department: string | null; score: number | null; matchTier: string | null; matchReason: string | null; researchAreas: string[]
+      eligibility: { group: EligibilityGroup; conflicts: string[]; toCheck: string[] } }> =
       (await storedCallMatches(context.tenantId, call.id, [school.id], null, matchWidth)).map((row) => ({
             userId: row.userId, name: row.name, department: row.department,
             score: row.score, matchTier: row.matchTier, matchReason: row.matchReason,
             researchAreas: row.researchAreas.slice(0, 4),
+            // Research fit is the headline; eligibility is read beside it.
+            eligibility: {
+              group: eligibilityGroup(row.eligibility),
+              conflicts: eligibilityConflictTexts(row.eligibility),
+              toCheck: (row.eligibility?.reasons || []).filter((reason) => reason.kind !== 'conflict').map((reason) => reason.text),
+            },
           }))
 
     // A failed refresh keeps the last good rows; say so rather than letting an
@@ -467,6 +475,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         matchTier: result.matchTier,
         matchReason: result.matchReason,
         researchAreas: result.researchAreas,
+        eligibility: result.eligibility,
         liveAssignments: liveByUser.get(result.userId) || 0,
         assignedInPeriod: assignedInPeriodByUser.get(result.userId) || 0,
         submittedInPeriod: submittedInPeriodByUser.get(result.userId) || 0,

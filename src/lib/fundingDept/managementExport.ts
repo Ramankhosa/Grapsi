@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip'
+import { eligibilityGroup, readEligibilityAssessment } from '@/lib/funding/eligibilityAssessment'
 import { DEFAULT_TIMEZONE, isValidTimeZone, timeZoneLabel } from '@/lib/i18n/format'
 import type { ManagementReport } from './managementService'
 import { csvCell } from './managementRules'
@@ -43,11 +44,12 @@ export function exportTables(report:ManagementReport) {
   summaries.push(['Department','','',t.schools,t.callSchoolOpportunities,t.distinctCalls,t.actedOn,t.untouched,t.matchedUnallocated,t.upcoming21,t.missedUnallocatedNoSubmission,t.allocated,t.independent,t.pending,t.noNextAction,t.submitted,t.verified,t.followedUp,t.overdue,t.unallocated])
   const records:unknown[][]=[['Member','School','Call ID','Call','Quality','Match completeness','Application ID','Faculty','Allocation or independent','Stage','Work state','Recorded submission','Verified at','Reference','Submission recorder','External faculty contacts','Next action','Pending with','Owner','Due','Blocker','Agency deadline','Review deadline','Overdue','Currency','Requested','Sanctioned']]
   const opportunityGaps:unknown[][]=[['Member','School','Call ID','Call','Agency','Deadline','Days to deadline','Deadline status','Upcoming within 21 days','Missed without allocation or submission','Missed explanation','Any submission','Action state','Action signals','Gap flags','Recorded matches','Researchers reviewed','Researchers approached','Formal allocation','Match completeness','No-uptake reason']]
-  const matching:unknown[][]=[['Member','School','Call ID','Call','Faculty','Score','Tier','Reason','Source','Version','First seen','Inferred','Allocation status','Application work state']]
+  const matching:unknown[][]=[['Member','School','Call ID','Call','Faculty','Score','Tier','Reason','Source','Version','First seen','Inferred','Allocation status','Application work state','Eligibility','Eligibility notes']]
   for(const member of report.members){const s=member.totals;summaries.push(['Member',member.id,member.name,s.schools,s.callSchoolOpportunities,s.distinctCalls,s.actedOn,s.untouched,s.matchedUnallocated,s.upcoming21,s.missedUnallocatedNoSubmission,s.allocated,s.independent,s.pending,s.noNextAction,s.submitted,s.verified,s.followedUp,s.overdue,s.unallocated])
     for(const school of member.schools)for(const call of school.calls){
       if(isRelevantQuality(call.quality)&&(call.gaps.length||call.upcoming21))opportunityGaps.push([member.name,school.name,call.id,call.title,call.agency,call.deadline?.toISOString(),call.daysToDeadline,call.deadlineStatus,call.upcoming21,call.missedUnallocatedNoSubmission,call.missedExplanationStatus,call.hasAnySubmission,call.actionState,call.touchSignals.join(' | '),call.gaps.join(' | '),call.matchedFaculty,call.considered,call.approached,call.unallocated?'No':'Yes',call.matchCompleteness,call.disposition?.reason])
-      for(const match of call.matches)matching.push([member.name,school.name,call.id,call.title,match.faculty?.name,match.match_score,match.match_tier,match.match_reason,match.source,match.source_version,match.first_seen_at?.toISOString(),match.inferred,match.allocationStatus,match.applicationWorkState])
+      for(const match of call.matches)matching.push([member.name,school.name,call.id,call.title,match.faculty?.name,match.match_score,match.match_tier,match.match_reason,match.source,match.source_version,match.first_seen_at?.toISOString(),match.inferred,match.allocationStatus,match.applicationWorkState,
+        eligibilityExportLabel(match.eligibility),(readEligibilityAssessment(match.eligibility)?.reasons||[]).map(reason=>reason.text).join(' | ')])
       if(!call.applications.length)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,'','','','','','','','','',0,call.actions.find(a=>a.is_next)?.title || '','', '', '',call.disposition?.explanation || '',call.deadline?.toISOString()])
       for(const a of call.applications)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,a.id,a.faculty?.name,a.independent?'Independent':'Allocation',a.stage,a.workState,a.submitted_at?.toISOString(),a.verification?.verified_at?.toISOString(),a.submission_reference,a.submissionRecorder?.name,a.contactEvents,a.nextAction?.title,a.nextAction?.waiting_with,a.nextAction?.owner_name,a.nextAction?.due_at?.toISOString(),a.nextAction?.blocker,a.agency_deadline?.toISOString(),a.review_deadline?.toISOString(),a.exceptions.includes('overdue'),a.currency,a.requested_amount,a.sanctioned_amount])
     }
@@ -101,4 +103,12 @@ export function writeTables(tables:ExportTable[],format:'csv'|'xlsx') {
   add('xl/_rels/workbook.xml.rels',`<Relationships xmlns="${ns}/package/2006/relationships">${tables.map((_,i)=>`<Relationship Id="rId${i+1}" Type="${ns}/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}</Relationships>`)
   tables.forEach((t,i)=>add(`xl/worksheets/sheet${i+1}.xml`,`<worksheet xmlns="${ns}/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetData>${t.rows.map((row,r)=>`<row r="${r+1}">${row.map((v,c)=>typeof v==='number'?`<c r="${column(c)}${r+1}"><v>${v}</v></c>`:`<c r="${column(c)}${r+1}" t="inlineStr"><is><t xml:space="preserve">${xml(v)}</t></is></c>`).join('')}</row>`).join('')}</sheetData></worksheet>`))
   return new Uint8Array(zip.toBuffer())
+}
+
+/** Eligibility beside research fit in the matching sheet, in the report's own words. */
+function eligibilityExportLabel(value: unknown) {
+  const assessment = readEligibilityAssessment(value)
+  if (!assessment) return 'Not assessed'
+  const group = eligibilityGroup(assessment)
+  return group === 'PASS' ? 'Passes recorded checks' : group === 'CONFLICT' ? 'Known conflict' : 'Needs eligibility check'
 }
