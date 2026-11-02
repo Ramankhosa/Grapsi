@@ -11,6 +11,7 @@
  *                                                pendency ladder, job health
  *   /api/proposals/reviews/sweep        10 min   resume stranded proposal reviews
  *   /api/proposals/sweep                hourly   cut-off nudges, review SLA, agency-stale
+ *   /api/funding-dept/matching/sweep    15 min   stored match census: stale and failed-call retries
  *   /api/funding/alerts/dispatch        hourly   healing sweep for undispatched published calls
  *   /api/funding/alerts/digest          daily + Monday   queued alert digests
  *   /api/funding-dept/reports/weekly    Monday   weekly snapshot, then member + head digests
@@ -183,6 +184,13 @@ function tick() {
   // day (the planner and the legacy sweep both count due-ness in days).
   if (minute >= 10 && due('monitor-sweep', hourSlot)) {
     void post('/api/funding/monitor/sweep')
+  }
+
+  // The stored match census behind every "matched faculty" figure. A failed
+  // call keeps its last good matches and is retried here on a backoff.
+  const censusSlot = `${hourSlot}-${Math.floor(minute / 15)}`
+  if (due('matching-census', censusSlot)) {
+    void post('/api/funding-dept/matching/sweep')
   }
 
   // Liveness: noticing a dead Source Watch worker cannot wait for a daily job.

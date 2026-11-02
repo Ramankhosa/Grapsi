@@ -54,6 +54,15 @@ export const JOB_REGISTRY: JobDefinition[] = [
     expectedIntervalMinutes: HOUR,
   },
   {
+    jobKey: 'matching-census-sweep',
+    label: 'Matching census',
+    description:
+      'Re-scores open calls whose stored researcher matches are stale, and retries calls whose last matching run failed. Failed runs keep the last good matches.',
+    cadence: 'Every 15 minutes',
+    endpoint: '/api/funding-dept/matching/sweep',
+    expectedIntervalMinutes: 15,
+  },
+  {
     jobKey: 'alerts-dispatch',
     label: 'Alert dispatch',
     description: 'Healing sweep: funding-match alerts for published calls never dispatched.',

@@ -195,6 +195,17 @@ export interface CallEligibility {
   institutionTypes: string[];
 }
 
+/** 'skipped' = the branch never ran because the query embedding failed. */
+export type RetrievalBranchHealth = 'ok' | 'failed' | 'skipped';
+
+export interface ResearcherRetrievalHealth {
+  embedding: 'ok' | 'failed';
+  profile: RetrievalBranchHealth;
+  research_area: RetrievalBranchHealth;
+  publication: RetrievalBranchHealth;
+  text: 'ok' | 'failed';
+}
+
 export interface ResearcherSearchResponse {
   query: string;
   fundingCallId: string | null;
@@ -205,7 +216,24 @@ export interface ResearcherSearchResponse {
   totalCandidates: number;
   scoreBasis: ResearcherScoreBasis;
   results: ResearcherSearchResult[];
-  degradedMode: 'text_only' | null;
+  /** text_only: no vector branch ran. partial: some branch failed. */
+  degradedMode: 'text_only' | 'partial' | null;
+  retrieval: ResearcherRetrievalHealth;
+  /** A branch or the merge hit its ceiling, so lower-ranked people were not read. */
+  truncated: boolean;
+}
+
+/**
+ * A census that could not read all of its evidence or score all of its
+ * candidates. Thrown rather than returned: a census writes the numbers every
+ * report counts, and an outage must leave the last good numbers in place
+ * instead of replacing them with a confident zero.
+ */
+export class CensusIncompleteError extends Error {
+  constructor(message: string, readonly retrieval?: ResearcherRetrievalHealth) {
+    super(message);
+    this.name = 'CensusIncompleteError';
+  }
 }
 
 type ResearcherCandidateRow = {
@@ -398,14 +426,14 @@ function vectorLiteralFromEmbedding(embedding: number[]) {
   return `[${embedding.join(',')}]`;
 }
 
-function getProfileEmbeddingColumn() {
+export function getProfileEmbeddingColumn() {
   const health = embeddingService.getHealth({ taskType: QUERY_EMBEDDING_TASK_TYPE });
   return health.provider === 'voyage' && health.outputDimensionality === 1024
     ? 'embedding_voyage_1024'
     : 'embedding';
 }
 
-function getPublicationEmbeddingColumn() {
+export function getPublicationEmbeddingColumn() {
   const health = embeddingService.getHealth({ taskType: QUERY_EMBEDDING_TASK_TYPE });
   return health.provider === 'voyage' && health.outputDimensionality === 1024
     ? 'funding_embedding_voyage_1024'
@@ -977,10 +1005,13 @@ export class ResearcherSearchService {
     const scores = new Map([...cached, ...fresh]);
     // Partial coverage is not usable: the rerank gate is absolute, so an
     // unscored person would be dropped from the census rather than tiered, and
-    // a count must not depend on which batch happened to fail. Fall back to the
-    // retrieval scores for everyone, and let the caller record the basis.
+    // a count must not depend on which batch happened to fail. Nor is falling
+    // back to retrieval scores: reports apply reranker cutoffs to the stored
+    // score. Fail, keep the last good census, and retry.
     if (scores.size < results.length) {
-      return { ranked: results, basis: 'vector' };
+      throw new CensusIncompleteError(
+        `The reranker scored ${scores.size} of ${results.length} candidates.`
+      );
     }
 
     const ranked = results
@@ -1056,13 +1087,34 @@ export class ResearcherSearchService {
       : [];
 
     const vectorRows = vectorBranches.flatMap((branch) => branch.status === 'fulfilled' ? branch.value : []);
-    const degradedMode = vectorLiteral && vectorBranches.every((branch) => branch.status === 'rejected')
-      ? 'text_only'
-      : vectorLiteral
-        ? null
-        : 'text_only';
-    const textRows = await this.searchText(query, hardConditions, branchLimit).catch(() => []);
-    const merged = mergeCandidates([...vectorRows, ...textRows], census ? CENSUS_MERGED_LIMIT : MERGED_LIMIT);
+    let textFailed = false;
+    const textRows = await this.searchText(query, hardConditions, branchLimit).catch(() => {
+      textFailed = true;
+      return [] as ResearcherCandidateRow[];
+    });
+    const branchHealth = (index: number): RetrievalBranchHealth =>
+      !vectorLiteral ? 'skipped' : vectorBranches[index]?.status === 'fulfilled' ? 'ok' : 'failed';
+    const retrieval: ResearcherRetrievalHealth = {
+      embedding: vectorLiteral ? 'ok' : 'failed',
+      profile: branchHealth(0),
+      research_area: branchHealth(1),
+      publication: branchHealth(2),
+      text: textFailed ? 'failed' : 'ok',
+    };
+    const vectorFailed = !vectorLiteral || vectorBranches.every((branch) => branch.status === 'rejected');
+    const anyFailed = vectorFailed || textFailed || vectorBranches.some((branch) => branch.status === 'rejected');
+    const degradedMode = vectorFailed ? 'text_only' : anyFailed ? 'partial' : null;
+    if (census && anyFailed) {
+      throw new CensusIncompleteError('Some research evidence could not be read.', retrieval);
+    }
+
+    const mergeLimit = census ? CENSUS_MERGED_LIMIT : MERGED_LIMIT;
+    const mergedAll = mergeCandidates([...vectorRows, ...textRows], mergeLimit + 1);
+    const merged = mergedAll.slice(0, mergeLimit);
+    const branchCeiling = branchLimit ?? VECTOR_BRANCH_LIMIT;
+    const truncated = mergedAll.length > mergeLimit ||
+      vectorBranches.some((branch) => branch.status === 'fulfilled' && branch.value.length >= branchCeiling) ||
+      textRows.length >= (branchLimit ?? TEXT_BRANCH_LIMIT);
     const { ranked, basis } = census
       ? await this.rerankCensus(query, merged, input.scoreCache)
       : await this.rerank(query, merged);
@@ -1102,6 +1154,8 @@ export class ResearcherSearchService {
       scoreBasis: basis,
       results,
       degradedMode,
+      retrieval,
+      truncated,
     };
   }
 }

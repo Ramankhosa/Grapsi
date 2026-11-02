@@ -8,6 +8,7 @@ import { applicationState, day, evidenceFingerprint, hasSubmissionEvidence, inPe
 import { resolveActivityWindow } from './accountabilityService'
 import { closesOpportunity, isExpiredInIndia, resolveResponsibility } from './responsibility'
 import { reportSchoolMatchStates } from './currentMatches'
+import { callCensusHealth, censusSupportsConclusion } from './callMatchCensus'
 import { getDeptSettings } from './settings'
 import { getMatchWidth } from './settings'
 import { currentQualifyingMatchSql } from './reportDefinitions'
@@ -203,6 +204,10 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
       CROSS JOIN LATERAL (${schoolDeadlineFactsSql(tenantId,Prisma.sql`${school.id}`,'fc',timeZone)}) history
       WHERE fc."createdAt"<=${at} AND ${visibleCallSql(tenantId)} AND ${actionableSchoolCallWhereSql(tenantId,school.id)} ORDER BY fc.id`)
     const relevance = await relevanceForCalls(profile,calls.map(c=>c.id))
+    // Whether each call's own census can support "nobody matched". A school
+    // whose profiles are all readable is not enough: the call itself has to
+    // have been scored, successfully, over everybody.
+    const censusHealth = await callCensusHealth(tenantId,calls.map(c=>c.id))
     const allSchoolApps = apps.filter(a=>a.school_id===school.id)
     for (const app of allSchoolApps.filter(a=>!a.call_id)) calls.push({id:`adhoc:${app.proposal_id}`,title:app.title,agency:app.agency,deadline:app.agency_deadline,triage:null,decided_at:null,origin_school_id:null,origin_school_name:null,origin_school_source:null})
     const callRows = calls.flatMap(call=>{
@@ -250,14 +255,19 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         closedWithReason:review==='CLOSED_NO_ALLOCATION'},at,timeZone)
       const submission = submissionSummary(callApps.map(a=>({...a,verified:Boolean(a.verification)})))
       const upcoming21 = deadlineRisk.upcoming21
+      const schoolProfilesComplete = projection.get(school.id)?.complete ?? false
+      const callCensusSettled = adHoc || censusSupportsConclusion(censusHealth.get(call.id))
+      // A closed call is no longer re-scored, so a missing census there is
+      // history, not a data gap to chase. It still never yields "no match".
+      const matchingIncomplete = !schoolProfilesComplete || (!adHoc && !isExpiredInIndia(call.deadline,at,timeZone) && !callCensusSettled)
       const gaps = relevantQuality ? [
         !actionState.touched?'UNTOUCHED':null,
         unallocated && callMatches.length>0?'MATCHED_UNALLOCATED':null,
         unallocated && approached>0?'APPROACHED_UNALLOCATED':null,
-        unallocated && callMatches.length===0 && projection.get(school.id)?.complete?'NO_MATCH_UNALLOCATED':null,
+        unallocated && callMatches.length===0 && schoolProfilesComplete && callCensusSettled?'NO_MATCH_UNALLOCATED':null,
         missedUnallocatedNoSubmission?'MISSED_UNALLOCATED_NO_SUBMISSION':null,
         callActionOverdue?'OVERDUE_ACTION':null,
-        !projection.get(school.id)?.complete?'MATCHING_INCOMPLETE':null,
+        matchingIncomplete?'MATCHING_INCOMPLETE':null,
       ].filter(Boolean) as string[] : []
       const remaining = callApps.filter(a=>appMatches(a) && (filters.mode==='pending'?a.outstanding:filters.mode==='activity'?isActivity(a):true))
       const dueCall = !filters.horizon || [call.deadline,...allCallActions.filter(a=>['OPEN','ACKNOWLEDGED'].includes(a.status)).map(a=>a.due_at)]
@@ -299,7 +309,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
         waitingWith:waitingApp?.stage==='AWAITING_FACULTY_RESPONSE'?'FACULTY':waitingApp?.stage==='INTERNAL_REVIEW'?'REVIEWER':waitingApp?'AGENCY':null,
         waitingSince:waitingApp?.lastContact?.happened_at||waitingApp?.stageEnteredAt||waitingApp?.created_at,
         reviewState:review??undefined,originSchoolMissing:!call.origin_school_id&&!(call as any).has_tenant_origin,schoolUnmapped:profile.isUnmapped,ownerMissing:cover.uncovered,
-        matchingComplete:projection.get(school.id)?.complete??false,matchedPeople:callMatches.length,applications:callApps.length,
+        matchingComplete:!matchingIncomplete,matchedPeople:callMatches.length,applications:callApps.length,
         activeApplications:callApps.filter(a=>a.outstanding).length,assignments:formalAllocationCount,candidatesReviewed:considered,
         contacts:externalContactRows.length,dispositionRecorded:closesOpportunity(disposition?.reason),triageDecisionRecorded:['RELEVANT','NOT_RELEVANT','SHORTLISTED'].includes(call.triage||''),
         actions:[...allCallActions,...callReminders],lastActivityAt:lastAction?.at,internalDeadlineOverdue:callApps.some(a=>a.overdue.internal||a.overdue.review)}
@@ -319,7 +329,7 @@ export async function getManagementReport(tenantId: string, filters: ManagementF
           submissionState:submissionState(a,Boolean(a.verification)).state,workingStage:submissionState(a,Boolean(a.verification)).workingStage})),
         mapping:mappingRow?{source:mappingRow.source,reason:mappingRow.reason,mappedAt:mappingRow.mapped_at,backfilled:mappingRow.backfilled}:null,
         firstTouchAt,coverage:{primary:cover.primary?.user||null,deputies:deputies(school.id).map(m=>m.user),isAway:cover.away,covering:cover.away?cover.operational?.user||null:null,uncovered:cover.uncovered,responsible:responsible?.user||null,transferred:Boolean(transfer)},
-        matchedFaculty:callMatches.length,matchCompleteness:projection.get(school.id)?.complete?'COMPLETE':'PARTIAL',matches:callMatches.map(m=>{
+        matchedFaculty:callMatches.length,matchCompleteness:schoolProfilesComplete&&callCensusSettled?'COMPLETE':'PARTIAL',matches:callMatches.map(m=>{
           const allocation=callApps.find(a=>a.faculty_id===m.user_id&&Boolean(a.assignment_id))
           const independent=callApps.find(a=>a.faculty_id===m.user_id&&!a.assignment_id)
           const candidate=callCandidates.find(c=>c.user_id===m.user_id)

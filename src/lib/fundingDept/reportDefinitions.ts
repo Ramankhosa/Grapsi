@@ -380,14 +380,28 @@ export const isQualifyingMatch = (
  * a caller that has no tenant context counts exactly as before.
  */
 export function currentQualifyingMatchSql(matchAlias: string, width: MatchWidth = DEFAULT_MATCH_WIDTH): Prisma.Sql {
+  return Prisma.sql`(${currentAutomaticMatchSql(matchAlias)} AND ${countsAtWidthSql(matchAlias, width)})`
+}
+
+/**
+ * The population every live "matched faculty" figure is drawn from, before any
+ * width is applied: current automatic rows for people who are still active
+ * members of the match's tenant. The width preview varies only the cutoff on
+ * top of this, so what it promises is what the reports then show.
+ */
+export function currentAutomaticMatchSql(matchAlias: string): Prisma.Sql {
   const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
   return Prisma.sql`(${Prisma.raw(`${matchAlias}.is_current AND ${matchAlias}.inferred = false
     AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
-    AND EXISTS (SELECT 1 FROM users current_match_user
+    AND ${activeTenantMemberSql(matchAlias)})`
+}
+
+/** The matched person is still an active member of the tenant the match belongs to. */
+export function activeTenantMemberSql(matchAlias: string): Prisma.Sql {
+  return Prisma.sql`EXISTS (SELECT 1 FROM users current_match_user
       WHERE current_match_user.id = ${Prisma.raw(`${matchAlias}.user_id`)}
         AND current_match_user."tenantId" = ${Prisma.raw(`${matchAlias}.tenant_id`)}
-        AND current_match_user.status = 'ACTIVE')
-    AND ${countsAtWidthSql(matchAlias, width)})`
+        AND current_match_user.status = 'ACTIVE')`
 }
 
 /* -------------------------------------------------------------------------- */

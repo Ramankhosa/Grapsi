@@ -125,3 +125,41 @@ export async function writeSchoolProjections(tenantId: string, schoolIds: string
   return states
 }
 
+
+/** Calls censused per scheduled pass, across all tenants. */
+const SWEEP_CALL_BUDGET = 40
+
+/**
+ * The scheduled census pass.
+ *
+ * Without it the census only refreshed when somebody opened a report, so a call
+ * nobody looked at — or one whose last attempt failed — could sit unscored
+ * until the next page view. Each pass takes the stale and retry-due calls of
+ * every tenant with a school structure, splitting the budget so one large
+ * tenant cannot starve the rest, then rewrites those tenants' school readiness.
+ */
+export async function sweepCallMatchCensus(options: { budget?: number; tenantId?: string } = {}) {
+  const budget = Math.max(1, Math.min(200, options.budget ?? SWEEP_CALL_BUDGET))
+  const tenants = options.tenantId
+    ? [options.tenantId]
+    : (await prisma.$queryRaw<Array<{ tenant_id: string }>>(Prisma.sql`
+        SELECT DISTINCT tenant_id FROM tenant_org_units WHERE is_active AND depth = 0 ORDER BY tenant_id`)).map((row) => row.tenant_id)
+  const perTenant = Math.max(5, Math.ceil(budget / Math.max(1, tenants.length)))
+  const result = { tenants: 0, attempted: 0, refreshed: 0, failed: 0 }
+  let remaining = budget
+  for (const tenantId of tenants) {
+    if (remaining <= 0) break
+    const callIds = await staleCallIds(tenantId, Math.min(perTenant, remaining))
+    if (!callIds.length) continue
+    result.tenants += 1
+    result.attempted += callIds.length
+    remaining -= callIds.length
+    const done = await refreshStaleCallMatches(tenantId, { callIds })
+    result.refreshed += done.length
+    result.failed += callIds.length - done.length
+    const schools = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM tenant_org_units WHERE tenant_id = ${tenantId} AND is_active AND depth = 0`)
+    await writeSchoolProjections(tenantId, schools.map((school) => school.id))
+  }
+  return result
+}

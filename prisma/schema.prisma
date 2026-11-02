@@ -3851,6 +3851,10 @@ model FundingOpportunityMatch {
   inferred        Boolean  @default(false)
   is_current      Boolean  @default(true)
   match_run_id    String?
+  /// 'rerank' or 'vector'. Report widths are reranker cutoffs, so only 'rerank' counts.
+  score_basis     String?
+  /// Shared eligibility assessment (src/lib/funding/eligibilityAssessment.ts).
+  eligibility     Json?
   refreshed_at   DateTime @default(now())
   first_seen_at   DateTime @default(now())
   last_seen_at    DateTime @default(now())
@@ -3983,10 +3987,15 @@ model FundingCallAlert {
 
   // Delivery outcomes. email_status "queued" means the user prefers a
   // daily/weekly digest; the digest job flips it to "sent".
-  in_app_status String    @default("skipped") // created | skipped | failed
-  email_status  String    @default("skipped") // sent | queued | skipped | failed
-  email_error   String?
-  emailed_at    DateTime?
+  // "pending" is the claim before delivery; a row left pending was interrupted
+  // and the healing sweep resumes it. "sending" left behind means the provider
+  // may have accepted the mail, so it becomes "uncertain" and is never resent.
+  in_app_status  String    @default("skipped") // pending | created | skipped | failed
+  email_status   String    @default("skipped") // pending | sending | sent | queued | skipped | failed | uncertain
+  email_error    String?
+  emailed_at     DateTime?
+  email_attempts Int       @default(0)
+  email_retry_at DateTime?
 
   created_at DateTime @default(now())
 

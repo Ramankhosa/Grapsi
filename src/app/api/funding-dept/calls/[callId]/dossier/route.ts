@@ -389,7 +389,9 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   // would list people who are not yet included in the school's count.
   let people: Array<Record<string, unknown>> = []
   let peopleError: string | null = null
-  let peopleBasis: 'census' | 'pending' = 'census'
+  let peopleBasis: 'census' | 'pending' | 'failed' = 'census'
+  let matchingCheckedAt: Date | null = null
+  let matchingTruncated = false
   let matchWidth: MatchWidth = DEFAULT_MATCH_WIDTH
   try {
     const requestedWidth = new URL(request.url).searchParams.get('width')
@@ -402,9 +404,15 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
             researchAreas: row.researchAreas.slice(0, 4),
           }))
 
-    if (!censusState?.refreshedAt && matched.length === 0) {
+    // A failed refresh keeps the last good rows; say so rather than letting an
+    // empty or stale list read as the answer.
+    if (censusState?.status === 'failed') {
+      peopleBasis = 'failed'
+    } else if (!censusState?.refreshedAt && matched.length === 0) {
       peopleBasis = 'pending'
     }
+    matchingCheckedAt = censusState?.refreshedAt ?? null
+    matchingTruncated = censusState?.truncated ?? false
     if (!censusState?.fresh) queueSchoolMatchRefresh(context.tenantId, school.id)
 
     // Track record for the people this call actually surfaced, over the
@@ -595,9 +603,13 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     peopleError,
     /**
      * Where the list came from. `census` means these are the same rows the
-     * "Matched faculty" figures count; `pending` means the census has not run.
+     * "Matched faculty" figures count; `pending` means the census has not run;
+     * `failed` means the latest run failed and these are the last good rows.
      */
     peopleBasis,
+    /** The last successful census, and whether it had to stop at its ceiling. */
+    matchingCheckedAt: matchingCheckedAt?.toISOString() ?? null,
+    matchingTruncated,
     /** The width these bands were derived at, and the words for each band. */
     matchWidth,
     matchBandLabels: MATCH_BAND_LABELS,

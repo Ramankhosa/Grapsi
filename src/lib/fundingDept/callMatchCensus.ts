@@ -26,7 +26,9 @@ import { randomUUID } from 'node:crypto'
 
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
-import { researcherSearchService, type RerankScoreCache } from '@/lib/services/researcherSearchService'
+import {
+  getProfileEmbeddingColumn, getPublicationEmbeddingColumn, researcherSearchService, type RerankScoreCache,
+} from '@/lib/services/researcherSearchService'
 import { canonicalAreasEnabled } from '@/lib/researchAreas/core'
 
 import { openCallSql, textArray, utcTimestamp, visibleCallSql } from './callSql'
@@ -34,7 +36,7 @@ import { getTenantTimeZone } from '@/lib/tenant/locale'
 import {
   DEFAULT_MATCH_WIDTH, MATCH_WIDTHS, MATCH_WIDTH_COPY, MATCH_WIDTH_CUTOFFS, bandForScore, type MatchWidth,
 } from './matchBands'
-import { currentQualifyingMatchSql, UNCOUNTED_MATCH_VERSIONS } from './reportDefinitions'
+import { currentAutomaticMatchSql, currentQualifyingMatchSql } from './reportDefinitions'
 
 /**
  * Written to `source_version`. Reports count only this version, so switching it
@@ -52,10 +54,16 @@ const CENSUS_CALLS_PER_PASS = 25
 
 export type CallMatchState = {
   fresh: boolean
+  /** The last SUCCESSFUL census; null when none has ever succeeded. */
   refreshedAt: Date | null
   basis: string | null
   matched: number
   candidates: number
+  /** missing: never attempted. failed: the latest attempt failed; the last good rows still stand. */
+  status: 'ok' | 'failed' | 'missing'
+  truncated: boolean
+  lastAttemptAt: Date | null
+  lastError: string | null
 }
 
 /** Reranker scores already held for this call, keyed by what was scored. */
@@ -107,16 +115,52 @@ export function refreshCallMatches(tenantId: string, callId: string) {
 
 async function census(tenantId: string, callId: string) {
   const fingerprint = await callFingerprint(tenantId, callId)
+  // Only a successful census is reusable. The reranker's identity is part of
+  // the fingerprint, so restoring or changing the model re-scores.
   const cached = await prisma.$queryRaw<Array<{ matched: number; candidates: number; basis: string }>>(Prisma.sql`
     SELECT matched, candidates, basis FROM dsr_call_match_state
-     WHERE tenant_id = ${tenantId} AND call_id = ${callId} AND fingerprint = ${fingerprint} AND version = ${CALL_MATCH_CENSUS_VERSION}`)
+     WHERE tenant_id = ${tenantId} AND call_id = ${callId} AND fingerprint = ${fingerprint}
+       AND version = ${CALL_MATCH_CENSUS_VERSION} AND status = 'ok'`)
   if (cached[0]) {
     await prisma.$executeRaw(Prisma.sql`
-      UPDATE dsr_call_match_state SET refreshed_at = (now() AT TIME ZONE 'UTC')
+      UPDATE dsr_call_match_state SET refreshed_at = (now() AT TIME ZONE 'UTC'), last_attempt_at = (now() AT TIME ZONE 'UTC')
        WHERE tenant_id = ${tenantId} AND call_id = ${callId} AND fingerprint = ${fingerprint}`)
     return cached[0]
   }
 
+  try {
+    return await scoreAndStore(tenantId, callId, fingerprint)
+  } catch (error) {
+    await recordCensusFailure(tenantId, callId, error).catch((stateError) => {
+      console.error('Could not record the census failure', { callId, stateError })
+    })
+    throw error
+  }
+}
+
+/** Minutes until a failed census is retried: 1, 2, 4 … 60, then daily after eight failures. */
+export const CENSUS_RETRY_LIMIT = 8
+
+/**
+ * A failed census touches only its failure fields. The stored matches, the
+ * fingerprint they were scored from and `refreshed_at` (the last success) all
+ * stay, so every report keeps reading the last good numbers.
+ */
+async function recordCensusFailure(tenantId: string, callId: string, error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 500)
+  await prisma.$executeRaw(Prisma.sql`
+    INSERT INTO dsr_call_match_state(tenant_id, call_id, version, fingerprint, basis, candidates, matched, refreshed_at,
+      status, last_attempt_at, last_error, failure_count, retry_at)
+    VALUES(${tenantId}, ${callId}, ${CALL_MATCH_CENSUS_VERSION}, '', 'none', 0, 0, NULL,
+      'failed', (now() AT TIME ZONE 'UTC'), ${message}, 1, (now() AT TIME ZONE 'UTC') + interval '1 minute')
+    ON CONFLICT(tenant_id, call_id) DO UPDATE SET status = 'failed', last_attempt_at = EXCLUDED.last_attempt_at,
+      last_error = EXCLUDED.last_error, failure_count = dsr_call_match_state.failure_count + 1,
+      retry_at = (now() AT TIME ZONE 'UTC') + make_interval(mins => CASE
+        WHEN dsr_call_match_state.failure_count + 1 >= ${CENSUS_RETRY_LIMIT} THEN 1440
+        ELSE LEAST(60, power(2, dsr_call_match_state.failure_count)::int) END)`)
+}
+
+async function scoreAndStore(tenantId: string, callId: string, fingerprint: string) {
   const search = await researcherSearchService.search({
     fundingCallId: callId,
     filters: { tenantOnly: true, includeSelf: true },
@@ -154,24 +198,25 @@ async function census(tenantId: string, callId: string) {
     }]
   })
 
-  if (await callFingerprint(tenantId, callId) !== fingerprint) {
-    throw new Error('Matching inputs changed during the census. Refresh the report to read the updated scores.')
-  }
-
   await prisma.$transaction(async (tx) => {
+    // Checked inside the write, so a worker scored from older inputs can never
+    // overwrite a census that a newer profile or call edit has already moved on.
+    if (await callFingerprint(tenantId, callId, tx) !== fingerprint) {
+      throw new Error('Matching inputs changed during the census. Refresh the report to read the updated scores.')
+    }
     if (rows.length) {
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO funding_opportunity_matches(id, tenant_id, funding_call_id, user_id, org_unit_id, school_id,
-          match_score, match_tier, match_reason, source, source_version, inferred, is_current, match_run_id,
+          match_score, match_tier, match_reason, score_basis, source, source_version, inferred, is_current, match_run_id,
           refreshed_at, first_seen_at, last_seen_at, created_at, updated_at)
-        SELECT r.id, ${tenantId}, ${callId}, r."userId", r."unitId", r."schoolId", r.score, r.tier, r.reason,
+        SELECT r.id, ${tenantId}, ${callId}, r."userId", r."unitId", r."schoolId", r.score, r.tier, r.reason, ${search.scoreBasis},
                'matching', ${CALL_MATCH_CENSUS_VERSION}, false, true, ${runId}, ${stamp}, ${stamp}, ${stamp}, ${stamp}, ${stamp}
           FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb)
             AS r(id text, "userId" text, "unitId" text, "schoolId" text, score double precision, tier text, reason text)
         ON CONFLICT(tenant_id, funding_call_id, user_id, school_id) DO UPDATE SET
           org_unit_id = EXCLUDED.org_unit_id, match_score = EXCLUDED.match_score, match_tier = EXCLUDED.match_tier,
-          match_reason = EXCLUDED.match_reason, source = EXCLUDED.source, source_version = EXCLUDED.source_version,
-          inferred = false, is_current = true, match_run_id = EXCLUDED.match_run_id,
+          match_reason = EXCLUDED.match_reason, score_basis = EXCLUDED.score_basis, source = EXCLUDED.source,
+          source_version = EXCLUDED.source_version, inferred = false, is_current = true, match_run_id = EXCLUDED.match_run_id,
           refreshed_at = EXCLUDED.refreshed_at, last_seen_at = EXCLUDED.last_seen_at, updated_at = EXCLUDED.updated_at`)
     }
     // Whoever this pass did not find is no longer a current match. Their row
@@ -181,11 +226,15 @@ async function census(tenantId: string, callId: string) {
        WHERE tenant_id = ${tenantId} AND funding_call_id = ${callId} AND is_current AND source = 'matching'
          AND match_run_id IS DISTINCT FROM ${runId}`)
     await tx.$executeRaw(Prisma.sql`
-      INSERT INTO dsr_call_match_state(tenant_id, call_id, version, fingerprint, basis, candidates, matched, refreshed_at)
+      INSERT INTO dsr_call_match_state(tenant_id, call_id, version, fingerprint, basis, candidates, matched, refreshed_at,
+        status, last_attempt_at, last_error, failure_count, retry_at, truncated)
       VALUES(${tenantId}, ${callId}, ${CALL_MATCH_CENSUS_VERSION}, ${fingerprint}, ${search.scoreBasis},
-             ${search.totalCandidates}, ${rows.length}, (now() AT TIME ZONE 'UTC'))
+             ${search.totalCandidates}, ${rows.length}, (now() AT TIME ZONE 'UTC'),
+             'ok', (now() AT TIME ZONE 'UTC'), NULL, 0, NULL, ${search.truncated})
       ON CONFLICT(tenant_id, call_id) DO UPDATE SET version = EXCLUDED.version, fingerprint = EXCLUDED.fingerprint,
-        basis = EXCLUDED.basis, candidates = EXCLUDED.candidates, matched = EXCLUDED.matched, refreshed_at = EXCLUDED.refreshed_at`)
+        basis = EXCLUDED.basis, candidates = EXCLUDED.candidates, matched = EXCLUDED.matched, refreshed_at = EXCLUDED.refreshed_at,
+        status = 'ok', last_attempt_at = EXCLUDED.last_attempt_at, last_error = NULL, failure_count = 0, retry_at = NULL,
+        truncated = EXCLUDED.truncated`)
   }, { timeout: 60000 })
 
   return { matched: rows.length, candidates: search.totalCandidates, basis: search.scoreBasis }
@@ -194,21 +243,42 @@ async function census(tenantId: string, callId: string) {
 export async function callMatchStates(tenantId: string, callIds: string[]) {
   const state = new Map<string, CallMatchState>()
   if (!callIds.length) return state
-  const rows = await prisma.$queryRaw<Array<{ call_id: string; refreshed_at: Date; basis: string; matched: number; candidates: number; area_changed: boolean }>>(Prisma.sql`
-    SELECT call_id, refreshed_at, basis, matched, candidates, ${areaRevisionChangedSql(Prisma.sql`s.call_id`,Prisma.sql`s.refreshed_at`)} area_changed FROM dsr_call_match_state s
+  const rows = await prisma.$queryRaw<Array<{ call_id: string; refreshed_at: Date | null; basis: string; matched: number; candidates: number;
+    area_changed: boolean; status: string; truncated: boolean; last_attempt_at: Date | null; last_error: string | null }>>(Prisma.sql`
+    SELECT call_id, refreshed_at, basis, matched, candidates, status, truncated, last_attempt_at, last_error,
+           ${areaRevisionChangedSql(Prisma.sql`s.call_id`,Prisma.sql`s.refreshed_at`)} area_changed FROM dsr_call_match_state s
      WHERE tenant_id = ${tenantId} AND version = ${CALL_MATCH_CENSUS_VERSION} AND call_id = ANY(${textArray(callIds)})`)
   const stored = new Map(rows.map((row) => [row.call_id, row]))
   for (const callId of callIds) {
     const row = stored.get(callId)
+    const succeeded = Boolean(row?.refreshed_at && row.basis !== 'none')
     state.set(callId, {
-      fresh: Boolean(row && !row.area_changed && Date.now() - row.refreshed_at.getTime() < CENSUS_FRESH_MS),
+      fresh: Boolean(row?.refreshed_at && row.status === 'ok' && !row.area_changed && Date.now() - row.refreshed_at.getTime() < CENSUS_FRESH_MS),
       refreshedAt: row?.refreshed_at ?? null,
-      basis: row?.basis ?? null,
+      basis: succeeded ? row!.basis : null,
       matched: row?.matched ?? 0,
       candidates: row?.candidates ?? 0,
+      status: !row ? 'missing' : row.status === 'failed' ? 'failed' : 'ok',
+      truncated: row?.truncated ?? false,
+      lastAttemptAt: row?.last_attempt_at ?? null,
+      lastError: row?.last_error ?? null,
     })
   }
   return state
+}
+
+/**
+ * Whether a call's stored census can support a conclusion. A report may say
+ * "no matching researcher" only for a call whose census ran, succeeded on the
+ * current inputs, read everybody, and was scored by the reranker.
+ */
+export function censusSupportsConclusion(state: CallMatchState | undefined) {
+  return Boolean(state && state.status === 'ok' && state.refreshedAt && !state.truncated && state.basis === 'rerank')
+}
+
+/** The census state for these calls, for readers that only need to know whether to trust a zero. */
+export async function callCensusHealth(tenantId: string, callIds: string[]) {
+  return callMatchStates(tenantId, Array.from(new Set(callIds)))
 }
 
 export type StoredMatch = {
@@ -283,9 +353,11 @@ export async function staleCallIds(tenantId: string, limit = CENSUS_CALLS_PER_PA
     SELECT fc.id FROM funding_calls fc
      LEFT JOIN dsr_call_match_state s ON s.tenant_id = ${tenantId} AND s.call_id = fc.id AND s.version = ${CALL_MATCH_CENSUS_VERSION}
      WHERE ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)}
-       AND (s.refreshed_at IS NULL OR s.refreshed_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => ${CENSUS_FRESH_MS / 1000})
-         OR ${areaRevisionChangedSql(Prisma.sql`fc.id`,Prisma.sql`s.refreshed_at`)})
-     ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST, fc.id
+       -- A failed census waits out its backoff; everything else refreshes when stale.
+       AND (CASE WHEN s.status = 'failed' THEN s.retry_at IS NULL OR s.retry_at <= (now() AT TIME ZONE 'UTC')
+         ELSE s.refreshed_at IS NULL OR s.refreshed_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => ${CENSUS_FRESH_MS / 1000})
+           OR ${areaRevisionChangedSql(Prisma.sql`fc.id`,Prisma.sql`s.refreshed_at`)} END)
+     ORDER BY (s.status = 'failed') DESC NULLS LAST, COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST, fc.id
      LIMIT ${limit}`)
   return rows.map((row) => row.id)
 }
@@ -326,8 +398,7 @@ export async function previewMatchWidths(tenantId: string, schoolIds?: string[])
       SELECT m.match_score score, m.user_id, m.funding_call_id
         FROM funding_opportunity_matches m
         JOIN funding_calls fc ON fc.id = m.funding_call_id
-       WHERE m.tenant_id = ${tenantId} AND m.is_current AND m.inferred = false
-         AND COALESCE(m.source_version,'') NOT IN (${Prisma.join(UNCOUNTED_MATCH_VERSIONS.map((v) => Prisma.sql`${v}`))})
+       WHERE m.tenant_id = ${tenantId} AND ${currentAutomaticMatchSql('m')}
          AND m.match_score IS NOT NULL
          AND ${visibleCallSql(tenantId, 'fc')} AND ${openCallSql('fc', timeZone)} ${scope}
     ), widths(moderate, strong) AS (VALUES ${Prisma.join(
@@ -371,17 +442,26 @@ export async function unprofiledInSchools(tenantId: string, schoolIds: string[])
   const unprofiled = new Map<string, string[]>()
   for (const schoolId of schoolIds) unprofiled.set(schoolId, [])
   if (!schoolIds.length) return unprofiled
+  const profileColumn = Prisma.raw(getProfileEmbeddingColumn())
+  const publicationColumn = Prisma.raw(getPublicationEmbeddingColumn())
   const rows = await prisma.$queryRaw<Array<{ school_id: string; user_id: string }>>(Prisma.sql`
     SELECT unit.path[1] school_id, u.id user_id
       FROM users u
       JOIN researcher_profiles p ON p.user_id = u.id
       JOIN tenant_org_units unit ON unit.id = p.org_unit_id AND unit.is_active
      WHERE u."tenantId" = ${tenantId} AND u.status = 'ACTIVE' AND unit.path[1] = ANY(${textArray(schoolIds)})
-       AND p.embedding IS NULL AND p.embedding_voyage_1024 IS NULL
+       -- Exactly what the retrieval branches read: an embedded profile, an
+       -- embedded saved interest or tagged publication, or profile text the
+       -- keyword branch searches. An unembedded interest is invisible to search.
+       AND p.${profileColumn} IS NULL
+       AND nullif(btrim(p.research_summary), '') IS NULL
+       AND nullif(btrim(p.normalized_text), '') IS NULL
        AND COALESCE(array_length(p.research_areas, 1), 0) = 0
        AND COALESCE(array_length(p.keywords, 1), 0) = 0
-       AND NOT EXISTS (SELECT 1 FROM researcher_saved_research_areas a WHERE a.user_id = u.id AND a.use_for_alerts)
-       AND NOT EXISTS (SELECT 1 FROM reference_library r WHERE r.user_id = u.id AND r."isActive" AND 'my-publication' = ANY(r.tags))`)
+       AND NOT EXISTS (SELECT 1 FROM researcher_saved_research_areas a
+         WHERE a.user_id = u.id AND a.use_for_alerts AND a.${profileColumn} IS NOT NULL)
+       AND NOT EXISTS (SELECT 1 FROM reference_library r
+         WHERE r.user_id = u.id AND r."isActive" AND 'my-publication' = ANY(r.tags) AND r.${publicationColumn} IS NOT NULL)`)
   for (const row of rows) unprofiled.get(row.school_id)?.push(row.user_id)
   return unprofiled
 }

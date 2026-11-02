@@ -59,12 +59,20 @@ export class VoyageRerankService {
         ? response.data.results
         : [];
 
+    // A row without a usable score is dropped, not scored 0: callers treat a
+    // short response as incomplete, whereas a 0 would read as "irrelevant".
+    const seen = new Set<number>();
     return rows
       .map((row: any) => ({
         index: Number(row.index),
-        relevanceScore: Number(row.relevance_score ?? row.relevanceScore ?? row.score ?? 0),
+        relevanceScore: Number(row.relevance_score ?? row.relevanceScore ?? row.score),
       }))
-      .filter((row: VoyageRerankResult) => Number.isInteger(row.index) && row.index >= 0);
+      .filter((row: VoyageRerankResult) => {
+        if (!Number.isInteger(row.index) || row.index < 0 || row.index >= input.documents.length) return false;
+        if (!Number.isFinite(row.relevanceScore) || seen.has(row.index)) return false;
+        seen.add(row.index);
+        return true;
+      });
   }
 }
 

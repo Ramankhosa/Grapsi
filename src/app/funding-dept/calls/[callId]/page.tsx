@@ -110,7 +110,9 @@ interface Dossier {
   queueState: string
   people: Person[]
   peopleError: string | null
-  peopleBasis: 'census' | 'pending'
+  peopleBasis: 'census' | 'pending' | 'failed'
+  matchingCheckedAt: string | null
+  matchingTruncated: boolean
   matchWidth: MatchWidth
   matchBandLabels: Record<string, string>
   assignments: Assignment[]
@@ -554,12 +556,27 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               Matching is pending. Refresh this page shortly to see the researchers included in this school’s count.
             </p>
           )}
+          {data.peopleBasis === 'failed' && (
+            <p className="nk-sub mt-2 text-xs">
+              The latest matching run for this call failed and will retry automatically.{' '}
+              {data.matchingCheckedAt
+                ? `This list is from the last successful run on ${new Date(data.matchingCheckedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`
+                : 'No run has succeeded yet, so this list is not a finding.'}
+            </p>
+          )}
+          {data.matchingTruncated && (
+            <p className="nk-sub mt-2 text-xs">
+              This call reached the matching ceiling, so the lowest-ranked researchers were not screened.
+            </p>
+          )}
           <div className="nk-panel mt-3">
             {data.peopleError ? (
               <p className="nk-sub p-4">{data.peopleError}</p>
             ) : data.people.length === 0 ? (
               <p className="nk-sub p-4">
-                {data.peopleBasis === 'pending' ? 'Matching has not completed for this call.' : 'Nobody in this school meets the selected match width for this call.'}{' '}
+                {data.peopleBasis === 'pending' ? 'Matching has not completed for this call.'
+                  : data.peopleBasis === 'failed' && !data.matchingCheckedAt ? 'Matching could not run for this call yet.'
+                  : 'Nobody in this school meets the selected match width for this call.'}{' '}
                 <Link
                   href={`/researcher-matching?callId=${encodeURIComponent(data.call.id)}`}
                   className="underline"
