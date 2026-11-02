@@ -4,11 +4,12 @@ const m=vi.hoisted(()=>({scope:vi.fn(),incoming:vi.fn(),assigned:vi.fn(),pendenc
 vi.mock('@/lib/fundingDept/hubScope',()=>({resolveHubScope:m.scope,paging:()=>({page:1,pageSize:25})}))
 vi.mock('@/lib/fundingDept/settings',()=>({getMatchWidth:async()=> 'WIDE'}))
 vi.mock('@/lib/tenant/locale',()=>({getTenantTimeZone:async()=> 'Asia/Kolkata'}))
+vi.mock('@/lib/fundingDept/hubSnapshot',()=>({hubSnapshotKeys:()=>({scope:'scope',filters:'filters'}),readHubSnapshot:vi.fn(),writeHubSnapshot:async()=> 'snapshot'}))
 vi.mock('@/lib/fundingDept/managementHandler',()=>({exportResponse:vi.fn()}))
 vi.mock('@/lib/fundingDept/incomingCalls',()=>({getIncomingCalls:m.incoming,incomingExportTables:()=>[],IncomingError:class extends Error{}}))
 vi.mock('@/lib/fundingDept/assignedCalls',()=>({getAssignedCalls:m.assigned,assignedExportTables:()=>[],AssignedError:class extends Error{}}))
 vi.mock('@/lib/fundingDept/pendencyReport',()=>({getPendency:m.pendency,pendencyExportTables:()=>[],PendencyError:class extends Error{}}))
-vi.mock('@/lib/fundingDept/followUpReport',()=>({getFollowUpReport:vi.fn(),followUpExportTables:()=>[],FollowUpReportError:class extends Error{}}))
+vi.mock('@/lib/fundingDept/followUpReport',()=>({weekStarts:()=>['2026-10-26'],getFollowUpReport:vi.fn(),followUpExportTables:()=>[],FollowUpReportError:class extends Error{}}))
 import { hubReportHandler } from '../hubHandler'
 beforeEach(()=>{
   vi.clearAllMocks();m.scope.mockResolvedValue({tenantId:'tenant',schoolIds:['primary'],schoolIdsIgnoringMember:['primary','covered'],memberUserId:'member-b',userId:'head',memberId:'head',options:{},lens:'department',portfolio:'primary'})

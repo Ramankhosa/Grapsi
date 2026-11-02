@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import ReassignDialog from './ReassignDialog'
 import { clientCurrency } from '@/hooks/useTenantLocale'
+import WorkspaceDialog from '@/components/ui/WorkspaceDialog'
 
 export type RowAssignment = {
   id: string
@@ -63,22 +64,22 @@ export default function AssignmentRowActions({ assignment, onChanged, compact = 
       call: { title: assignment.callTitle }, assignee: { name: assignment.facultyName, email: assignment.facultyEmail || '' } }}
       onClose={() => setDialog(null)} onDone={message => { setDialog(null); onChanged(message) }} />}
 
-    {dialog && dialog !== 'reassign' && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => !busy && setDialog(null)}>
-      <form role="dialog" aria-modal="true" className="w-full max-w-md space-y-3 rounded-lg bg-white p-5 text-left shadow-xl" onClick={e => e.stopPropagation()} onSubmit={e => {
+    {dialog && dialog !== 'reassign' && <WorkspaceDialog open onOpenChange={open => { if (!open) setDialog(null) }} busy={busy}
+      title={{ submitted: 'Record a submission claim', unallocate: 'Withdraw allocation', lapse: 'Record no application', outcome: 'Record the funding decision' }[dialog]}
+      description={`${assignment.facultyName} · ${assignment.callTitle}`}>
+      <form className="space-y-3 text-left" onSubmit={e => {
         e.preventDefault(); const f = new FormData(e.currentTarget); const v = (k: string) => String(f.get(k) || '').trim()
         if (dialog === 'submitted') void patch({ status: 'COMPLETED', submissionReference: v('reference') || null, submissionUrl: v('url') || null, submissionNotes: v('notes') || null, submittedAt: v('date') || null }, 'Marked submitted')
         if (dialog === 'unallocate') void patch({ status: 'CANCELLED', cancelReason: v('reason') }, 'Unallocated')
         if (dialog === 'lapse') void patch({ status: 'LAPSED', lapsedReason: v('reason') }, 'Closed out as not applied for')
         if (dialog === 'outcome') { const outcome = v('outcome'); const amount = Number(v('amount')); void patch({ outcome, awardAmount: outcome === 'AWARDED' && amount > 0 ? amount : null, awardCurrency: outcome === 'AWARDED' ? v('currency') || clientCurrency() : null }, 'Outcome recorded') }
       }}>
-        <h2 className="text-base font-semibold">{{ submitted: 'Mark submitted', unallocate: 'Unallocate', lapse: 'Not applied for', outcome: 'Record the funding decision' }[dialog]}</h2>
-        <p className="nk-sub text-sm">{assignment.facultyName} · {assignment.callTitle}</p>
         {dialog === 'submitted' && <>
           <label className="block text-xs">Submission reference / application number<input name="reference" maxLength={200} className={input} /></label>
           <label className="block text-xs">Link to the submission<input name="url" maxLength={2000} className={input} placeholder="https://" /></label>
           <label className="block text-xs">Notes<textarea name="notes" maxLength={5000} rows={2} className={input} /></label>
           <label className="block text-xs">Submitted on<input name="date" type="date" className={input} max={new Date().toISOString().slice(0, 10)} /></label>
-          <p className="nk-sub text-xs">A reference, link or note is required as proof.</p></>}
+          <p className="text-xs leading-5 text-slate-500">A reference, link or note records the claim. The department head verifies supporting evidence separately. Late-entered claims need evidence review before changing deadline accountability.</p></>}
         {dialog === 'unallocate' && <label className="block text-xs">Why is the department withdrawing this allocation?<textarea name="reason" required minLength={3} maxLength={2000} rows={3} className={input} placeholder="e.g. faculty on leave; reallocating to a better fit" />
           <span className="nk-sub mt-1 block">Kept in the follow-up log. The person goes back on the shortlist; the call reappears in Pendency if nobody else is allocated.</span></label>}
         {dialog === 'lapse' && <label className="block text-xs">What happened, and can the call still be applied for?<textarea name="reason" required minLength={3} maxLength={2000} rows={3} className={input} /></label>}
@@ -89,6 +90,6 @@ export default function AssignmentRowActions({ assignment, onChanged, compact = 
         {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
         <div className="flex justify-end gap-2 pt-1"><button type="button" className="nk-btn-secondary nk-btn-sm" disabled={busy} onClick={() => setDialog(null)}>Cancel</button>
           <button className="nk-btn-primary nk-btn-sm" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>
-      </form></div>}
+      </form></WorkspaceDialog>}
   </>
 }

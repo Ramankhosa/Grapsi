@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { LibraryBig, MessageSquare, Upload } from 'lucide-react';
+import { LibraryBig, MessageSquare, Upload, ArrowRight } from 'lucide-react';
+import FundingWorkspaceHeader, { FundingWorkspaceLink } from '@/components/funding/FundingWorkspaceHeader';
 import ResearcherTopBar from '@/components/researcher/ResearcherTopBar';
 import FinderAiTab from '@/components/finder/FinderAiTab';
 import type { FinderPreferenceValues } from '@/components/FinderPreferencesPanel';
@@ -267,7 +268,11 @@ export default function FinderPage() {
       setManualHasNextPage(response.hasNextPage);
       setManualHasPreviousPage(response.hasPreviousPage);
     } catch (err) {
-      if (seq === directorySeq.current) setError(err instanceof Error ? err.message : 'Failed to load funding directory');
+      if (seq === directorySeq.current) {
+        setManualResults([]);
+        setManualTotalResults(0);
+        setError(err instanceof Error ? err.message : 'Failed to load funding directory');
+      }
     } finally {
       if (seq === directorySeq.current) setManualLoading(false);
     }
@@ -420,9 +425,9 @@ export default function FinderPage() {
   }
 
   return (
-    <div className="cb-page flex min-h-screen flex-col bg-inset text-ink">
+    <div className="funding-workspace cb-page flex min-h-screen flex-col">
       <Head>
-        <title>Funding Finder | GrantGenie</title>
+        <title>Discover funding | Grapsi</title>
         <meta
           name="description"
           content="Ask for funding opportunities in a conversational AI chat, apply structured filters manually, and get results from the published funding catalog."
@@ -431,29 +436,31 @@ export default function FinderPage() {
 
       <ResearcherTopBar />
 
-      <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 py-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col px-4 pb-10 sm:px-6 lg:px-8">
+        <FundingWorkspaceHeader section="discovery" title="Find the right funding for your next idea."
+          description="Explore open opportunities, narrow down what fits, and move from discovery to a stronger application."
+          actions={<FundingWorkspaceLink href="/funding/intelligence">Explore funded research</FundingWorkspaceLink>} />
         {/* Mode switch — the two ways into the same catalog. */}
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div role="tablist" aria-label="Finder mode" className="flex w-full gap-1 rounded-lg border border-hairline bg-ground p-1 sm:w-auto">
+          <div role="tablist" aria-label="Finder mode" className="flex w-full gap-1 rounded-2xl border border-slate-200 bg-white p-1.5 sm:w-auto"
+            onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'manual' : event.key === 'End' ? 'ai' : finderTab === 'manual' ? 'ai' : 'manual'; handleSelectTab(next); document.getElementById(`finder-tab-${next}`)?.focus(); } }}>
+            <button type="button" id="finder-tab-manual" role="tab" tabIndex={finderTab === 'manual' ? 0 : -1}
+              aria-controls="finder-panel-manual" aria-selected={finderTab === 'manual'} onClick={() => handleSelectTab('manual')}
+              className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'manual' ? 'cb-tab-active' : ''}`}>
+              <LibraryBig className="h-4 w-4" /><span className="hidden sm:inline">Browse opportunities</span><span className="sm:hidden">Browse calls</span>
+            </button>
             <button
               type="button"
               role="tab"
+              id="finder-tab-ai"
+              tabIndex={finderTab === 'ai' ? 0 : -1}
+              aria-controls="finder-panel-ai"
               aria-selected={finderTab === 'ai'}
               onClick={() => handleSelectTab('ai')}
               className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'ai' ? 'cb-tab-active' : ''}`}
             >
               <MessageSquare className="h-4 w-4" />
-              AI advisor
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={finderTab === 'manual'}
-              onClick={() => handleSelectTab('manual')}
-              className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'manual' ? 'cb-tab-active' : ''}`}
-            >
-              <LibraryBig className="h-4 w-4" />
-              Directory
+              <span className="hidden sm:inline">Ask the funding advisor</span><span className="sm:hidden">AI advisor</span>
             </button>
           </div>
 
@@ -466,11 +473,12 @@ export default function FinderPage() {
         </div>
 
         {error ? (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-800">
-            {error}
+          <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <span>{error}</span><button type="button" className="inline-flex items-center gap-2 font-semibold" onClick={() => runDirectory({ page: manualPage }).catch(() => undefined)}>Try again<ArrowRight className="h-4 w-4" /></button>
           </div>
         ) : null}
 
+        <div id={`finder-panel-${finderTab}`} role="tabpanel" aria-labelledby={`finder-tab-${finderTab}`} tabIndex={0}>
         {finderTab === 'manual' ? (
           <FundingDirectoryPanel
             query={manualQuery}
@@ -508,6 +516,7 @@ export default function FinderPage() {
             getCallDetailsHref={buildFundingCallDetailHref}
           />
         )}
+        </div>
       </div>
 
       {chat.filterDrawerOpen ? (

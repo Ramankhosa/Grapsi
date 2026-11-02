@@ -18,11 +18,13 @@ import { Prisma } from '@/lib/prisma-generated'
 
 import { textArray, utcTimestamp } from './callSql'
 import { coordinatorSql } from './hubScope'
+import { historicalCoordinatorSql } from './deadlineOutcomeSql'
 import { FOLLOW_UP_STAGE_ORDER, countableFollowUpSql, facultyContactSql, indiaWeekStart, indiaWeekStartSql } from './reportDefinitions'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { DEFAULT_TIMEZONE, zonedDayStart } from '@/lib/i18n/format'
 
 export type FollowUpFilters = {
+  logPage?: number
   /** The tenant's zone: weeks run Monday to Sunday there. Filled by getFollowUpReport. */
   timeZone?: string
   schoolIds: string[]
@@ -76,7 +78,7 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
     totals: { followUps: 0, facultyContacts: 0, activeAssignments: 0, silentThisWeek: 0 }, total: 0 }
   if (!f.schoolIds.length) return empty_
   const start = weekInstant(weeks[0], f.timeZone)
-  const end = weekInstant(addDays(weeks[weeks.length - 1], 7), f.timeZone)
+  const end = f.asOf
   const scope = textArray(f.schoolIds)
   const faculty = facultyContactSql('f')
 
@@ -108,10 +110,17 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   // Allocations alive at any point in the range, with their whole-life contact facts.
   const assignments = await prisma.$queryRaw<Array<{ id: string; funding_call_id: string; call_title: string; faculty_name: string; school_name: string; status: string
     created_at: Date; closed_at: Date | null; owner_id: string | null; owner_name: string | null; first_contact: Date | null; last_follow_up: Date | null; stages: string[] | null
-    submitted: boolean }>>(Prisma.sql`
+    submitted: boolean; week_owners: Record<string, {id: string | null; name: string | null}> }>>(Prisma.sql`
     SELECT ca.id, ca.funding_call_id, COALESCE(fc.scheme_title, fc.title) call_title, COALESCE(fu.name, fu.email) faculty_name, s.name school_name, ca.status::text status, ca.created_at,
       CASE WHEN ca.status::text IN ('ASSIGNED','ACCEPTED','IN_PROGRESS') THEN NULL ELSE ${closedAt} END closed_at,
       o.owner_id, COALESCE(ou.name, ou.email) owner_name,
+      jsonb_build_object(${Prisma.join(weeks.map(week => {
+        const boundary = weekInstant(addDays(week, 7), f.timeZone)
+        const owner = boundary > f.asOf ? coordinatorSql(tenantId, 'au.path[1]', 'ca.funding_call_id')
+          : historicalCoordinatorSql(tenantId, 'au.path[1]', 'ca.funding_call_id', utcTimestamp(boundary))
+        return Prisma.sql`${week}::text, (SELECT jsonb_build_object('id',history.owner_id,'name',COALESCE(person.name,person.email))
+          FROM (SELECT ${owner} owner_id) history LEFT JOIN users person ON person.id=history.owner_id)`
+      }))}) week_owners,
       (SELECT min(x.happened_at) FROM assignment_follow_ups x WHERE x.assignment_id=ca.id AND ${facultyContactSql('x')}) first_contact,
       (SELECT max(x.happened_at) FROM assignment_follow_ups x WHERE x.assignment_id=ca.id AND ${countableFollowUpSql('x')}) last_follow_up,
       (SELECT array_agg(DISTINCT x.stage) FROM assignment_follow_ups x WHERE x.assignment_id=ca.id AND x.stage IS NOT NULL) stages,
@@ -132,12 +141,18 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   const counted = entries.filter(e => !f.facultyOnly || e.is_faculty)
   const weekOf = (d: Date) => d.toISOString().slice(0, 10)
   const touchedIn = new Map<string, Set<string>>() // week -> assignment ids followed up
+  const facultyCounts = new Map<string, number>()
+  for (const entry of entries) {
+    if (!entry.assignment_id || !entry.is_faculty) continue
+    const week = weekOf(entry.week)
+    if (!touchedIn.has(week)) touchedIn.set(week, new Set())
+    touchedIn.get(week)!.add(entry.assignment_id)
+    facultyCounts.set(entry.assignment_id, (facultyCounts.get(entry.assignment_id) || 0) + 1)
+  }
   const perAssignmentWeek = new Map<string, Record<string, number>>()
   for (const e of counted) {
     if (!e.assignment_id) continue
     const w = weekOf(e.week)
-    if (!touchedIn.has(w)) touchedIn.set(w, new Set())
-    touchedIn.get(w)!.add(e.assignment_id)
     const pw = perAssignmentWeek.get(e.assignment_id) || {}
     pw[w] = (pw[w] || 0) + 1
     perAssignmentWeek.set(e.assignment_id, pw)
@@ -171,10 +186,11 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   // A school with no coordinator still has allocations that can go silent; they
   // are counted under "No coordinator" so these totals match the list below.
   for (const a of assignments) {
-    if (f.memberUserId && a.owner_id !== f.memberUserId) continue
-    const m = a.owner_id ? person(a.owner_id, a.owner_name) : person(NO_OWNER, 'No coordinator')
     for (const w of weeks) {
       if (!aliveIn(a, w)) continue
+      const owner = a.week_owners?.[w] ?? { id: a.owner_id, name: a.owner_name }
+      if (f.memberUserId && owner.id !== f.memberUserId) continue
+      const m = owner.id ? person(owner.id, owner.name) : person(NO_OWNER, 'No recorded coordinator')
       const cell = m.weeks[w]; cell.active++
       if (touchedIn.get(w)?.has(a.id)) cell.touched++; else cell.silent++
     }
@@ -185,11 +201,11 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   // One row per allocation.
   const stageRank = (stages: string[] | null) => (stages || []).reduce<string | null>((best, s) =>
     FOLLOW_UP_STAGE_ORDER.indexOf(s as never) > FOLLOW_UP_STAGE_ORDER.indexOf((best || '') as never) ? s : best, null)
-  let effort: EffortRow[] = assignments.filter(a => !f.memberUserId || a.owner_id === f.memberUserId).map(a => ({
+  let effort: EffortRow[] = assignments.filter(a => !f.memberUserId || a.owner_id === f.memberUserId || Object.values(a.week_owners || {}).some(owner => owner.id === f.memberUserId)).map(a => ({
     assignmentId: a.id, callId: a.funding_call_id, callTitle: a.call_title, faculty: a.faculty_name, school: a.school_name, owner: a.owner_name, status: a.status,
     allocatedAt: a.created_at, perWeek: perAssignmentWeek.get(a.id) || {},
     followUps: Object.values(perAssignmentWeek.get(a.id) || {}).reduce((n, v) => n + v, 0),
-    facultyContacts: entries.filter(e => e.assignment_id === a.id && e.is_faculty).length,
+    facultyContacts: facultyCounts.get(a.id) || 0,
     daysToFirstContact: a.first_contact ? Math.max(0, Math.floor((a.first_contact.getTime() - a.created_at.getTime()) / 86400000)) : null,
     lastFollowUpAt: a.last_follow_up, highestStage: a.submitted ? 'SUBMITTED' : stageRank(a.stages),
     result: a.submitted ? 'SUBMITTED' : ACTIVE.includes(a.status) ? 'IN_PROGRESS' : 'CLOSED',
@@ -202,7 +218,8 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
   // The log behind a cell: one week, one author, or everything in range.
   const logFiltered = entries.filter(e => (!f.logWeek || weekOf(e.week) === f.logWeek) && (!f.logAuthorId || e.created_by_user_id === f.logAuthorId)
     && (!f.memberUserId || e.created_by_user_id === f.memberUserId) && (!f.facultyOnly || e.is_faculty))
-  const log: LogEntry[] = logFiltered.slice(0, f.all ? undefined : 50).map(e => ({ id: e.id, at: e.happened_at, week: weekOf(e.week), kind: e.kind, target: e.contact_target,
+  const logPage = Math.max(1, f.logPage || 1)
+  const log: LogEntry[] = (f.all ? logFiltered : logFiltered.slice((logPage - 1) * 25, logPage * 25)).map(e => ({ id: e.id, at: e.happened_at, week: weekOf(e.week), kind: e.kind, target: e.contact_target,
     stage: e.stage, note: e.note, author: e.author, authorId: e.created_by_user_id, callId: e.funding_call_id, callTitle: e.call_title, faculty: e.faculty_name,
     assignmentId: e.assignment_id, school: e.school_name }))
 
@@ -216,7 +233,7 @@ export async function getFollowUpReport(tenantId: string, f: FollowUpFilters) {
 
 export function followUpExportTables(r: Awaited<ReturnType<typeof getFollowUpReport>>) {
   return [
-    { name: 'By member and week', rows: [['DSR member', 'Week starting (Mon, IST)', 'Follow-ups', 'Faculty contacts', 'Reminders', 'Active allocations owned', 'Followed up', 'Silent'],
+    { name: 'By member and week', rows: [['DSR member', 'Week starting (Mon, institution time)', 'Activity entries', 'Faculty contacts', 'Reminders', 'Active allocations owned at week end', 'Faculty-contacted', 'No faculty contact'],
       ...r.members.flatMap(m => r.weeks.map(w => { const c = m.weeks[w]; return [m.name, w, c.followUps, c.facultyContacts, c.reminders, c.active, c.touched, c.silent] }))] },
     { name: 'By allocation', rows: [['Assignment ID', 'Call ID', 'Call', 'Faculty', 'School', 'Owner', 'Allocated on', ...r.weeks.map(w => `Week ${w}`), 'Follow-ups', 'Faculty contacts',
       'Days to first contact', 'Last follow-up', 'Highest stage', 'Result'],

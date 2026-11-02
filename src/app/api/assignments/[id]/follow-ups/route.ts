@@ -5,7 +5,8 @@ import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canManageAssignment } from '@/lib/orgUnits/scope'
 import { parseDate, validateStatusTransition, type AssignmentStatus } from '@/lib/assignments/shared'
-import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import { buildSubmissionUpdate, validSubmissionDate } from '@/lib/assignments/submission'
+import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import {
   FOLLOW_UP_KINDS,
@@ -38,7 +39,7 @@ const createSchema = z.object({
    */
   stage: z.enum(FOLLOW_UP_STAGES).nullable().optional(),
   note: z.string().trim().min(1, 'Add a note').max(5000),
-  happenedAt: z.string().trim().nullable().optional(),
+  happenedAt: z.string().trim().nullable().optional().refine(validSubmissionDate, 'Choose a valid contact date.'),
   remindAt: z.string().trim().nullable().optional(),
   remindFaculty: z.boolean().default(false),
   /**
@@ -138,6 +139,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   }
 
   const happenedAt = parseDate(payload.happenedAt) || new Date()
+  if (happenedAt.getTime() > Date.now()) return NextResponse.json({ error: 'Contact and submission dates cannot be in the future. Use a reminder to schedule future work.' }, { status: 400 })
 
   const followUpData = {
     tenant_id: context.tenantId,
@@ -188,6 +190,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     )
   }
 
+  const submission = marksSubmitted ? buildSubmissionUpdate({ record, reference: payload.submissionReference, url: payload.submissionUrl,
+    notes: record.submission_notes || payload.note, submittedAt: happenedAt, timeZone: await getTenantTimeZone(context.tenantId) }) : null
+  if (submission && !submission.ok) return NextResponse.json({ error: submission.error }, { status: 400 })
   const followUp = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
     const created = await tx.assignmentFollowUp.create({
@@ -200,14 +205,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       // drift into two definitions of a submitted application. `happenedAt` is
       // the submission date on purpose: an officer logging a Friday phone call
       // about a Tuesday submission must be able to date it Tuesday.
-      const submission = buildSubmissionUpdate({
-        record,
-        reference: payload.submissionReference,
-        url: payload.submissionUrl,
-        notes: record.submission_notes || payload.note,
-        submittedAt: happenedAt,
-      })
-      if (submission.ok) {
+      if (submission?.ok) {
         await tx.callAssignment.update({
           where: { id: record.id },
           data: {

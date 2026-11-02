@@ -1,6 +1,7 @@
 import { Prisma } from '@/lib/prisma-generated'
 import { DEFAULT_TIMEZONE } from '@/lib/i18n/format'
 import { callDeadlineZoneSql, effectiveCallDeadlineSql } from './callSql'
+import { trustedDeadlineSubmissionSql } from './submissionEvidenceSql'
 
 /** End of the entry day in UTC; an earlier explicit source closure takes precedence. */
 export function callDeadlineEndSql(alias = 'fc', timeZone = DEFAULT_TIMEZONE): Prisma.Sql {
@@ -19,7 +20,8 @@ export function schoolDeadlineFactsSql(tenantId: string, school: string | Prisma
       WHERE a.tenant_id=${tenantId} AND a.funding_call_id=${call} AND u.path[1]=${schoolId} AND a.created_at < ${end}) allocations,
     (SELECT count(*)::int FROM dsr_applications a LEFT JOIN call_assignments ca ON ca.id=a.assignment_id AND ca.tenant_id=a.tenant_id
       WHERE a.tenant_id=${tenantId} AND a.call_id=${call} AND a.school_id=${schoolId}
-        AND COALESCE(a.submitted_at,ca.completed_at) < ${end}) submissions,
+        AND COALESCE(a.submitted_at,ca.completed_at) < ${end}
+        AND ${trustedDeadlineSubmissionSql(end)}) submissions,
     (EXISTS (SELECT 1 FROM call_school_triage t WHERE t.tenant_id=${tenantId} AND t.org_unit_id=${schoolId} AND t.funding_call_id=${call}
         AND t.status='NOT_RELEVANT' AND t.decided_at < ${end})
       OR EXISTS (SELECT 1 FROM dsr_opportunity_dispositions d WHERE d.tenant_id=${tenantId} AND d.school_id=${schoolId} AND d.call_id=${call}
@@ -36,7 +38,12 @@ export function schoolDeadlineFactsSql(tenantId: string, school: string | Prisma
 /** Accountable owner at closing, reconstructed from dated transfers and coverage history.
  * Missing historical evidence stays unassigned instead of blaming today's replacement. */
 export function deadlineCoordinatorSql(tenantId:string,school:string,alias='fc',timeZone=DEFAULT_TIMEZONE):Prisma.Sql {
-  const schoolId=Prisma.raw(school),call=Prisma.raw(`${alias}.id`),end=callDeadlineEndSql(alias,timeZone)
+  return historicalCoordinatorSql(tenantId, school, `${alias}.id`, callDeadlineEndSql(alias,timeZone))
+}
+
+/** Recorded responsibility at a point in time; unavailable history remains unassigned. */
+export function historicalCoordinatorSql(tenantId: string, school: string, callExpression: string, end: Prisma.Sql): Prisma.Sql {
+  const schoolId=Prisma.raw(school),call=Prisma.raw(callExpression)
   return Prisma.sql`COALESCE(
     (SELECT e.after_data->>'ownerUserId' FROM dsr_events e WHERE e.tenant_id=${tenantId} AND e.school_id=${schoolId}
       AND e.entity_type='RESPONSIBILITY' AND e.entity_id=${call} AND e.kind='TRANSFER' AND e.occurred_at < ${end}

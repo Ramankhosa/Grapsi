@@ -1,5 +1,6 @@
 'use client'
 
+import FundingWorkspaceHeader from '@/components/funding/FundingWorkspaceHeader'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -210,24 +211,13 @@ export default function PatentSearchPage() {
   const draftLength = Array.from(draftQuery).length
 
   return (
-    <main className="min-h-screen bg-[#f6f8f7] text-slate-900">
-      <section className="relative overflow-hidden border-b border-teal-950/10 bg-[#082f32] text-white">
-        <div className="absolute -right-24 -top-32 h-80 w-80 rounded-full bg-teal-400/10 blur-3xl" />
-        <div className="absolute -bottom-36 left-1/4 h-72 w-72 rounded-full bg-cyan-300/10 blur-3xl" />
-        <div className="relative mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-teal-200"><Sparkles className="h-4 w-4" /> Funding intelligence · Patent search</div>
-              <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-5xl">Find the patents your proposal has to answer to.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-teal-50/75 sm:text-base">Paste a paragraph of your idea or a few technical phrases. Results come from PatentNest and are ranked by meaning, not keyword overlap — save the ones worth citing.</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Link href="/funding/intelligence" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><ArrowLeft className="h-4 w-4" /> Back to landscape</Link>
-              <button type="button" onClick={openDrawer} className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Bookmark className="h-4 w-4" /> Shortlist <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs tabular-nums">{shortlist.items.length}</span></button>
-            </div>
-          </div>
-
-          <form onSubmit={submit} role="search" className="mt-8 flex max-w-4xl flex-col gap-2 rounded-2xl border border-white/15 bg-white p-2 shadow-2xl shadow-black/20 sm:flex-row sm:items-end">
+    <main className="funding-workspace">
+      <section className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
+        <FundingWorkspaceHeader section="intelligence" title="Find the prior art that shapes your next proposal."
+          description="Search patents by meaning, inspect the evidence, and keep a shortlist of the inventions relevant to your research."
+          actions={<button type="button" onClick={openDrawer} className="funding-button-secondary"><Bookmark className="h-4 w-4" />Shortlist <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs text-blue-700">{shortlist.items.length}</span></button>} />
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <form onSubmit={submit} role="search" className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-2 sm:flex-row sm:items-end">
             <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2">
               <Search className="mt-2.5 h-5 w-5 shrink-0 text-slate-400" />
               <div className="min-w-0 flex-1">
@@ -251,23 +241,23 @@ export default function PatentSearchPage() {
               </div>
               {draftQuery ? <button type="button" onClick={() => setDraftQuery('')} className="mt-1.5 rounded-full p-1 text-slate-400 hover:bg-slate-100" aria-label="Clear query"><X className="h-4 w-4" /></button> : null}
             </div>
-            <button type="submit" disabled={searchDisabled || loading || draftLength < PATENT_QUERY_BOUNDS.min} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-teal-700 px-6 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300">
+            <button type="submit" disabled={searchDisabled || loading || draftLength < PATENT_QUERY_BOUNDS.min} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Search patents
             </button>
           </form>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-teal-50/70"><span>Try:</span>{SAMPLE_QUERIES.map((sample) => <button type="button" key={sample} onClick={() => chooseSample(sample)} disabled={searchDisabled} className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-left transition hover:bg-white/10 disabled:opacity-50">{sample}</button>)}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Try:</span>{SAMPLE_QUERIES.map((sample) => <button type="button" key={sample} onClick={() => chooseSample(sample)} disabled={searchDisabled} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left transition hover:bg-blue-50 disabled:opacity-50">{sample}</button>)}</div>
 
           {runId ? (
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200/20 bg-white/10 px-4 py-3 text-sm text-teal-50">
-              <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-200" /> Searching from your analysis{runTitle ? <> “<span className="font-semibold">{runTitle}</span>”</> : null} — saved patents will be linked to it.</span>
-              <Link href={`/funding/intelligence/idea/${encodeURIComponent(runId)}`} className="text-xs font-semibold text-teal-100 underline-offset-2 hover:underline">View analysis</Link>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-blue-600" /> Searching from your analysis{runTitle ? <> “<span className="font-semibold">{runTitle}</span>”</> : null} — saved patents will be linked to it.</span>
+              <Link href={`/funding/intelligence/idea/${encodeURIComponent(runId)}`} className="text-xs font-semibold text-blue-700 underline-offset-2 hover:underline">View analysis</Link>
             </div>
           ) : null}
         </div>
       </section>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="space-y-4">
           {errorCopy ? <ErrorBanner copy={errorCopy} countdown={countdown} onRetry={() => void runSearch(query, limit)} /> : null}
           {shortlist.error ? (

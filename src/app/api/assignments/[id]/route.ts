@@ -12,7 +12,9 @@ import {
   validateStatusTransition,
   type AssignmentStatus,
 } from '@/lib/assignments/shared'
-import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import { buildSubmissionUpdate, submissionDateError, validSubmissionDate } from '@/lib/assignments/submission'
+import { CALL_ENTRY_DEADLINE_SELECT, callEntryClosed } from '@/lib/funding/callDeadline'
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import { submissionWatchers } from '@/lib/fundingDept/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
@@ -41,7 +43,7 @@ const updateSchema = z.object({
   submissionReference: z.string().trim().max(200).nullable().optional(),
   submissionUrl: z.string().trim().max(2000).nullable().optional(),
   submissionNotes: z.string().trim().max(5000).nullable().optional(),
-  submittedAt: z.string().trim().nullable().optional(),
+  submittedAt: z.string().trim().nullable().optional().refine(validSubmissionDate, 'Choose a valid submission date.'),
   deadlineAt: z.string().trim().nullable().optional(),
   message: z.string().trim().max(5000).nullable().optional(),
   // Funding decision — admin only.
@@ -131,6 +133,15 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     if (!check.allowed) {
       return NextResponse.json({ error: check.reason }, { status: 403 })
     }
+    if (['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(payload.status) && !['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(record.status)) {
+      if (record.assignee?.status !== 'ACTIVE') return NextResponse.json({ error: 'This faculty account is inactive. Allocate an active faculty member instead.' }, { status: 409 })
+      const locale = await getTenantLocale(context.tenantId)
+      const call = await prisma.fundingCall.findFirst({where:{AND:[{id:record.funding_call_id},visibleFundingCallWhere(context.tenantId)]},select:CALL_ENTRY_DEADLINE_SELECT})
+      if (!call || callEntryClosed(call, new Date(), locale.timezone)) return NextResponse.json({ error: 'This call is unavailable or entry is closed. Record a confirmed extension before reopening the allocation.' }, { status: 409 })
+    }
+    if (payload.status === 'CANCELLED' && record.status !== 'CANCELLED' && (!payload.cancelReason || payload.cancelReason.length < 3)) {
+      return NextResponse.json({ error: 'Explain why this allocation is being withdrawn.' }, { status: 400 })
+    }
     if (payload.status === 'DECLINED' && !payload.declineReason) {
       return NextResponse.json(
         { error: 'Please add a short reason so the department knows why.' },
@@ -187,6 +198,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
     if (payload.submittedAt !== undefined) {
       data.submitted_at = parseDate(payload.submittedAt)
+      if (data.submitted_at) {
+        const error = submissionDateError(data.submitted_at, new Date(), (await getTenantLocale(context.tenantId)).timezone)
+        if (error) return NextResponse.json({error},{status:400})
+      }
     }
   }
 
@@ -289,6 +304,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         url: data.submission_url,
         notes: data.submission_notes,
         submittedAt: data.submitted_at ?? null,
+        timeZone: (await getTenantLocale(context.tenantId)).timezone,
       })
       if (!submission.ok) {
         return NextResponse.json({ error: submission.error }, { status: 400 })
@@ -324,7 +340,15 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
 
   const updated = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
-    return tx.callAssignment.update({ where: { id: record.id }, data, include: assignmentInclude })
+    const saved = await tx.callAssignment.update({ where: { id: record.id }, data, include: assignmentInclude })
+    if (data.status === 'CANCELLED' && record.status !== 'CANCELLED') {
+      await tx.assignmentFollowUp.create({ data: {
+        tenant_id: context.tenantId, assignment_id: record.id, funding_call_id: record.funding_call_id,
+        org_unit_id: record.assignee_org_unit_id, created_by_user_id: context.user.id,
+        kind: 'NOTE', contact_target: 'INTERNAL', note: `Unallocated by the department. ${payload.cancelReason}`,
+      } })
+    }
+    return saved
   })
 
   // A re-request wipes the decline from the record, so keep the reason in the
@@ -377,22 +401,6 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   // back on the shortlist: they were a match before and still are, so the call
   // window keeps showing them rather than silently dropping them.
   if (data.status === 'CANCELLED' && record.status !== 'CANCELLED') {
-    try {
-      await prisma.assignmentFollowUp.create({
-        data: {
-          tenant_id: context.tenantId,
-          assignment_id: record.id,
-          funding_call_id: record.funding_call_id,
-          org_unit_id: record.assignee_org_unit_id,
-          created_by_user_id: context.user.id,
-          kind: 'NOTE',
-          contact_target: 'INTERNAL',
-          note: payload.cancelReason ? `Unallocated by the department. ${payload.cancelReason}` : 'Unallocated by the department (no reason recorded).',
-        },
-      })
-    } catch (error) {
-      console.warn('Assignment cancel: follow-up log failed', error)
-    }
     await prisma.callCandidate
       .updateMany({
         where: { tenant_id: context.tenantId, funding_call_id: record.funding_call_id, user_id: record.assignee_user_id, status: 'ASSIGNED' },

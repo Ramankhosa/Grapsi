@@ -538,6 +538,7 @@ model Tenant {
   locale String?
 
   users     User[]
+  personalGrants PersonalGrant[]
   projects  Project[]
   atiTokens ATIToken[]
   auditLogs AuditLog[]
@@ -678,6 +679,7 @@ enum OAuthProvider {
 }
 
 model User {
+  personalGrants PersonalGrant[]
   id                       String     @id @default(cuid())
   tenantId                 String?
   signupAtiTokenId         String? // Track which ATI token was used for signup
@@ -1185,6 +1187,7 @@ model ProjectCollaborator {
 }
 
 model FundingCall {
+  personalGrants PersonalGrant[]
   id                          String                            @id @default(cuid())
   tenantId                    String?
   visibility                  FundingVisibility
@@ -1662,6 +1665,60 @@ model FundingSourceRegistry {
   updated_at          DateTime @updatedAt
 
   @@map("funding_source_registry")
+}
+
+/// A user's private grant bookmark and notebook; never shared with their team.
+model PersonalGrant {
+  id String @id @default(cuid())
+  tenant_id String
+  user_id String
+  funding_call_id String
+  is_favourite Boolean @default(false)
+  notes String @default("")
+  notes_revision Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  events PersonalGrantEvent[]
+
+  @@unique([tenant_id, user_id, funding_call_id])
+  @@index([tenant_id, user_id, is_favourite, updated_at])
+  @@map("personal_grants")
+}
+
+enum PersonalGrantReminderState {
+  NONE
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+model PersonalGrantEvent {
+  id String @id @default(cuid())
+  personal_grant_id String
+  title String @db.VarChar(160)
+  event_at DateTime @db.Timestamptz(3)
+  timezone String @db.VarChar(100)
+  reminder_at DateTime? @db.Timestamptz(3)
+  reminder_state PersonalGrantReminderState @default(NONE)
+  sent_at DateTime? @db.Timestamptz(3)
+  attempts Int @default(0)
+  retry_at DateTime? @db.Timestamptz(3)
+  claimed_at DateTime? @db.Timestamptz(3)
+  claim_token String?
+  last_error String?
+  revision Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  personal_grant PersonalGrant @relation(fields: [personal_grant_id], references: [id], onDelete: Cascade)
+
+  @@index([reminder_state, retry_at])
+  @@index([personal_grant_id, event_at])
+  @@index([event_at])
+  @@map("personal_grant_events")
 }
 
 /// One stage deadline of a call (open date, letter of intent, full application).

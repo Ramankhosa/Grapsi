@@ -1115,6 +1115,89 @@
   overflow-x: clip;
 }
 
+/* Funding workspace: clear hierarchy and comfortable controls, scoped to these views. */
+.funding-workspace {
+  min-height: 100vh;
+  background: #f5f7fb;
+  color: #0f172a;
+  overflow-x: clip;
+  --color-ground: #ffffff;
+}
+.funding-header { padding: 28px 0 30px; }
+.funding-workspace :is(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+.funding-workspace .cb-card,
+.funding-workspace .nk-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 3px 18px -12px rgb(15 23 42 / 18%);
+}
+.funding-workspace :is(.cb-btn, .cb-btn-sm, .nk-btn, .nk-btn-xs, .nk-btn-sm) {
+  min-height: 40px;
+  border-radius: 10px;
+  box-shadow: none;
+  font-size: 13px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.funding-workspace :is(.cb-input, .cb-select) {
+  min-height: 44px;
+  border-color: #e2e8f0;
+  border-radius: 10px;
+  background-color: #fff;
+}
+.funding-workspace .nk-btn-primary { background: #2563eb; border: 1px solid #2563eb; color: white; }
+.funding-workspace .nk-btn-primary:hover { background: #1d4ed8; }
+.funding-workspace .nk-btn-secondary { background: white; border: 1px solid #e2e8f0; color: #334155; }
+.funding-workspace .nk-btn-secondary:hover { background: #f8fafc; border-color: #cbd5e1; }
+.funding-workspace .nk-badge { border-radius: 7px; padding: 3px 8px; font-size: 12px; text-transform: none; letter-spacing: normal; background-image: none; }
+.funding-workspace :is(.cb-eyebrow, .nk-eyebrow) {
+  font-size: 12px;
+  letter-spacing: .015em;
+  text-transform: none;
+}
+.funding-workspace .cb-badge { border-radius: 7px; background: #f1f5f9; color: #475569; font-size: 12px; }
+.funding-workspace .cb-badge-cobalt { border-radius: 7px; font-size: 12px; }
+.funding-button-primary,
+.funding-button-secondary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color .15s, border-color .15s;
+}
+.funding-button-primary { background: #2563eb; color: #fff; border: 1px solid #2563eb; }
+.funding-button-primary:hover { background: #1d4ed8; }
+.funding-button-primary:disabled, .funding-button-secondary:disabled { cursor: not-allowed; opacity: .45; }
+.funding-button-secondary { background: #fff; color: #334155; border: 1px solid #e2e8f0; }
+.funding-button-secondary:hover { background: #f8fafc; border-color: #cbd5e1; }
+.funding-workspace .dsr-table { width: 100%; font-size: 14px; }
+.funding-workspace .dsr-table th { padding: 14px 16px; background: #f8fafc; color: #64748b; font-weight: 500; }
+.funding-workspace .dsr-table td { padding: 16px; }
+.funding-workspace .dsr-table tbody tr:hover { background: #f8faff; }
+@media (max-width: 767px) {
+  .funding-header { padding: 20px 0 24px; }
+  .funding-workspace .dsr-table-mobile,
+  .funding-workspace .dsr-table-mobile tbody { display: block; }
+  .funding-workspace .dsr-table-mobile thead { display: none; }
+  .funding-workspace .dsr-table-mobile tbody > tr { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border-bottom: 1px solid #e2e8f0; }
+  .funding-workspace .dsr-table-mobile td { display: block; min-width: 0; border: 0; padding: 10px 14px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  .funding-workspace .dsr-table-mobile td:first-child,
+  .funding-workspace .dsr-table-mobile td:last-child,
+  .funding-workspace .dsr-table-mobile td[colspan] { grid-column: 1 / -1; }
+  .funding-workspace .dsr-table-mobile td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; color: #64748b; font-size: 12px; font-weight: 500; }
+  .funding-workspace .dsr-table-mobile td[data-label="Take action"],
+  .funding-workspace .dsr-table-mobile td[data-label="Next action"] { grid-row: 2; }
+}
+
 /* ============================================================================
    Nickel & Cobalt — the dashboard chassis
    ----------------------------------------------------------------------------

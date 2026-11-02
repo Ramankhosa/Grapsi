@@ -1,6 +1,8 @@
 import ImportedAreaPicker from './finder/ImportedAreaPicker';
+import PersonalGrantActions, { PersonalGrantProvider, PersonalGrantLoadError } from './funding/PersonalGrantActions';
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ExternalLink, Globe2, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, Clock3, ExternalLink, Globe2, Search, SlidersHorizontal, X, LayoutGrid, List, Wallet, MapPin } from 'lucide-react';
+import WorkspaceDialog from './ui/WorkspaceDialog';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
 import CountryPicker from './finder/CountryPicker';
 import FunderPicker from './finder/FunderPicker';
@@ -73,10 +75,18 @@ function formatDay(value: string) {
 
 function formatAmount(result: RecommendationRawResultItem) {
   if (result.amountMin === null && result.amountMax === null) return null;
+  const format = (value: number) => {
+    if (result.currency === 'INR') {
+      if (value >= 10000000) return `₹${new Intl.NumberFormat('en-IN',{maximumFractionDigits:1}).format(value / 10000000)} Cr`;
+      if (value >= 100000) return `₹${new Intl.NumberFormat('en-IN',{maximumFractionDigits:1}).format(value / 100000)} L`;
+      return `₹${new Intl.NumberFormat('en-IN',{maximumFractionDigits:0}).format(value)}`;
+    }
+    return `${result.currency || ''} ${new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(value)}`.trim();
+  };
   if (result.amountMin !== null && result.amountMax !== null && result.amountMin !== result.amountMax) {
-    return `${result.currency || ''} ${Number(result.amountMin).toLocaleString()} – ${Number(result.amountMax).toLocaleString()}`.trim();
+    return `${format(Number(result.amountMin))} – ${format(Number(result.amountMax))}`;
   }
-  return `${result.currency || ''} ${Number(result.amountMin ?? result.amountMax).toLocaleString()}`.trim();
+  return format(Number(result.amountMin ?? result.amountMax));
 }
 
 
@@ -451,6 +461,9 @@ function ExpandableCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const amount = formatAmount(result);
+  const deadlineDay = result.closeDate?.slice(0, 10);
+  const daysLeft = deadlineDay ? Math.round((Date.parse(`${deadlineDay}T00:00:00Z`) - Date.parse(`${todayKey()}T00:00:00Z`)) / 86400000) : null;
+  const urgent = !result.isRolling && daysLeft !== null && daysLeft >= 0 && daysLeft <= 14;
   const callDetailsHref = getCallDetailsHref?.(result) || `/finder/calls/${encodeURIComponent(result.id)}`;
   const geography =
     result.eligibleCountries.slice(0, 3).join(', ') ||
@@ -458,33 +471,30 @@ function ExpandableCard({
     result.hostCountries.slice(0, 3).join(', ');
 
   return (
-    <article className="cb-card overflow-hidden transition hover:border-cobalt-300">
-      <button type="button" onClick={() => setExpanded((prev) => !prev)} aria-expanded={expanded} className="w-full text-left">
-        <div className="px-4 py-3.5">
+    <article className="cb-card flex h-full flex-col overflow-hidden transition duration-200 hover:border-blue-200 hover:shadow-lg hover:shadow-slate-200/40">
+      <div className="flex-1 text-left">
+        <div className="p-5 sm:p-6">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[12px] text-muted">{result.agencyName}</p>
-              <h3 className="mt-0.5 text-[14px] font-semibold leading-snug text-ink">{result.schemeTitle}</h3>
+              <p className="text-xs font-medium text-slate-500">{result.agencyName || 'Funding opportunity'}</p>
+              <h3 className="mt-2 text-lg font-semibold leading-snug tracking-[-0.015em] text-slate-950"><a href={callDetailsHref} target="_blank" rel="noreferrer" className="hover:text-blue-700">{result.schemeTitle}</a></h3>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {result.isRolling ? (
-                <span className="cb-badge">Rolling</span>
-              ) : result.closeDate ? (
-                <span className="cb-badge" title="Deadline">
-                  {new Date(result.closeDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                </span>
+                <span className="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">Rolling</span>
+              ) : urgent ? (
+                <span className="rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">{daysLeft === 0 ? 'Closes today' : `${daysLeft} days left`}</span>
               ) : null}
-              <ChevronDown className={`h-4 w-4 shrink-0 text-muted-soft transition-transform ${expanded ? 'rotate-180' : ''}`} />
             </div>
           </div>
 
           {result.shortDescription ? (
-            <p className={`mt-1.5 text-[13px] leading-6 text-muted ${expanded ? '' : 'line-clamp-2'}`}>
+            <p className={`mt-3 text-sm leading-6 text-slate-500 ${expanded ? '' : 'line-clamp-2'}`}>
               {result.shortDescription}
             </p>
           ) : null}
 
-          <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <div className="mt-4 flex flex-wrap gap-1.5">
             {result.limitedSubmissions ? (
               <span className="cb-badge" title="The funder takes a limited number of applications per institution: your research office may need to pre-select.">
                 Limited submissions
@@ -513,11 +523,22 @@ function ExpandableCard({
             {result.fundingKinds.slice(0, 2).map((v) => (
               <span key={v} className="cb-badge">{v}</span>
             ))}
-            {geography ? <span className="cb-badge">{geography}</span> : null}
-            {amount ? <span className="cb-badge">{amount}</span> : null}
           </div>
+          <dl className="mt-5 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3.5">
+            <div><dt className="flex items-center gap-1.5 text-xs text-slate-500"><Wallet className="h-3.5 w-3.5" />Funding</dt><dd className="mt-1 text-sm font-semibold text-slate-800">{amount || 'Amount not specified'}</dd></div>
+            <div><dt className="flex items-center gap-1.5 text-xs text-slate-500"><Clock3 className="h-3.5 w-3.5" />Entry deadline</dt><dd className={`mt-1 text-sm font-semibold ${urgent ? 'text-amber-800' : 'text-slate-800'}`}>{result.isRolling ? 'Applications accepted year-round' : deadlineDay ? formatDay(deadlineDay) : 'Check funder guidance'}</dd></div>
+            {geography && <div className="col-span-2 flex items-start gap-1.5 border-t border-slate-200/70 pt-2 text-xs text-slate-500"><MapPin className="h-3.5 w-3.5 shrink-0" /><span>{geography}</span></div>}
+          </dl>
         </div>
-      </button>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-3.5 sm:px-6">
+        <PersonalGrantActions compact callId={result.id} title={result.schemeTitle} />
+        <button type="button" onClick={() => setExpanded(prev => !prev)} aria-expanded={expanded} className="inline-flex min-h-10 items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">{expanded ? 'Less detail' : 'Quick details'}<ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onBeginWriting && result.authoringReady !== false && <button type="button" onClick={() => onBeginWriting(result)} className="funding-button-secondary">Begin writing</button>}
+          <a href={callDetailsHref} target="_blank" rel="noreferrer" className="funding-button-primary">View opportunity<ArrowUpRight className="h-4 w-4" /></a>
+        </div>
+      </div>
 
       {expanded ? (
         <div className="border-t border-hairline bg-inset px-4 py-4">
@@ -567,14 +588,6 @@ function ExpandableCard({
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            {onBeginWriting && result.authoringReady !== false ? (
-              <button type="button" onClick={() => onBeginWriting(result)} className="cb-btn-primary cb-btn-sm">
-                Begin writing
-              </button>
-            ) : null}
-            <a href={callDetailsHref} target="_blank" rel="noreferrer" className="cb-btn-secondary cb-btn-sm">
-              Show details
-            </a>
             {result.officialUrls[0] ? (
               <a href={result.officialUrls[0]} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm">
                 View full call
@@ -659,7 +672,11 @@ interface FundingDirectoryPanelProps {
   onChangePreferences: (preferences: FinderPreferenceValues) => void;
 }
 
-export default function FundingDirectoryPanel({
+export default function FundingDirectoryPanel(props: FundingDirectoryPanelProps) {
+  return <PersonalGrantProvider callIds={props.results.map(result => result.id)}><PersonalGrantLoadError /><FundingDirectoryPanelContent {...props} /></PersonalGrantProvider>;
+}
+
+function FundingDirectoryPanelContent({
   query,
   activeQuery,
   filters,
@@ -686,6 +703,7 @@ export default function FundingDirectoryPanel({
   onChangePreferences,
 }: FundingDirectoryPanelProps) {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [layout, setLayout] = useState<'grid' | 'list'>('grid');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [wideLayout,setWideLayout]=useState(false);
   useEffect(()=>{
@@ -819,7 +837,7 @@ export default function FundingDirectoryPanel({
   return (
     <div className="flex-1">
       {/* Search */}
-      <div className="cb-card mb-4 p-3 sm:p-4">
+      <div className="cb-card mb-6 p-4 sm:p-5">
         <form
           className="flex flex-col gap-2 sm:flex-row"
           onSubmit={(event) => {
@@ -838,7 +856,7 @@ export default function FundingDirectoryPanel({
               placeholder="Search titles, funders and descriptions"
               aria-label="Search the funding directory"
               aria-describedby="directory-search-help"
-              className="cb-input pl-9 pr-9"
+              className="cb-input h-12 pl-10 pr-10 !text-base"
             />
             {query ? (
               <button
@@ -852,8 +870,8 @@ export default function FundingDirectoryPanel({
             ) : null}
           </div>
           <div className="flex gap-2">
-            <button type="submit" className="cb-btn-primary flex-1 sm:flex-none">
-              Search
+            <button type="submit" disabled={loading} className="funding-button-primary flex-1 sm:flex-none">
+              <Search className="h-4 w-4" />{loading ? 'Searching…' : <><span className="hidden sm:inline">Find opportunities</span><span className="sm:hidden">Search calls</span></>}
             </button>
             <button type="button" onClick={() => setMobileFiltersOpen(true)} className="cb-btn-secondary flex-1 lg:hidden">
               <SlidersHorizontal className="h-4 w-4" />
@@ -862,24 +880,23 @@ export default function FundingDirectoryPanel({
             </button>
           </div>
         </form>
-        <p id="directory-search-help" className="cb-hint mt-2">
+        <p id="directory-search-help" className="cb-hint mt-3">
           Every word must appear. Use <span className="font-medium text-ink-soft">or</span> for alternatives,{' '}
           <span className="font-medium text-ink-soft">-word</span> to exclude, and{' '}
           <span className="font-medium text-ink-soft">&ldquo;quotes&rdquo;</span> for an exact phrase.
         </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[288px_minmax(0,1fr)]">
+      <div className="grid gap-6 lg:grid-cols-[272px_minmax(0,1fr)]">
         {/* Filter rail — desktop */}
         {wideLayout ? <aside className="hidden lg:block" aria-label="Filters">
-          <div className="cb-card sticky top-32 max-h-[calc(100vh-10rem)] overflow-y-auto px-4 py-1">{rail}</div>
+          <div className="cb-card sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto px-5 py-2"><div className="flex items-center justify-between border-b border-slate-100 py-3"><h2 className="text-sm font-semibold text-slate-900">Refine your search</h2><SlidersHorizontal className="h-4 w-4 text-slate-400" /></div>{rail}</div>
         </aside> : null}
 
         {/* Filter sheet — phones and tablets */}
         {!wideLayout&&mobileFiltersOpen ? (
-          <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Filters">
-            <button type="button" aria-label="Close filters" onClick={() => setMobileFiltersOpen(false)} className="absolute inset-0 bg-ink/25" />
-            <div className="absolute inset-y-0 left-0 flex w-[90%] max-w-sm flex-col bg-ground shadow-cb-sheet">
+          <WorkspaceDialog open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen} title="Refine your search" description="Changes update your results as you filter." sheet>
+            <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-3">
                 <span className="text-[15px] font-semibold text-ink">Filters</span>
                 <div className="flex items-center gap-1">
@@ -898,7 +915,7 @@ export default function FundingDirectoryPanel({
                 </button>
               </div>
             </div>
-          </div>
+          </WorkspaceDialog>
         ) : null}
 
         {/* Results */}
@@ -937,6 +954,9 @@ export default function FundingDirectoryPanel({
               )}
             </p>
             <div className="flex items-center gap-2">
+              <div className="hidden items-center rounded-lg border border-slate-200 bg-white p-1 sm:flex" role="group" aria-label="Results layout">
+                {([['grid', LayoutGrid, 'Grid view'], ['list', List, 'List view']] as const).map(([value, Icon, label]) => <button key={value} type="button" aria-label={label} aria-pressed={layout === value} onClick={() => setLayout(value)} className={`rounded-md p-2 ${layout === value ? 'bg-blue-50 text-blue-700' : 'text-slate-400 hover:text-slate-700'}`}><Icon className="h-4 w-4" /></button>)}
+              </div>
               <label className="flex items-center gap-1.5 text-[12px] text-muted">
                 Sort
                 <select
@@ -970,9 +990,7 @@ export default function FundingDirectoryPanel({
           ) : null}
 
           {loading && results.length === 0 ? (
-            <div className="flex h-40 items-center justify-center">
-              <span className="h-7 w-7 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />
-            </div>
+            <div role="status" aria-label="Loading opportunities" className="grid gap-4 xl:grid-cols-2">{[0,1,2,3].map(n => <div key={n} className="cb-card animate-pulse p-6"><div className="h-3 w-24 rounded bg-slate-100" /><div className="mt-4 h-5 w-4/5 rounded bg-slate-200" /><div className="mt-3 h-3 rounded bg-slate-100" /><div className="mt-6 h-20 rounded-xl bg-slate-50" /></div>)}</div>
           ) : results.length === 0 ? (
             <div className="rounded-xl border border-dashed border-hairline bg-ground px-6 py-12 text-center">
               <p className="text-[15px] font-semibold text-ink">No calls match all of these.</p>
@@ -988,8 +1006,8 @@ export default function FundingDirectoryPanel({
               ) : null}
             </div>
           ) : (
-            <div className={`space-y-4 ${loading ? 'opacity-60 transition-opacity' : 'transition-opacity'}`}>
-              <div className="grid gap-3 xl:grid-cols-2">
+            <div aria-busy={loading} className={`space-y-4 ${loading ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'}`} ref={node => { if (node) node.inert = loading }}>
+              <div className={`grid gap-4 ${layout === 'grid' ? 'xl:grid-cols-2' : ''}`}>
                 {results.map((result) => (
                   <ExpandableCard key={result.id} result={result} onBeginWriting={onBeginWriting} getCallDetailsHref={getCallDetailsHref} />
                 ))}

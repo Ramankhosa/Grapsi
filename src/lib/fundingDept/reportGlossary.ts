@@ -89,7 +89,7 @@ export type ActionStatus = (typeof ACTION_STATUSES)[number]
 export const ACTION_STATUS_LABELS: Record<ActionStatus, string> = {
   NOT_STARTED: 'Not started',
   IN_PROGRESS: 'In progress',
-  COMPLETED: 'Action completed',
+  COMPLETED: 'Review recorded',
 }
 
 /* Pendency — a school's directly matched call that nobody was allocated to */
@@ -140,10 +140,10 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
   ...ACTION_STATUSES.map(state => ({ term: `Action: ${ACTION_STATUS_LABELS[state]}`, definition: {
     NOT_STARTED: 'Nobody has recorded anything on this call for this school: no review decision, shortlist, allocation, follow-up or named action.',
     IN_PROGRESS: 'Something has been recorded (a review, shortlist, allocation, follow-up or action), but the coordinator has not marked the work completed.',
-    COMPLETED: 'The coordinator marked this school’s action on the call as completed. Only a person sets this; allocating or shortlisting does not.',
+    COMPLETED: 'A coordinator recorded a review outcome for this school. Application progress and submission are tracked separately; this mark does not establish that a proposal was submitted.',
   }[state] })),
-  { term: 'Matched faculty', definition: `People scored against the call itself and tiered ${PENDENCY_MATCH_TIERS.join(' or ')}. Every screen counts the same stored scoring, so the figure on a report and the list on the call window are the same people. Weak, reconstructed and manual-allocation matches are shown but never counted.` },
-  { term: 'Directly matched call', definition: `A call with at least one ${PENDENCY_MATCH_TIERS.join(' or ')} automatic faculty match in the school, first seen before the call's deadline. Weak, reconstructed and manual-allocation matches do not count.` },
+  { term: 'Matched faculty', definition: `People whose current automatic score for this call meets the institution’s configured match setting. Every screen uses the same scoring and active-faculty rules. Reconstructed matches and manual allocations are not automatic match evidence.` },
+  { term: 'Directly matched call', definition: `A call with at least one qualifying automatic faculty match in the school under the institution’s configured match setting, first seen before the deadline. Reconstructed and manual-allocation evidence does not count.` },
   ...PENDENCY_STATES.map(state => ({ term: `Pendency: ${PENDENCY_STATE_LABELS[state]}`, definition: {
     MISSED: 'A school responsibility without an on-time submission or reasoned no-allocation closure. Late activity does not erase the missed deadline.',
     AT_RISK: `An outstanding school responsibility closing within ${PENDENCY_AT_RISK_DAYS} calendar days, including allocated work awaiting submission.`,
@@ -154,8 +154,8 @@ export const REPORT_DEFINITIONS: Array<{ term: string; definition: string }> = [
   { term: 'Follow-up', definition: 'An entry in the DSR contact log (call, email, meeting, note or scheduled reminder). Automatic review-history entries are not counted.' },
   { term: 'Faculty contact', definition: 'A follow-up logged as a call, email or meeting with the faculty member.' },
   { term: 'Follow-up week', definition: "Monday to Sunday in the organization's time zone (India, Asia/Kolkata, unless the organization set another in Regional Settings)." },
-  { term: 'Silent assignment', definition: 'An allocation still open (assigned, accepted or in progress) at the end of the week with no follow-up logged that week.' },
+  { term: 'Silent assignment', definition: 'An allocation still open at the end of the week with no faculty call, email or meeting recorded that week. Internal notes and reminders do not clear a contact alert.' },
   { term: 'Reporting period', definition: 'Period totals cover calls that entered in the selected period, with their progress as of the report date. "Needs attention now" ignores the period.' },
-  { term: 'Deadline day', definition: "A deadline stays open until the end of its calendar day in the organization's time zone (India, Asia/Kolkata, unless set otherwise). A date-only deadline is that date wherever you are." },
+  { term: 'Deadline day', definition: "An entry deadline follows the funder’s recorded timezone, otherwise the institution’s timezone. A date-only deadline keeps its stated date. An explicit source closure can end entry earlier." },
 ]
 

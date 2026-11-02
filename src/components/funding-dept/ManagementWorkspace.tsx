@@ -59,7 +59,7 @@ function useReport(path:string|null, revision=0) {
     if(!json)throw Error('The report service returned an unexpected response. Please refresh.')
     if(current){setData(json);setLoadedPath(path)}
   }).catch(e=>{if(current)setError(e.message)}).finally(()=>{if(current)setLoading(false)});return()=>{current=false}},[path,revision,authFetch])
-  return {data,error,loading,loadedPath}
+  return {data:loadedPath===path&&!error?data:null,error,loading,loadedPath}
 }
 function Pager({page,total=0,onChange}:{page:number;total?:number;onChange:(n:number)=>void}) {return <div className="flex items-center justify-end gap-3 p-3 text-sm"><span>{total} records · Page {page} of {Math.max(1,Math.ceil(total/20))}</span><HelpButton help={page<=1?'You are already on the first page.':'Show the previous 20 filtered records.'} className="nk-btn-secondary nk-btn-xs" disabled={page<=1} onClick={()=>onChange(page-1)}>Previous</HelpButton><HelpButton help={page*20>=total?'You are already on the last page.':'Show the next 20 filtered records.'} className="nk-btn-secondary nk-btn-xs" disabled={page*20>=total} onClick={()=>onChange(page+1)}>Next</HelpButton></div>}
 function Table({head,children}:{head:string[];children:React.ReactNode}){return <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead className="bg-nickel-50"><tr>{head.map(h=><th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>}
@@ -84,6 +84,36 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
   useEffect(()=>{if(view||meLoading)return;const requested=new URLSearchParams(window.location.search).get('view')||''
     const legacy=legacyRedirects[requested];if(legacy){setRegisterFilters(legacy.register||{});setView(legacy.view);return}
     setView(views.some(([id])=>id===requested)?requested:(me.isHead||me.capabilities.isTenantWide)?'overview':'workbench')},[view,meLoading,me])
+  const restoringUrl=useRef(false)
+  useEffect(()=>{
+    if(meLoading)return
+    const restore=()=>{
+      restoringUrl.current=true
+      const params=new URLSearchParams(window.location.search)
+      const requested=params.get('view')||((me.isHead||me.capabilities.isTenantWide)?'overview':'workbench')
+      const legacy=legacyRedirects[requested]
+      setView(legacy?.view|| (views.some(([id])=>id===requested)?requested:'workbench'))
+      const strings=(key:string)=>{try { const parsed=JSON.parse(params.get(key)||'{}'); return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Object.fromEntries(Object.entries(parsed).filter(([,value])=>typeof value==='string')) as Record<string,string>:{} } catch{return {}}}
+      setFilters({window:initialWindow,mode:'pending',...strings('f')})
+      setRegisterFilters({...legacy?.register,...strings('r')})
+      setMappingTab(params.get('mappingTab')||'mapped');setAuditCallId(params.get('auditCallId')||'')
+      setDetail(params.get('applicationId'));setPage(Math.max(1,Number.parseInt(params.get('page')||'1',10)||1))
+    }
+    restore();window.addEventListener('popstate',restore)
+    return()=>window.removeEventListener('popstate',restore)
+  },[initialWindow,me.isHead,me.capabilities.isTenantWide,meLoading])
+  useEffect(()=>{
+    if(!view||meLoading)return
+    if(restoringUrl.current){restoringUrl.current=false;return}
+    const params=new URLSearchParams({view,f:JSON.stringify(filters)})
+    if(Object.keys(registerFilters).length)params.set('r',JSON.stringify(registerFilters))
+    if(page>1)params.set('page',String(page))
+    if(view==='mapping')params.set('mappingTab',mappingTab)
+    if(view==='audit'&&auditCallId)params.set('auditCallId',auditCallId)
+    if(detail)params.set('applicationId',detail)
+    const next=`${window.location.pathname}?${params}`
+    if(next!==`${window.location.pathname}${window.location.search}`)window.history.pushState(null,'',next)
+  },[view,filters,registerFilters,page,mappingTab,auditCallId,detail,meLoading])
   const isRegisterView=registerViews.includes(view)
   const specialized=['incoming','corrective-actions'].includes(view)||isRegisterView
   const switchView=(next:string)=>{setView(next);setFilters(f=>({window:f.window,from:f.from||'',to:f.to||'',schoolId:f.schoolId||'',memberId:f.memberId||'',portfolio:f.portfolio||'',includeExpired:f.includeExpired||'',mode:['workbench','pending','deadline-risk','opportunity-gaps'].includes(next)?'pending':'portfolio'}));setPage(1)}
@@ -123,7 +153,7 @@ export default function ManagementWorkspace({initialWindow='reporting'}:{initial
       {filters.window==='custom'&&<><label className="text-xs">From <input aria-label="From date" type="date" className={field} value={filters.from||''} onChange={e=>update('from',e.target.value)}/></label><label className="text-xs">To <input aria-label="To date" type="date" className={field} value={filters.to||''} onChange={e=>update('to',e.target.value)}/></label></>}
       <p className="nk-sub text-xs">{timeZoneLabel(clientTimeZone())}. Period totals count calls that entered in the period; “needs attention” and missed calls ignore it.</p><HelpButton help="Recalculate from the latest saved activity." className="nk-btn-secondary nk-btn-xs ml-auto" onClick={refresh}>Refresh</HelpButton></div>}
     {view==='overview'&&<OverviewView periodQuery={periodQuery} revision={revision} openRegister={openRegister} openActions={queue=>{switchView('workbench');if(queue)setFilters(f=>({...f,queue}))}} openMapping={tab=>{setMappingTab(tab);switchView('mapping')}}/>}
-    {view==='register'&&<RegisterView periodQuery={periodQuery} filters={registerFilters} setFilters={setRegisterFilters} schools={schoolOptions} revision={revision} onAudit={id=>{setAuditCallId(id);switchView('audit')}}/>}
+    {view==='register'&&<RegisterView periodQuery={periodQuery} filters={registerFilters} setFilters={next=>{setRegisterFilters(next);setPage(1)}} page={page} setPage={setPage} schools={schoolOptions} revision={revision} onAudit={id=>{setAuditCallId(id);switchView('audit')}}/>}
     {view==='mapping'&&<MappingView tab={mappingTab} setTab={setMappingTab} schools={schoolOptions} isHead={me.isHead||me.capabilities.isTenantWide} revision={revision} refresh={refresh}/>}
     {view==='audit'&&<AuditView periodQuery={periodQuery} callId={auditCallId} setCallId={setAuditCallId} schools={schoolOptions} revision={revision}/>}
     {!isRegisterView&&<><div className="nk-panel p-4 space-y-3"><div className="flex flex-wrap items-end gap-3">

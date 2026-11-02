@@ -1,3 +1,5 @@
+import { dayKey, deadlineDayKey, DEFAULT_TIMEZONE } from '@/lib/i18n/format'
+
 /**
  * The one place an assignment becomes "submitted".
  *
@@ -27,6 +29,18 @@ export interface SubmissionProofInput {
   submittedAt?: Date | null
   /** Injectable for tests. */
   now?: Date
+  timeZone?: string
+}
+
+export function validSubmissionDate(value: string | null | undefined): boolean {
+  if (!value) return true
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || date.toISOString().slice(0, 10) === value)
+}
+
+export function submissionDateError(date: Date, now = new Date(), timeZone = DEFAULT_TIMEZONE): string | null {
+  if (!Number.isFinite(date.getTime())) return 'Choose a valid submission date.'
+  return deadlineDayKey(date, timeZone) > dayKey(now, timeZone) ? 'A submission date cannot be in the future.' : null
 }
 
 export interface SubmissionUpdate {
@@ -59,6 +73,9 @@ function clean(value: string | null | undefined): string | null | undefined {
  */
 export function buildSubmissionUpdate(input: SubmissionProofInput): SubmissionResult {
   const now = input.now ?? new Date()
+  const date = input.submittedAt ?? (input.record.submitted_at ? new Date(input.record.submitted_at) : now)
+  const dateError = submissionDateError(date, now, input.timeZone)
+  if (dateError) return { ok: false, error: dateError }
 
   const reference = clean(input.reference)
   const url = clean(input.url)
@@ -80,9 +97,7 @@ export function buildSubmissionUpdate(input: SubmissionProofInput): SubmissionRe
     // The date the application actually went in, which is not necessarily
     // today: an officer logging a call on Friday about a Tuesday submission
     // must be able to date it Tuesday.
-    submitted_at:
-      input.submittedAt ??
-      (input.record.submitted_at ? new Date(input.record.submitted_at) : now),
+    submitted_at: date,
   }
   if (reference !== undefined) data.submission_reference = reference
   if (url !== undefined) data.submission_url = url

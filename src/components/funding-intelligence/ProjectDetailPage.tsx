@@ -1,5 +1,7 @@
 'use client'
 
+import FundingWorkspaceHeader from '@/components/funding/FundingWorkspaceHeader'
+
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
@@ -123,23 +125,13 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
   if (error || !project) return <div className="mx-auto max-w-3xl p-8"><Link href="/funding/intelligence" className="text-sm font-semibold text-teal-700">Back to explorer</Link><div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">{error || 'Project not found'}</div></div>
 
   return (
-    <main className="min-h-screen bg-[#f6f8f7] text-slate-900">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8"><Link href="/funding/intelligence" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-teal-800"><ArrowLeft className="h-4 w-4" /> Back to landscape</Link></div>
+    <main className="funding-workspace">
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
+        <FundingWorkspaceHeader section="intelligence" title={project.title} description={[fundingSource,project.primaryInstitutionName,project.state].filter(Boolean).join(' · ')} />
+        <Link href="/funding/intelligence" className="inline-flex min-h-10 items-center gap-2 text-sm font-medium text-blue-700"><ArrowLeft className="h-4 w-4" />Back to research results</Link>
       </div>
 
-      <section className="border-b border-teal-950/10 bg-[#0b3437] text-white">
-        <div className="mx-auto max-w-7xl px-4 py-9 sm:px-6 sm:py-12 lg:px-8">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-teal-100/70"><span className="rounded-full border border-teal-100/20 bg-white/10 px-2.5 py-1 text-teal-50">{fundingSource}</span>{project.schemeName ? <span>{project.schemeName}</span> : null}</div>
-          <h1 className="mt-4 max-w-4xl text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">{project.title}</h1>
-          <div className="mt-6 flex flex-wrap gap-x-6 gap-y-3 text-sm text-teal-50/75">
-            {project.primaryInstitutionName ? <span className="flex items-center gap-2"><Building2 className="h-4 w-4" />{project.primaryInstitutionName}</span> : null}
-            {project.state ? <span className="flex items-center gap-2"><MapPin className="h-4 w-4" />{project.state}</span> : null}
-          </div>
-        </div>
-      </section>
-
-      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-7 sm:px-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
+      <div className="mx-auto grid max-w-[1440px] gap-6 px-4 py-7 sm:px-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
         <div className="space-y-6">
           <EvidenceSection title="Project overview">{abstract || <span className="italic text-slate-400">The source did not provide a project abstract. Metadata below is shown exactly as reported.</span>}</EvidenceSection>
           {project.objectivesText ? <EvidenceSection title="Objectives">{project.objectivesText}</EvidenceSection> : null}
@@ -162,7 +154,7 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
         </aside>
       </div>
 
-      {similar.length ? <section className="border-t border-slate-200 bg-white/60"><div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8"><div className="flex items-end justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-teal-700">Semantic neighbors</p><h2 className="mt-1 text-2xl font-semibold">Similar funded projects</h2></div></div><div className="mt-5 flex gap-4 overflow-x-auto pb-3">{similar.map((item) => <SimilarCard key={item.id} item={item} />)}</div></div></section> : null}
+      {similar.length ? <section className="border-t border-slate-200 bg-white/60"><div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8"><div className="flex items-end justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-teal-700">Semantic neighbors</p><h2 className="mt-1 text-2xl font-semibold">Similar funded projects</h2></div></div><div className="mt-5 flex gap-4 overflow-x-auto pb-3">{similar.map((item) => <SimilarCard key={item.id} item={item} />)}</div></div></section> : null}
     </main>
   )
 }

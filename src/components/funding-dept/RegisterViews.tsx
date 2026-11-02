@@ -30,15 +30,16 @@ const deadlineTone = (s: DeadlineState) => s.startsWith('MISSED') ? 'text-red-70
 
 function useJson<T>(url: string | null, revision = 0) {
   const { authFetch } = useAuth()
+  const [loadedUrl,setLoadedUrl] = useState<string | null>(null)
   const [data, setData] = useState<T | null>(null); const [error, setError] = useState(''); const [loading, setLoading] = useState(false)
   useEffect(() => {
     if (!url) return
     let live = true; setLoading(true); setError('')
-    authFetch(url).then(async r => { const body = await r.json().catch(() => null); if (!r.ok) throw Error(body?.error || `Request failed (${r.status})`); if (live) setData(body) })
+    authFetch(url).then(async r => { const body = await r.json().catch(() => null); if (!r.ok) throw Error(body?.error || `Request failed (${r.status})`); if (live) { setData(body); setLoadedUrl(url) } })
       .catch(e => { if (live) setError(e.message) }).finally(() => { if (live) setLoading(false) })
     return () => { live = false }
   }, [url, revision, authFetch])
-  return { data, error, loading }
+  return { data: loadedUrl === url && !error ? data : null, error, loading }
 }
 
 function Pager({ page, total = 0, pageSize = 20, onChange }: { page: number; total?: number; pageSize?: number; onChange: (n: number) => void }) {
@@ -138,12 +139,11 @@ type Responsibility = {
 type RegisterRow = { callId: string; title: string; agency: string | null; enteredAt: string; deadline: string | null; schoolNames: string[]; submissionLabel: string; deadlineState: DeadlineState; nextAction: string; responsibilities: Responsibility[] }
 type RegisterPayload = { rows: RegisterRow[]; total: number; page: number; pageSize: number; totals: { calls: number; responsibilities: number; schools: number; allocations: number; allocatedSubmissions: number }; windowLabel: string; lens: string }
 
-export function RegisterView({ periodQuery, filters, setFilters, schools, revision, onAudit }: {
-  periodQuery: string; filters: RegisterFilterState; setFilters: (f: RegisterFilterState) => void; schools: Array<{ id: string; name: string }>; revision: number; onAudit: (callId: string) => void
+export function RegisterView({ periodQuery, filters, setFilters, schools, revision, onAudit, page, setPage }: {
+  periodQuery: string; filters: RegisterFilterState; setFilters: (f: RegisterFilterState) => void; schools: Array<{ id: string; name: string }>; revision: number; onAudit: (callId: string) => void; page: number; setPage: (page:number) => void
 }) {
   useTenantLocale()
-  const [page, setPage] = useState(1); const [open, setOpen] = useState<Record<string, boolean>>({})
-  useEffect(() => setPage(1), [periodQuery, filters])
+  const [open, setOpen] = useState<Record<string, boolean>>({})
   const query = new URLSearchParams(periodQuery)
   for (const [k, v] of Object.entries(filters)) if (v) query.set(k, v)
   const { data, error, loading } = useJson<RegisterPayload>(`/api/funding-dept/reports/register?${query}&page=${page}`, revision)

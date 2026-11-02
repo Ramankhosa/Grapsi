@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import PersonalGrantActions, { PersonalGrantProvider, PersonalGrantLoadError } from './PersonalGrantActions'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -267,6 +268,7 @@ export default function FundingCallDetailPage({
 
         {call ? (
           <>
+            <PersonalGrantProvider callIds={[callId]}><PersonalGrantLoadError /><PersonalGrantActions callId={callId} title={call.title} /></PersonalGrantProvider>
             <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="text-xl font-semibold">Core Details</h2>

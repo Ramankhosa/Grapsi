@@ -48,11 +48,17 @@ export async function sendEmail(msg: EmailMessage) {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
   })
   if (!res.ok) {
     const t = await res.text().catch(() => '')
     throw new Error(`Mailjet send failed (${res.status}): ${t}`)
+  }
+  const result = await res.json().catch(() => null)
+  // Mailjet can return HTTP 200 while rejecting an individual message.
+  if (!Array.isArray(result?.Messages) || result.Messages.length !== 1 || result.Messages[0]?.Status !== 'success') {
+    throw new Error('Mailjet did not confirm message acceptance')
   }
   return { sent: true }
 }

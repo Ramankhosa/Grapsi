@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { FormEvent, useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, BrainCircuit, Check, Loader2, Search, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BrainCircuit, Check, Loader2, Search, Clock3, Sparkles } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
 import AnalysisHistoryList from './AnalysisHistoryList'
+import FundingWorkspaceHeader from '@/components/funding/FundingWorkspaceHeader'
 
 const EXAMPLE = `We propose a low-cost, offline retinal screening system for rural primary-health centres. The system will combine a portable fundus camera with an on-device AI model to identify patients at risk of diabetic retinopathy and prioritise referrals. We will validate it with community health workers across three districts.`
 
@@ -65,31 +66,33 @@ export default function NewIdeaAnalysisPage() {
   if (authLoading) return <div className="flex min-h-[70vh] items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-teal-700" /></div>
 
   return (
-    <main className="min-h-screen bg-[#f5f8f7] text-slate-900">
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
+    <main className="funding-workspace">
+      <div className="mx-auto max-w-[1440px] px-4 pb-10 sm:px-6 lg:px-8">
+        <FundingWorkspaceHeader section="idea" title="Give your next idea a stronger starting point."
+          description="Map the funded research around your idea, identify potential gaps, and explore funders with evidence behind them." />
         <Link href="/funding/intelligence" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-teal-800"><ArrowLeft className="h-4 w-4" /> Funding landscape</Link>
         <div className="mt-5">
           <AnalysisHistoryList token={token} compact />
         </div>
-        <div className="mt-6 grid overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:grid-cols-[0.88fr_1.12fr]">
-          <section className="relative overflow-hidden bg-[#0b3437] p-7 text-white sm:p-10">
-            <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-teal-300/10 blur-3xl" />
+        <div className="mt-6 grid overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5 lg:grid-cols-[0.72fr_1.28fr]">
+          <section className="relative overflow-hidden border-r border-slate-100 bg-blue-50/70 p-7 text-slate-900 sm:p-10">
+            <div className="hidden" />
             <div className="relative">
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-teal-100"><BrainCircuit className="h-4 w-4" /> Whitespace analysis</div>
-              <h1 className="mt-6 text-3xl font-semibold leading-tight sm:text-4xl">Find what is still unfunded in your area.</h1>
-              <p className="mt-4 text-sm leading-7 text-teal-50/70">We read the projects agencies have already sanctioned in your space, then show you the few directions nobody has been funded to do yet — with a worked example for each. No funding call is picked for you.</p>
+              <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"><BrainCircuit className="h-4 w-4" /> Whitespace analysis</div>
+              <h2 className="mt-6 text-2xl font-semibold leading-tight tracking-tight">From an early idea to a clearer direction.</h2>
+              <p className="mt-4 text-sm leading-7 text-slate-500">Understand the awarded projects closest to your idea, compare their approaches, and explore directions the available evidence may not cover.</p>
               <div className="mt-8 space-y-4">
                 {[
                   ['What is already done', 'The sanctioned projects nearest your idea, who funded them, and at what size.'],
-                  ['What is still open', 'At most three pursuable directions the funded record has not covered.'],
+                  ['What is still open', 'Up to three potential directions to investigate, grounded in the available research record.'],
                   ['Then, when you ask for it', 'Choose a funder from the ones whose award history fits, then pick which of their calls to check your idea against.'],
-                ].map(([title, description]) => <div key={title} className="flex gap-3"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-200/15"><Check className="h-3.5 w-3.5 text-teal-200" /></span><div><p className="text-sm font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-teal-50/60">{description}</p></div></div>)}
+                ].map(([title, description]) => <div key={title} className="flex gap-3"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100"><Check className="h-3.5 w-3.5 text-blue-600" /></span><div><p className="text-sm font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-slate-500">{description}</p></div></div>)}
               </div>
             </div>
           </section>
 
           <section className="p-6 sm:p-10">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-teal-700"><Sparkles className="h-4 w-4" /> Describe your idea</div>
+            <div className="flex items-center gap-2 text-xs font-medium text-teal-700"><Sparkles className="h-4 w-4" /> Describe your idea</div>
             <h2 className="mt-3 text-2xl font-semibold">What are you proposing?</h2>
             <p className="mt-2 text-sm leading-6 text-slate-500">Include the problem, proposed approach, intended users, deployment context, and expected outcome. The more specific you are, the sharper the whitespace read.</p>
 
@@ -98,12 +101,12 @@ export default function NewIdeaAnalysisPage() {
 
             <form onSubmit={submit} className="mt-6">
               <div className="relative">
-                <textarea value={ideaText} onChange={(event) => setIdeaText(event.target.value)} rows={11} maxLength={12000} placeholder="Example: We propose to develop…" className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:bg-white focus:ring-4 focus:ring-teal-100" />
+                <textarea value={ideaText} onChange={(event) => setIdeaText(event.target.value)} aria-label="Describe your research idea" rows={11} maxLength={12000} placeholder="Example: We propose to develop…" className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:bg-white focus:ring-4 focus:ring-teal-100" />
                 <span className={`absolute bottom-3 right-3 text-xs ${ideaText.length >= 50 ? 'text-teal-700' : 'text-slate-400'}`}>{ideaText.length}/12,000</span>
               </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><button type="button" onClick={() => setIdeaText(EXAMPLE)} className="text-xs font-semibold text-teal-700 hover:text-teal-900">Use an example</button><span className="inline-flex items-center gap-1.5 text-xs text-slate-400"><ShieldCheck className="h-3.5 w-3.5" /> Your analysis remains private</span></div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><button type="button" onClick={() => setIdeaText(EXAMPLE)} className="text-xs font-semibold text-teal-700 hover:text-teal-900">Use an example</button><span className="inline-flex items-center gap-1.5 text-xs text-slate-400"><Clock3 className="h-3.5 w-3.5" /> Saved to your analysis history</span></div>
               {error ? <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div> : null}
-              <button type="submit" disabled={!token || ideaText.trim().length < 50 || submitting} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-800 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-900/10 transition hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">{submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating analysis…</> : <>Find the open space <ArrowRight className="h-4 w-4" /></>}</button>
+              <button type="submit" disabled={!token || ideaText.trim().length < 50 || submitting} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-900/10 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">{submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating analysis…</> : <>Explore my idea <ArrowRight className="h-4 w-4" /></>}</button>
             </form>
           </section>
         </div>

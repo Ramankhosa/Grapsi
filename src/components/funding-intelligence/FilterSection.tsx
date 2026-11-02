@@ -20,7 +20,10 @@ export default function FilterSection({
   maxItems?: number
 }) {
   const [open, setOpen] = useState(initialOpen)
-  const visibleItems = items.slice(0, maxItems)
+  const [query, setQuery] = useState('')
+  const [showAll, setShowAll] = useState(false)
+  const matchingItems = items.filter(item => String(item.value).toLowerCase().includes(query.trim().toLowerCase()))
+  const visibleItems = showAll || query ? matchingItems : matchingItems.filter((item, index) => index < maxItems || selected.includes(String(item.value)))
   if (!items.length) return null
 
   return (
@@ -31,6 +34,7 @@ export default function FilterSection({
       </button>
       {open ? (
         <div className="mt-3 space-y-1.5">
+          {items.length > maxItems && <input aria-label={`Search ${label.toLowerCase()} filters`} value={query} onChange={event => setQuery(event.target.value)} placeholder={`Find ${label.toLowerCase()}…`} className="mb-2 min-h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-blue-400" />}
           {visibleItems.map((item) => {
             const value = String(item.value)
             const active = selected.includes(value)
@@ -47,6 +51,8 @@ export default function FilterSection({
               </label>
             )
           })}
+          {!visibleItems.length && <p className="px-2 py-2 text-xs text-slate-500">No matching filter values.</p>}
+          {!query && items.length > maxItems && <button type="button" onClick={() => setShowAll(value => !value)} className="min-h-9 px-2 text-xs font-medium text-blue-700">{showAll ? 'Show fewer' : `Show all ${items.length}`}</button>}
         </div>
       ) : null}
     </div>

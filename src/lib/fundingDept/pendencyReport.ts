@@ -16,6 +16,7 @@ import { DEFAULT_MATCH_WIDTH, type MatchWidth } from './matchBands'
 import { deadlineCoordinatorSql, schoolDeadlineFactsSql } from './deadlineOutcomeSql'
 
 export type PendencyFilters = {
+  workState?: string | null
   /** The tenant's zone for deadline days; filled by getPendency. */
   timeZone?: string
   schoolIds: string[]
@@ -42,6 +43,8 @@ export type PendencyFilters = {
 export class PendencyError extends Error { constructor(message: string, public status = 400) { super(message) } }
 
 export type PendencyRow = {
+  nextAction: { title: string; owner: string | null; dueAt: Date | null; waitingWith: string; blocker: string | null } | null
+  daysInStage: number
   workState: 'NOT_REVIEWED' | 'ALLOCATION_PENDING' | 'ALLOCATED_NOT_SUBMITTED' | 'NO_COORDINATOR' | 'COMPLETED_NO_ALLOCATION'
   callId: string; title: string; agency: string | null; deadline: Date | null; daysToDeadline: number | null
   school: { id: string; name: string }; coordinator: { id: string; name: string } | null
@@ -75,6 +78,9 @@ export function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
         history.allocations allocations_at_deadline, history.submissions submissions_at_deadline, history.closed closed_at_deadline,
         (SELECT count(*)::int FROM dsr_applications a WHERE a.tenant_id=${tenantId} AND a.call_id=p.call_id AND a.school_id=p.school_id AND ${dsrApplicationSubmittedSql('a')}) submissions,
         disp.reason disposition_reason,
+        next_action.title next_title, next_action.owner_name next_owner, next_action.due_at next_due,
+        next_action.waiting_with next_waiting, next_action.blocker next_blocker,
+        COALESCE(next_action.created_at,tri.decided_at,mapping.mapped_at,fc."createdAt") stage_started_at,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id
           WHERE ca.tenant_id=${tenantId} AND ca.funding_call_id=p.call_id AND au.path[1]=p.school_id AND ca.status::text NOT IN (${Prisma.raw(NOT_TAKEN_UP)})) taken_up,
         (SELECT count(*)::int FROM call_assignments ca JOIN tenant_org_units au ON au.id=ca.assignee_org_unit_id
@@ -97,6 +103,10 @@ export function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
       CROSS JOIN LATERAL (SELECT count(*)::int n, min(m.first_seen_at) first_seen FROM funding_opportunity_matches m
         WHERE m.tenant_id=${tenantId} AND m.funding_call_id=p.call_id AND m.school_id=p.school_id AND ${currentQualifyingMatchSql('m',f.width ?? DEFAULT_MATCH_WIDTH)}) q
       LEFT JOIN call_school_triage tri ON tri.funding_call_id = p.call_id AND tri.org_unit_id = p.school_id
+      LEFT JOIN LATERAL (SELECT action.*, COALESCE(person.name,person.email) owner_name FROM dsr_actions action
+        LEFT JOIN users person ON person.id=action.owner_user_id
+        WHERE action.tenant_id=${tenantId} AND action.call_id=p.call_id AND action.school_id=p.school_id AND action.status IN ('OPEN','ACKNOWLEDGED')
+        ORDER BY action.is_next DESC,action.due_at ASC NULLS LAST,action.created_at LIMIT 1) next_action ON TRUE
       LEFT JOIN users cu ON cu.id = tri.action_completed_by_user_id
       WHERE ${visibleCallSql(tenantId, 'fc')}
         ${f.search ? Prisma.sql`AND (COALESCE(fc.scheme_title, fc.title) ILIKE ${`%${f.search}%`} OR COALESCE(fc.agency_name, fc."agencyName") ILIKE ${`%${f.search}%`} OR fc.id = ${f.search})` : Prisma.empty}
@@ -108,6 +118,7 @@ export function pendencySql(tenantId: string, f: PendencyFilters): Prisma.Sql {
       SELECT * FROM resp WHERE state IS NOT NULL ${f.minMatches ? Prisma.sql`AND matched_faculty >= ${f.minMatches}` : Prisma.empty}
         ${f.matchedOnly ? Prisma.sql`AND matched_faculty > 0 AND taken_up=0 AND independent=0` : Prisma.empty}
         ${f.coordinatorUserId==='none' ? Prisma.sql`AND coordinator_id IS NULL` : f.coordinatorUserId ? Prisma.sql`AND coordinator_id = ${f.coordinatorUserId}` : Prisma.empty}
+        ${f.workState === 'NOT_REVIEWED' ? Prisma.sql`AND triage_decided_at IS NULL AND taken_up=0` : f.workState === 'ALLOCATION_PENDING' ? Prisma.sql`AND triage_decided_at IS NOT NULL AND taken_up=0` : f.workState === 'ALLOCATED_NOT_SUBMITTED' ? Prisma.sql`AND taken_up>0` : f.workState === 'NO_NEXT_ACTION' ? Prisma.sql`AND next_title IS NULL` : Prisma.empty}
     )`
 }
 
@@ -120,6 +131,7 @@ function stateWhere(state: string | null | undefined): Prisma.Sql {
 export async function getPendency(tenantId: string, f: PendencyFilters) {
   f = { ...f, timeZone: f.timeZone ?? (await getTenantTimeZone(tenantId)) }
   if (f.state && f.state !== 'all' && !PENDENCY_STATES.includes(f.state as PendencyState)) throw new PendencyError('Unknown pendency state.')
+  if (f.workState && !['NOT_REVIEWED','ALLOCATION_PENDING','ALLOCATED_NOT_SUBMITTED','NO_NEXT_ACTION'].includes(f.workState)) throw new PendencyError('Unknown work stage.')
   const empty = { rows: [] as PendencyRow[], total: 0, page: f.page, pageSize: f.pageSize, members: [] as PendencyMember[],
     summary: { missed: 0, atRisk: 0, pending: 0, completedNoAllocation: 0 } }
   if (!f.schoolIds.length) return empty
@@ -154,6 +166,8 @@ export async function getPendency(tenantId: string, f: PendencyFilters) {
       // Missed calls stopped accruing at the deadline; open ones are still accruing.
       const end = r.state === 'MISSED' && r.deadline ? new Date(r.deadline) : f.asOf
       return {
+        nextAction: r.next_title ? { title: r.next_title, owner: r.next_owner, dueAt: r.next_due, waitingWith: r.next_waiting, blocker: r.next_blocker } : null,
+        daysInStage: Math.max(0, Math.floor((f.asOf.getTime() - new Date(r.stage_started_at || r.first_matched_at).getTime()) / 86400000)),
         workState: !r.coordinator_id ? 'NO_COORDINATOR' : r.state==='COMPLETED_NO_ALLOCATION' ? 'COMPLETED_NO_ALLOCATION'
           : r.taken_up>0 ? 'ALLOCATED_NOT_SUBMITTED' : r.triage_decided_at ? 'ALLOCATION_PENDING' : 'NOT_REVIEWED',
         callId: r.call_id, title: r.title, agency: r.agency, deadline: r.deadline, daysToDeadline: r.days_to_deadline,

@@ -202,10 +202,15 @@ export const assignmentInclude = {
       agencyName: true,
       close_date: true,
       deadlineAt: true,
+      import_run_id: true,
+      entry_closes_at: true,
+      final_deadline_at: true,
+      source_closed_at: true,
+      deadline_timezone: true,
       source_url: true,
     },
   },
-  assignee: { select: { id: true, name: true, email: true } },
+  assignee: { select: { id: true, name: true, email: true, status: true } },
   assigned_by: { select: { id: true, name: true, email: true } },
   // The reassignment chain, so a passed-on call reads as one story rather than
   // two unrelated records.

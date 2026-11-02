@@ -16,6 +16,7 @@ import { coordinatorSql } from './hubScope'
 import { indiaDaysToDeadlineSql } from './reportDefinitions'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
 import { safeTimeZone } from '@/lib/i18n/sql'
+import { hasSubmissionEvidenceSql, verifiedSubmissionSql } from './submissionEvidenceSql'
 
 export const ASSIGNED_STATUS_GROUPS: Record<string, string[] | null> = {
   active: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'],
@@ -27,6 +28,7 @@ export const ASSIGNED_STATUS_GROUPS: Record<string, string[] | null> = {
 export const SILENT_DAYS = 7
 
 export type AssignedFilters = {
+  evidence?: string | null
   /** The tenant's zone for deadline days and "this month"; filled by getAssignedCalls. */
   timeZone?: string
   schoolIds: string[]
@@ -50,6 +52,7 @@ export type AssignedFilters = {
 export class AssignedError extends Error { constructor(message: string, public status = 400) { super(message) } }
 
 export type AssignedRow = {
+  applicationId: string | null; verified: boolean; lastFacultyContactAt: Date | null
   id: string; status: string; outcome: string; createdAt: Date; respondedAt: Date | null; declinedReason: string | null
   call: { id: string; title: string; agency: string | null; deadline: Date | null; daysToDeadline: number | null }
   internalDeadline: Date | null; daysToDue: number | null; overdue: boolean
@@ -71,6 +74,8 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
   return Prisma.sql`
     WITH base AS (
       SELECT ca.id, ca.status::text status, ca.outcome::text outcome, ca.created_at, ca.responded_at, ca.declined_reason, ca.deadline_at, ca.submitted_at, ca.completed_at,
+        application.id application_id, ${verifiedSubmissionSql('application')} verified, ${hasSubmissionEvidenceSql('application')} has_evidence,
+        (SELECT max(contact.happened_at) FROM assignment_follow_ups contact WHERE contact.assignment_id=ca.id AND contact.kind IN ('CALL','EMAIL','MEETING') AND contact.contact_target='FACULTY') last_faculty_contact,
         ca.submission_reference, ca.submission_url, ca.submission_evidence_status, ca.lapsed_at, ca.allocation_method, ca.allocation_reason, ca.allocation_note,
         ca.assignee_user_id, ca.assigned_by_user_id, ca.previous_assignment_id, ca.funding_call_id,
         COALESCE(fc.scheme_title, fc.title) call_title, COALESCE(fc.agency_name, fc."agencyName") agency, ${effectiveCallDeadlineSql('fc', f.timeZone)} call_deadline,
@@ -87,6 +92,7 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
       JOIN tenant_org_units su ON su.id = au.path[1]
       JOIN funding_calls fc ON fc.id = ca.funding_call_id
       JOIN users fu ON fu.id = ca.assignee_user_id
+      LEFT JOIN dsr_applications application ON application.assignment_id=ca.id AND application.tenant_id=ca.tenant_id
       LEFT JOIN users bu ON bu.id = ca.assigned_by_user_id
       LEFT JOIN LATERAL (SELECT x.happened_at, x.kind, x.note, x.created_by_user_id FROM assignment_follow_ups x
         WHERE x.assignment_id=ca.id AND x.kind <> 'TRIAGE' ORDER BY x.happened_at DESC, x.id DESC LIMIT 1) lf ON TRUE
@@ -102,10 +108,11 @@ function baseSql(tenantId: string, f: AssignedFilters): Prisma.Sql {
     ), flagged AS (
       SELECT b.*,
         (b.status IN ${Prisma.raw(ACTIVE)} AND b.due_days < 0) overdue,
-        (b.status IN ${Prisma.raw(ACTIVE)} AND COALESCE(b.last_at, b.created_at) < ${utcTimestamp(new Date(f.asOf.getTime() - SILENT_DAYS * 86400000))}) silent,
+        (b.status IN ${Prisma.raw(ACTIVE)} AND COALESCE(b.last_faculty_contact, b.created_at) < ${utcTimestamp(new Date(f.asOf.getTime() - SILENT_DAYS * 86400000))}) silent,
         (b.status = 'ASSIGNED' AND b.created_at < ${utcTimestamp(new Date(f.asOf.getTime() - SILENT_DAYS * 86400000))}) awaiting_long,
         (b.status = 'COMPLETED' AND (COALESCE(b.submitted_at, b.completed_at) AT TIME ZONE 'UTC' AT TIME ZONE ${safeTimeZone(f.timeZone)})
-          >= date_trunc('month', (${f.asOf.toISOString()}::timestamptz AT TIME ZONE ${safeTimeZone(f.timeZone)}))) submitted_this_month
+          >= date_trunc('month', (${f.asOf.toISOString()}::timestamptz AT TIME ZONE ${safeTimeZone(f.timeZone)}))
+          AND COALESCE(b.submitted_at,b.completed_at)<=${utcTimestamp(f.asOf)}) submitted_this_month
       FROM base b
     )`
 }
@@ -121,6 +128,7 @@ function where(f: AssignedFilters): Prisma.Sql {
   if (f.submittedIn === 'month') parts.push(Prisma.sql`submitted_this_month`)
   if (f.silent) parts.push(Prisma.sql`silent`)
   if (f.awaitingReply) parts.push(Prisma.sql`awaiting_long`)
+  if (f.evidence) parts.push(Prisma.sql`status='COMPLETED' AND ${f.evidence === 'verified' ? Prisma.sql`verified` : Prisma.sql`NOT verified`}`)
   return parts.length ? Prisma.sql`WHERE ${Prisma.join(parts, ' AND ')}` : Prisma.empty
 }
 
@@ -129,7 +137,8 @@ export async function getAssignedCalls(tenantId: string, f: AssignedFilters) {
   if (f.status && !(f.status in ASSIGNED_STATUS_GROUPS)) throw new AssignedError('Unknown status filter.')
   if (f.due && !['overdue', '7', '14', '30'].includes(f.due)) throw new AssignedError('Unknown deadline filter.')
   if (f.submittedIn && f.submittedIn !== 'month') throw new AssignedError('Unknown submission filter.')
-  const summaryEmpty = { active: 0, awaitingReply: 0, overdue: 0, silent: 0, submittedThisMonth: 0 }
+  if (f.evidence && !['verified','unverified'].includes(f.evidence)) throw new AssignedError('Unknown evidence filter.')
+  const summaryEmpty = { active: 0, awaitingReply: 0, overdue: 0, silent: 0, submittedThisMonth: 0, awaitingVerification: 0, verifiedThisMonth: 0 }
   if (!f.schoolIds.length) return { rows: [] as AssignedRow[], total: 0, page: f.page, pageSize: f.pageSize, summary: summaryEmpty }
   const base = baseSql(tenantId, f)
   const [summary] = await prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`${base}
@@ -137,7 +146,9 @@ export async function getAssignedCalls(tenantId: string, f: AssignedFilters) {
       count(*) FILTER (WHERE awaiting_long)::int awaiting_reply,
       count(*) FILTER (WHERE overdue)::int overdue,
       count(*) FILTER (WHERE silent)::int silent,
-      count(*) FILTER (WHERE submitted_this_month)::int submitted_this_month
+      count(*) FILTER (WHERE submitted_this_month)::int submitted_this_month,
+      count(*) FILTER (WHERE submitted_this_month AND verified)::int verified_this_month,
+      count(*) FILTER (WHERE status='COMPLETED' AND NOT verified)::int awaiting_verification
     FROM flagged`)
   const filter = where(f)
   const [count] = await prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`${base} SELECT count(*)::int n FROM flagged ${filter}`)
@@ -152,6 +163,7 @@ export async function getAssignedCalls(tenantId: string, f: AssignedFilters) {
      ${f.all ? Prisma.empty : Prisma.sql`LIMIT ${f.pageSize} OFFSET ${(f.page - 1) * f.pageSize}`}`)
   return {
     rows: rows.map((r): AssignedRow => ({
+      applicationId: r.application_id, verified: Boolean(r.verified), lastFacultyContactAt: r.last_faculty_contact,
       id: r.id, status: r.status, outcome: r.outcome, createdAt: r.created_at, respondedAt: r.responded_at, declinedReason: r.declined_reason,
       call: { id: r.funding_call_id, title: r.call_title, agency: r.agency, deadline: r.call_deadline, daysToDeadline: r.call_days },
       internalDeadline: r.deadline_at, daysToDue: r.due_days, overdue: r.overdue,
@@ -163,23 +175,23 @@ export async function getAssignedCalls(tenantId: string, f: AssignedFilters) {
       daysSinceFollowUp: r.last_at ? Math.floor((f.asOf.getTime() - new Date(r.last_at).getTime()) / 86400000) : null,
       nextReminderAt: r.next_reminder_at,
       submittedAt: r.submitted_at, completedAt: r.completed_at, submissionReference: r.submission_reference, submissionUrl: r.submission_url,
-      evidence: r.submission_evidence_status, lapsedAt: r.lapsed_at,
+      evidence: r.has_evidence ? 'ATTACHED' : r.submitted_at || r.status === 'COMPLETED' ? 'NOTE' : 'MISSING', lapsedAt: r.lapsed_at,
       passedOnTo: r.next_id ? { id: r.next_id, name: r.next_name, status: r.next_status } : null,
       passedOnFrom: r.previous_assignment_id ? { id: r.previous_assignment_id, name: r.prev_name } : null,
     })),
     total: count?.n ?? 0, page: f.page, pageSize: f.pageSize,
     summary: { active: summary?.active ?? 0, awaitingReply: summary?.awaiting_reply ?? 0, overdue: summary?.overdue ?? 0, silent: summary?.silent ?? 0,
-      submittedThisMonth: summary?.submitted_this_month ?? 0 },
+      submittedThisMonth: summary?.submitted_this_month ?? 0, awaitingVerification: summary?.awaiting_verification ?? 0, verifiedThisMonth: summary?.verified_this_month ?? 0 },
   }
 }
 
 export function assignedExportTables(rows: AssignedRow[]) {
   return [{ name: 'Assigned calls', rows: [
     ['Assignment ID', 'Call ID', 'Call', 'Agency', 'Agency deadline', 'Internal deadline', 'Faculty', 'Faculty email', 'School', 'Assigned by', 'Assigned on', 'Status',
-      'Responded', 'Declined reason', 'Follow-ups', 'Faculty contacts', 'Last follow-up', 'Last follow-up by', 'Next reminder', 'Submitted on', 'Submission reference', 'Evidence', 'Outcome', 'Manual allocation reason'],
+      'Responded', 'Declined reason', 'Activity entries', 'Faculty contacts', 'Last activity', 'Last activity by', 'Next reminder', 'Recorded submission date', 'Submission reference', 'Current evidence', 'Verification state', 'Outcome', 'Manual allocation reason'],
     ...rows.map(r => [r.id, r.call.id, r.call.title, r.call.agency, r.call.deadline?.toISOString().slice(0, 10), r.internalDeadline?.toISOString().slice(0, 10), r.faculty.name, r.faculty.email,
       r.school.name, r.assignedBy?.name, r.createdAt.toISOString().slice(0, 10), r.status, r.respondedAt?.toISOString().slice(0, 10), r.declinedReason, r.followUps, r.facultyContacts,
       r.lastFollowUp ? `${r.lastFollowUp.at.toISOString().slice(0, 10)} ${r.lastFollowUp.kind}` : '', r.lastFollowUp?.by, r.nextReminderAt?.toISOString().slice(0, 10),
-      r.submittedAt?.toISOString().slice(0, 10), r.submissionReference, r.evidence, r.outcome, r.allocationReason]),
+      r.submittedAt?.toISOString().slice(0, 10), r.submissionReference, r.evidence, r.verified ? 'VERIFIED' : 'UNVERIFIED', r.outcome, r.allocationReason]),
   ] }]
 }

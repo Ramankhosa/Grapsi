@@ -10,7 +10,7 @@ import { clientTimeZone, useTenantLocale } from '@/hooks/useTenantLocale'
 import { useState } from 'react'
 
 import {
-  ExportButtons, Pager, ScopeFilters, Select, Stat, Status, Td, Th, Toggle, define, fmtDate, plural,
+  ExportButtons, ReportFilters, ReportStamp, Pager, ScopeFilters, Select, Stat, Status, Td, Th, Toggle, define, fmtDate, plural,
   useHubReport, type Filters, type HubBase, type OpenTab,
 } from './hubKit'
 
@@ -21,7 +21,7 @@ type Effort = { assignmentId: string; callId: string; callTitle: string; faculty
   highestStage: string | null; result: 'SUBMITTED' | 'IN_PROGRESS' | 'CLOSED'; silentThisWeek: boolean }
 type Log = { id: string; at: string; week: string; kind: string; target: string; stage: string | null; note: string; author: string | null; authorId: string
   callId: string | null; callTitle: string | null; faculty: string | null; assignmentId: string | null; school: string | null }
-type Payload = HubBase & { weeks: string[]; members: Member[]; effort: Effort[]; effortTotal: number; log: Log[]; logTotal: number
+type Payload = HubBase & { weeks: string[]; members: Member[]; effort: Effort[]; effortTotal: number; log: Log[]; logTotal: number; logPage: number; logPageSize: number
   totals: { followUps: number; facultyContacts: number; activeAssignments: number; silentThisWeek: number } }
 
 /** followUpReport.NO_OWNER: allocations in a school with no coordinator (not importable into a client bundle). */
@@ -33,39 +33,41 @@ const RESULT: Record<Effort['result'], { label: string; cls: string }> = { SUBMI
 
 export default function FollowUpsTab({ filters, setFilters, openTab }: { filters: Filters; setFilters: (f: Filters) => void; openTab: OpenTab }) {
   useTenantLocale()
-  const [page, setPage] = useState(1)
   const query = { weeks: '8', ...filters }
+  const page = Math.max(1, Number.parseInt(filters.page || '1', 10) || 1)
+  const setPage = (next: number) => setFilters({ ...filters, page: String(next) })
   const { data, error, loading } = useHubReport<Payload>('follow-ups', query, page, 0)
-  const set = (key: string, value: string) => { setFilters({ ...filters, [key]: value }); setPage(1) }
-  const setMany = (next: Filters) => { setFilters({ ...filters, ...next }); setPage(1) }
+  const set = (key: string, value: string) => { setFilters({ ...filters, [key]: value, page: '1', logPage: '1' }) }
+  const setMany = (next: Filters) => { setFilters({ ...filters, ...next, page: '1', logPage: '1' }) }
   const t = data?.totals
   const current = data?.weeks[data.weeks.length - 1]
   const memberIdOf = (userId: string) => data?.options.members.find(m => m.userId === userId)?.id || ''
   const maxCell = Math.max(1, ...(data?.members || []).flatMap(m => Object.values(m.weeks).map(c => c.followUps)))
 
   return <div className="space-y-4">
+    <ReportStamp data={data} />
     {filters.assignmentId && <p className="flex flex-wrap items-center gap-2 rounded border border-cobalt-100 bg-cobalt-50 px-3 py-2 text-sm">Showing one allocation: <strong>{filters.assignmentLabel || filters.assignmentId}</strong>
-      <button className="text-cobalt-700 underline" onClick={() => { const { assignmentId: _a, assignmentLabel: _l, ...rest } = filters; setFilters(rest) }}>Show all</button></p>}
+      <button className="text-cobalt-700 underline" onClick={() => { const { assignmentId: _a, assignmentLabel: _l, ...rest } = filters; setFilters({...rest,page:'1',logPage:'1'}) }}>Show all</button></p>}
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
       <Stat title={`Follow-ups (${data?.weeks.length ?? query.weeks} weeks)`} value={t?.followUps} help={define('Follow-up')} />
       <Stat title="Faculty contacts" value={t?.facultyContacts} help={define('Faculty contact')} />
-      <Stat title="Active allocations this week" value={t?.activeAssignments} help="Allocations assigned, accepted or in progress at some point this week, counted against their responsible coordinator." onClick={() => openTab('assigned', filters.memberId ? { memberId: filters.memberId } : {})} />
-      <Stat title="Silent this week" value={t?.silentThisWeek} active={filters.silentOnly === 'true'} tone={t?.silentThisWeek ? 'border-amber-300' : ''} help={define('Silent assignment')} onClick={() => set('silentOnly', filters.silentOnly === 'true' ? '' : 'true')} />
+      <Stat title="Active allocations now" value={t?.activeAssignments} help="Allocations still active now. The drill-down retains this call or allocation context." onClick={() => openTab('assigned', { ...(filters.callId ? {callId:filters.callId} : {}), ...(filters.assignmentId ? {assignmentId:filters.assignmentId} : {}) })} />
+      <Stat title="No faculty contact this week" value={t?.silentThisWeek} active={filters.silentOnly === 'true'} tone={t?.silentThisWeek ? 'border-amber-300' : ''} help="Still-open allocations with no faculty call, email or meeting this week. Internal notes and reminders do not clear the alert." onClick={() => set('silentOnly', filters.silentOnly === 'true' ? '' : 'true')} />
     </div>
 
-    <div className="nk-panel flex flex-wrap items-end gap-3 p-4">
+    <ReportFilters filters={filters} options={data?.options}>
       <ScopeFilters options={data?.options} lens={data?.lens} filters={filters} patch={setMany} />
       <Select label="Weeks" value={query.weeks} all={null} onChange={v => set('weeks', v)} options={[['4', 'Last 4 weeks'], ['8', 'Last 8 weeks'], ['12', 'Last 12 weeks'], ['26', 'Last 26 weeks']]} />
       <Toggle label="Faculty contacts only" checked={filters.facultyOnly === 'true'} onChange={v => set('facultyOnly', v ? 'true' : '')} help="Count only calls, emails and meetings with the faculty member." />
-      <Toggle label="Only allocations silent this week" checked={filters.silentOnly === 'true'} onChange={v => set('silentOnly', v ? 'true' : '')} />
-      <div className="ml-auto"><ExportButtons report="follow-ups" filters={query} /></div>
-    </div>
+      <Toggle label="No faculty contact this week" checked={filters.silentOnly === 'true'} onChange={v => set('silentOnly', v ? 'true' : '')} />
+      <div className="ml-auto"><ExportButtons report="follow-ups" filters={query} snapshot={data?.snapshot} disabled={loading || !!error || !data} /></div>
+    </ReportFilters>
     <Status loading={loading && !data} refreshing={loading && !!data} error={error} />
 
     {data && <section className="nk-panel overflow-x-auto">
       <div className="flex flex-wrap items-baseline justify-between gap-2 p-3"><h2 className="font-semibold">Week by week</h2>
-        <span className="nk-sub text-xs">{define('Follow-up week')} Each cell: follow-ups logged · allocations silent of those active. Click a cell for its log.</span></div>
-      <table className="min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>DSR member</Th>{data.weeks.map(w => <Th key={w} className="text-center">{weekLabel(w)}{w === current ? ' (now)' : ''}</Th>)}<Th className="text-right">Total</Th></tr></thead>
+        <span className="nk-sub text-xs">{define('Follow-up week')} Entries are credited to their author. Historical coverage uses the recorded owner at week end; missing ownership history stays unassigned. Internal entries do not count as faculty contact.</span></div>
+      <table className="dsr-table min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>DSR member</Th>{data.weeks.map(w => <Th key={w} className="text-center">{weekLabel(w)}{w === current ? ' (now)' : ''}</Th>)}<Th className="text-right">Total</Th></tr></thead>
         <tbody>{data.members.map(m => <tr key={m.userId}>
           <Td><span className="font-medium">{m.name}</span>{memberIdOf(m.userId) && data.lens === 'department' && <button className="block text-xs text-cobalt-700 underline" onClick={() => set('memberId', memberIdOf(m.userId))}>Only this member</button>}
             {m.userId === NO_OWNER_ROW && <p className="text-xs text-amber-700">Allocations in schools nobody covers — assign coverage</p>}</Td>
@@ -82,7 +84,7 @@ export default function FollowUpsTab({ filters, setFilters, openTab }: { filters
 
     {data && <section className="nk-panel overflow-x-auto">
       <div className="flex flex-wrap items-baseline justify-between gap-2 p-3"><h2 className="font-semibold">Effort by allocation</h2><span className="nk-sub text-xs">{plural(data.effortTotal, 'allocation')} active in these weeks · the contact trail behind each submission</span></div>
-      <table className="min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Faculty · call</Th><Th>Owner</Th><Th>Follow-ups per week</Th><Th className="text-right">Total</Th><Th>First contact</Th><Th>Last follow-up</Th><Th>Stage reached</Th><Th>Result</Th></tr></thead>
+      <table className="dsr-table min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Faculty · call</Th><Th>Owner</Th><Th>Follow-ups per week</Th><Th className="text-right">Total</Th><Th>First contact</Th><Th>Last follow-up</Th><Th>Stage reached</Th><Th>Result</Th></tr></thead>
         <tbody>{data.effort.map(e => <tr key={e.assignmentId}>
           <Td><button className="text-left font-medium text-cobalt-700 hover:underline" title="Open this allocation in Assigned Calls." onClick={() => openTab('assigned', { assignmentId: e.assignmentId, status: 'all' })}>{e.faculty}</button>
             <Link href={`/funding-dept/calls/${encodeURIComponent(e.callId)}`} target="_blank" className="block text-xs text-nickel-600 hover:underline">{e.callTitle}</Link><p className="nk-sub text-xs">{e.school} · allocated {fmtDate(e.allocatedAt)}</p></Td>
@@ -99,7 +101,7 @@ export default function FollowUpsTab({ filters, setFilters, openTab }: { filters
 
     {data && <section className="nk-panel">
       <div className="flex flex-wrap items-baseline justify-between gap-2 p-3"><h2 className="font-semibold">Follow-up log{filters.logWeek ? ` · week of ${weekLabel(filters.logWeek)}` : ''}{filters.logAuthor ? ` · ${data.members.find(m => m.userId === filters.logAuthor)?.name || ''}` : ''}</h2>
-        <span className="nk-sub text-xs">{data.logTotal > data.log.length ? `Latest ${data.log.length} of ${data.logTotal} — export for all` : plural(data.logTotal, 'entry', 'entries')}
+        <span className="nk-sub text-xs">{plural(data.logTotal, 'entry', 'entries')}
           {(filters.logWeek || filters.logAuthor) && <button className="ml-2 text-cobalt-700 underline" onClick={() => setMany({ logWeek: '', logAuthor: '' })}>Clear</button>}</span></div>
       <ul className="divide-y divide-nickel-100">{data.log.map(l => <li key={l.id} className="flex flex-wrap gap-x-4 gap-y-1 px-3 py-2 text-sm">
         <span className="w-28 shrink-0 text-xs text-nickel-600">{new Date(l.at).toLocaleString('en-IN', { timeZone: clientTimeZone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
@@ -107,7 +109,9 @@ export default function FollowUpsTab({ filters, setFilters, openTab }: { filters
         <span className="nk-badge shrink-0">{KIND[l.kind] || l.kind}{l.target === 'FACULTY' && ['CALL', 'EMAIL', 'MEETING'].includes(l.kind) ? ' · faculty' : l.target === 'AGENCY' ? ' · agency' : ''}</span>
         {l.stage && <span className="nk-badge nk-badge-live shrink-0">{STAGE[l.stage] || l.stage}</span>}
         <span className="min-w-[12rem] flex-1"><span className="text-xs text-nickel-600">{[l.faculty, l.callTitle, l.school].filter(Boolean).join(' · ')}</span><span className="block">{l.note}</span></span>
+        {l.assignmentId && <button type="button" className="text-xs font-medium text-blue-700" onClick={() => openTab('assigned',{assignmentId:l.assignmentId!,status:'all'})}>Open allocation</button>}
       </li>)}{!data.log.length && <li className="p-6 text-center nk-sub">No follow-ups logged.</li>}</ul>
+      <Pager page={data.logPage || 1} total={data.logTotal} pageSize={data.logPageSize || 25} onChange={next => setFilters({...filters,logPage:String(next)})} />
     </section>}
   </div>
 }

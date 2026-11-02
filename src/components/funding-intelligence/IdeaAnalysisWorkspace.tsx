@@ -1,5 +1,7 @@
 'use client'
 
+import FundingWorkspaceHeader from '@/components/funding/FundingWorkspaceHeader'
+
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -689,20 +691,16 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
   const crossHolders = priorWork?.crossHolders || []
 
   return (
-    <main className="min-h-screen bg-[#f6f8f7] text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <Link href="/funding/intelligence" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-teal-800"><ArrowLeft className="h-4 w-4" /> Landscape</Link>
-          <span className={`rounded-full px-3 py-1 text-xs font-bold ${run.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700' : run.status === 'FAILED' ? 'bg-rose-50 text-rose-700' : 'bg-teal-50 text-teal-700'}`}>{run.status === 'PROCESSING' ? 'ANALYZING' : run.status}</span>
-        </div>
-      </header>
+    <main className="funding-workspace">
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8"><FundingWorkspaceHeader section="idea" title="Your idea, seen through the evidence."
+        description="Compare prior work, investigate research gaps, and choose the next step for your proposal." /></div>
 
       <section className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 sm:py-8 lg:px-8">
+        <div className="mx-auto max-w-[1440px] px-4 py-7 sm:px-6 sm:py-8 lg:px-8">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-4xl">
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-teal-700"><Sparkles className="h-4 w-4" /> Idea intelligence</div>
-              <h1 className="mt-3 text-2xl font-semibold leading-tight sm:text-3xl">{run.title}</h1>
+              <div className="flex items-center gap-2 text-xs font-medium text-blue-600"><Sparkles className="h-4 w-4" /> Idea intelligence</div>
+              <h2 className="mt-3 text-2xl font-semibold leading-tight sm:text-3xl">{run.title}</h2>
               <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-500">{run.ideaText}</p>
               {run.structuredIdea?.facets?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
@@ -726,7 +724,7 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
         </div>
       </section>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
         {processing ? (
           <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
             <ProgressPanel run={run} />

@@ -11,7 +11,7 @@ import { Fragment, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { ACTION_STATUS_LABELS, type ActionStatus } from '@/lib/fundingDept/reportGlossary'
 import {
-  ExportButtons, Pager, ScopeFilters, Search, Select, Stat, Status, Td, Th, Toggle, daysLeftLabel, define, field, fmtDate, plural,
+  ExportButtons, ReportFilters, ReportStamp, Pager, ScopeFilters, Search, Select, Stat, Status, Td, Th, Toggle, daysLeftLabel, define, field, fmtDate, plural,
   useHubReport, type Filters, type HubBase, type OpenTab,
 } from './hubKit'
 
@@ -34,23 +34,26 @@ const STATUS_STYLE: Record<ActionStatus, { badge: string; dot: string }> = {
 
 export default function IncomingCallsTab({ filters, setFilters, openTab }: { filters: Filters; setFilters: (f: Filters) => void; openTab: OpenTab }) {
   useTenantLocale()
-  const [page, setPage] = useState(1); const [revision, setRevision] = useState(0); const [marking, setMarking] = useState<string | null>(null)
+  const [revision, setRevision] = useState(0); const [marking, setMarking] = useState<string | null>(null)
+  const page = Math.max(1, Number.parseInt(filters.page || '1', 10) || 1)
+  const setPage = (next: number) => setFilters({ ...filters, page: String(next) })
   const { data, error, loading } = useHubReport<Payload>('incoming-calls', filters, page, revision)
-  const set = (key: string, value: string) => { setFilters({ ...filters, [key]: value }); setPage(1) }
-  const patch = (next: Filters) => { setFilters({ ...filters, ...next }); setPage(1) }
-  const quick = (next: Filters) => { const { action: _a, closingWithin: _c, ...rest } = filters; setFilters({ ...rest, ...next }); setPage(1) }
+  const set = (key: string, value: string) => { setFilters({ ...filters, [key]: value, page: '1', logPage: '1' }) }
+  const patch = (next: Filters) => { setFilters({ ...filters, ...next, page: '1', logPage: '1' }) }
+  const quick = (next: Filters) => { const { action: _a, closingWithin: _c, ...rest } = filters; setFilters({ ...rest, ...next, page: '1', logPage: '1' }) }
   const s = data?.summary
   const isQuick = (a: string, c = '') => (filters.action || '') === a && (filters.closingWithin || '') === c
 
   return <div className="space-y-4">
+    <ReportStamp data={data} />
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
       <Stat title={filters.includeExpired === 'true' ? 'Calls (open)' : 'Open calls'} value={s?.openCalls} active={isQuick('')} help="Every open call that concerns your schools. Click to clear the action filters." onClick={() => quick({})} />
       <Stat title="Not started" value={s?.notStarted} active={isQuick('NOT_STARTED')} tone={s?.notStarted ? 'border-amber-300' : ''} help={define('Action: Not started')} onClick={() => quick({ action: 'NOT_STARTED' })} />
       <Stat title="Closing in 7 days, not completed" value={s?.closingSoonNotCompleted} active={isQuick('NOT_COMPLETED', '7')} tone={s?.closingSoonNotCompleted ? 'border-red-300' : ''} help="Open calls closing within 7 local calendar days where at least one of your schools has not marked its action completed." onClick={() => quick({ action: 'NOT_COMPLETED', closingWithin: '7' })} />
-      <Stat title="Action completed" value={s?.completed} active={isQuick('COMPLETED')} help={define('Action: Action completed')} onClick={() => quick({ action: 'COMPLETED' })} />
+      <Stat title="DSR review recorded" value={s?.completed} active={isQuick('COMPLETED')} help={define(`Action: ${ACTION_STATUS_LABELS.COMPLETED}`)} onClick={() => quick({ action: 'COMPLETED' })} />
     </div>
 
-    <div className="nk-panel flex flex-wrap items-end gap-3 p-4">
+    <ReportFilters filters={filters} options={data?.options}>
       <ScopeFilters options={data?.options} lens={data?.lens} filters={filters} patch={patch} />
       <Select label="Action status" value={filters.action || ''} onChange={v => set('action', v)}
         options={[['NOT_STARTED', 'Not started'], ['IN_PROGRESS', 'In progress'], ['NOT_COMPLETED', 'Not completed'], ['COMPLETED', 'Action completed']]} />
@@ -60,34 +63,34 @@ export default function IncomingCallsTab({ filters, setFilters, openTab }: { fil
         options={[['MAPPED', 'Discipline mapping'], ['MATCHED_FACULTY', 'Matched faculty'], ['ORIGIN', 'Origin school']]} />
       <Toggle label="Include expired calls" checked={filters.includeExpired === 'true'} onChange={v => set('includeExpired', v ? 'true' : '')} help="Also show calls whose deadline has passed." />
       <Search value={filters.q || ''} onChange={v => set('q', v)} placeholder="Call title, agency or ID" />
-      <div className="ml-auto"><ExportButtons report="incoming-calls" filters={filters} /></div>
-    </div>
+      <div className="ml-auto"><ExportButtons report="incoming-calls" filters={filters} snapshot={data?.snapshot} disabled={loading || !!error || !data} /></div>
+    </ReportFilters>
 
     <Status loading={loading && !data} refreshing={loading && !!data} error={error} />
-    {data && <p className="nk-sub text-xs">{plural(data.total, 'call')} · sorted by deadline, soonest first · schools reached by discipline mapping or by a strong/moderate faculty match
+    {data && <p className="nk-sub text-xs">{plural(data.total, 'call')} · sorted by deadline, soonest first · schools reached by discipline mapping or by a faculty match meeting the institution’s current setting
       {data.matchesRefreshedAt ? ` · faculty matches refreshed ${new Date(data.matchesRefreshedAt).toLocaleString('en-IN', { timeZone: clientTimeZone(), dateStyle: 'medium', timeStyle: 'short' })}`
         : data.options.schools.length ? ' · faculty matching has not run yet for some schools' : ' · no schools in this view'}</p>}
 
     {data && <section className="nk-panel overflow-x-auto">
-      <table className="min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Call</Th><Th>Deadline</Th><Th>Schools</Th><Th className="text-right">Matched faculty</Th><Th>Shortlisted · allocated · submitted</Th><Th>Action</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
+      <table className="dsr-table dsr-table-mobile min-w-full text-sm"><thead className="bg-nickel-50"><tr><Th>Call</Th><Th>Deadline</Th><Th>Schools</Th><Th className="text-right">Matched faculty</Th><Th>Shortlisted · allocated · submitted</Th><Th>Action</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
         <tbody>{data.rows.map(row => {
           const dl = daysLeftLabel(row.daysToDeadline)
           return <Fragment key={row.callId}>
             <tr>
-              <Td><Link href={`/funding-dept/calls/${encodeURIComponent(row.callId)}`} target="_blank" className="font-medium text-cobalt-700 hover:underline" title="Open the call window in a new tab: schools, matching faculty, allocate and shortlist.">{row.title}</Link>
+              <Td label="Opportunity"><Link href={`/funding-dept/calls/${encodeURIComponent(row.callId)}`} target="_blank" className="font-medium text-cobalt-700 hover:underline" title="Open the call window in a new tab: schools, matching faculty, allocate and shortlist.">{row.title}</Link>
                 <p className="nk-sub text-xs">{row.agency || 'Agency not recorded'}</p></Td>
-              <Td className="whitespace-nowrap">{fmtDate(row.deadline)}<p className={`text-xs ${dl.tone}`}>{dl.text}</p></Td>
-              <Td><div className="flex max-w-md flex-wrap gap-1.5">{row.schools.map(sc => <span key={sc.schoolId} className="inline-flex items-center gap-1.5 rounded-full border border-nickel-200 bg-white px-2 py-0.5 text-xs"
+              <Td label="Entry deadline" className="whitespace-nowrap">{fmtDate(row.deadline)}<p className={`text-xs ${dl.tone}`}>{dl.text}</p></Td>
+              <Td label="Schools"><div className="flex max-w-md flex-wrap gap-1.5">{row.schools.map(sc => <span key={sc.schoolId} className="inline-flex items-center gap-1.5 rounded-full border border-nickel-200 bg-white px-2 py-0.5 text-xs"
                 title={`${sc.schoolName}\nReached by: ${sc.sourceLabels.join(', ')}\nCoordinator: ${sc.coordinator?.name || 'none'}\n${ACTION_STATUS_LABELS[sc.actionStatus]}${sc.completed ? ` on ${fmtDate(sc.completed.at)} by ${sc.completed.by || 'unknown'}${sc.completed.note ? ` — ${sc.completed.note}` : ''}` : ''}`}>
                 <span className={`h-2 w-2 rounded-full ${STATUS_STYLE[sc.actionStatus].dot}`} aria-hidden />{sc.schoolName}{sc.matchedFaculty > 0 && <span className="text-nickel-500">· {sc.matchedFaculty}</span>}</span>)}</div></Td>
-              <Td className="text-right tabular-nums">{row.matchedFaculty}</Td>
-              <Td className="tabular-nums">{row.shortlisted} · {row.allocations > 0
-                ? <button className="text-cobalt-700 underline" title="Open these allocations in Assigned Calls, including any unallocated, declined or lapsed." onClick={() => openTab('assigned', { callId: row.callId, status: 'all', callTitle: row.title })}>{row.liveAllocations}</button> : 0} · {row.submitted}
-                {row.allocations > row.liveAllocations && <span className="nk-sub block text-xs">+{row.allocations - row.liveAllocations} closed</span>}</Td>
-              <Td><span className={STATUS_STYLE[row.actionStatus].badge} title={define(`Action: ${ACTION_STATUS_LABELS[row.actionStatus]}`)}>{ACTION_STATUS_LABELS[row.actionStatus]}</span></Td>
-              <Td className="whitespace-nowrap text-right"><div className="flex justify-end gap-2">
+              <Td label="Matched faculty" className="text-right tabular-nums">{row.matchedFaculty}</Td>
+              <Td label="Shortlisted · active allocations · submissions" className="tabular-nums">{row.shortlisted} · {row.allocations > 0
+                ? <button className="text-cobalt-700 underline" title="Open these active allocations in Assigned Calls." onClick={() => openTab('assigned', { callId: row.callId, status: 'active', callTitle: row.title })}>{row.liveAllocations}</button> : 0} · {row.submitted}
+                {row.allocations > row.liveAllocations && <button className="block text-xs text-slate-500 underline" onClick={() => openTab('assigned',{callId:row.callId,status:'closed',callTitle:row.title})}>+{row.allocations - row.liveAllocations} closed</button>}</Td>
+              <Td label="DSR review"><span className={STATUS_STYLE[row.actionStatus].badge} title={define(`Action: ${ACTION_STATUS_LABELS[row.actionStatus]}`)}>{ACTION_STATUS_LABELS[row.actionStatus]}</span>{row.allocations > row.submitted && <p className="mt-2 text-xs text-amber-800">Application work remains</p>}</Td>
+              <Td label="Next action" className="whitespace-nowrap text-right"><div className="flex justify-end gap-2">
                 <Link href={`/funding-dept/calls/${encodeURIComponent(row.callId)}`} target="_blank" className="nk-btn-secondary nk-btn-xs">Open call</Link>
-                <button className="nk-btn-secondary nk-btn-xs" aria-expanded={marking === row.callId} onClick={() => setMarking(marking === row.callId ? null : row.callId)}>{row.actionStatus === 'COMPLETED' ? 'Completed ✓' : 'Mark completed'}</button></div></Td>
+                <button className="nk-btn-secondary nk-btn-xs" aria-expanded={marking === row.callId} onClick={() => setMarking(marking === row.callId ? null : row.callId)}>{row.actionStatus === 'COMPLETED' ? 'Review recorded ✓' : 'Record review outcome'}</button></div></Td>
             </tr>
             {marking === row.callId && <tr><td colSpan={7} className="bg-nickel-50 p-3"><MarkCompleted row={row} onDone={() => { setMarking(null); setRevision(r => r + 1) }} /></td></tr>}
           </Fragment>
@@ -111,14 +114,14 @@ export function MarkCompleted({ row, onDone }: { row: { callId: string; schools:
   }
   return <div className="space-y-3">
     {open.length > 0 && <form className="flex flex-wrap items-end gap-3" onSubmit={e => { e.preventDefault(); if (picked.length) void send(picked, true) }}>
-      <fieldset className="flex flex-wrap gap-3 text-sm"><legend className="mb-1 text-xs text-nickel-600">Mark the DSR action completed for</legend>
+      <fieldset className="flex flex-wrap gap-3 text-sm"><legend className="mb-1 text-xs text-nickel-600">Record this review outcome for</legend>
         {open.map(s => <label key={s.schoolId} className="flex items-center gap-1.5"><input type="checkbox" checked={picked.includes(s.schoolId)} onChange={e => setPicked(p => e.target.checked ? [...p, s.schoolId] : p.filter(id => id !== s.schoolId))} />{s.schoolName}</label>)}</fieldset>
       <label className="flex min-w-[240px] flex-1 flex-col gap-1 text-xs">What was done and the result<input required className={field} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Explain the action taken and its outcome" /></label>
       <label className="flex flex-col gap-1 text-xs">Outcome<select className={field} value={outcome} onChange={e=>setOutcome(e.target.value)}>
         <option value="WORK_RECORDED">Work recorded; track allocations separately</option><option value="NO_SUITABLE_FACULTY">Closed: no suitable faculty</option>
         <option value="NOT_RELEVANT">Closed: not relevant</option><option value="CAPACITY">Closed: capacity unavailable</option><option value="OTHER">Closed: other reason</option>
       </select></label>
-      <button className="nk-btn-primary nk-btn-sm" disabled={busy || !picked.length || !note.trim()}>{busy ? 'Saving…' : 'Mark completed'}</button>
+      <button className="nk-btn-primary nk-btn-sm" disabled={busy || !picked.length || !note.trim()}>{busy ? 'Saving…' : 'Save review outcome'}</button>
     </form>}
     {row.schools.filter(s => s.actionStatus === 'COMPLETED').map(s => <p key={s.schoolId} className="flex flex-wrap items-center gap-2 text-sm">
       <span className="nk-badge nk-badge-ok">Completed</span>{s.schoolName} · {fmtDate(s.completed?.at)}{s.completed?.by ? ` by ${s.completed.by}` : ''}{s.completed?.note ? ` — ${s.completed.note}` : ''}

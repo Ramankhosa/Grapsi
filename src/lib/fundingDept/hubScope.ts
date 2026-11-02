@@ -54,9 +54,11 @@ export async function resolveHubScope(request: NextRequest): Promise<HubScope | 
     SELECT id, name FROM tenant_org_units WHERE tenant_id=${tenantId} AND depth=0 AND is_active ORDER BY name`)
   const visible = access.schoolIds ? allSchools.filter(s => access.schoolIds!.includes(s.id)) : allSchools
 
-  const members = access.department ? await prisma.$queryRaw<Array<{ id: string; userId: string; name: string }>>(Prisma.sql`
+  const members = await prisma.$queryRaw<Array<{ id: string; userId: string; name: string }>>(Prisma.sql`
     SELECT m.id, m.user_id "userId", COALESCE(u.name, u.email) name FROM funding_dept_members m JOIN users u ON u.id=m.user_id
-     WHERE m.tenant_id=${tenantId} AND m.is_active ORDER BY COALESCE(u.name, u.email)`) : []
+     WHERE m.tenant_id=${tenantId} AND m.is_active
+       ${access.department ? Prisma.empty : Prisma.sql`AND m.user_id=${access.context.user.id}`}
+     ORDER BY COALESCE(u.name, u.email)`)
 
   const deputySchools = !access.department && access.memberId ? (await prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
     SELECT count(*)::int n FROM funding_dept_school_assignments WHERE tenant_id=${tenantId} AND member_id=${access.memberId} AND is_deputy`))[0]?.n ?? 0 : 0

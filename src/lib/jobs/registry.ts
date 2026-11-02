@@ -37,6 +37,14 @@ const DAY = 24 * HOUR
 
 export const JOB_REGISTRY: JobDefinition[] = [
   {
+    jobKey: 'personal-grant-reminders',
+    label: 'Personal grant reminders',
+    description: 'Emails each user their own scheduled grant calendar reminders; flags delivery failures for review.',
+    cadence: 'Every minute',
+    endpoint: '/api/funding/personal-grants/reminders/sweep',
+    expectedIntervalMinutes: 1,
+  },
+  {
     jobKey: 'reminders-sweep',
     label: 'Reminder sweep',
     description:

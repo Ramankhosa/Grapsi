@@ -27,6 +27,7 @@ export async function POST(request:NextRequest){
       if((input.category==='CORRECTIVE'&&!previous)||(previous&&((input.category!==undefined&&input.category!==previous.category)||(input.failureType!==undefined&&input.failureType!==previous.failure_type))))return NextResponse.json({error:'Only the department head can change corrective-action classification.'},{status:403})
     }
     if(input.operation==='verify'){
+      if(!access.department)return NextResponse.json({error:'The department head or administrator must verify submission evidence.'},{status:403})
       if(!input.applicationId||!input.reason)throw new ManagementError('Select an application and describe the evidence reviewed.')
       return NextResponse.json(await verifySubmission(tenantId,input.schoolId,input.applicationId,user.id,input.reason))
     }

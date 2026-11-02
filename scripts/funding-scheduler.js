@@ -6,6 +6,7 @@
  *   pm2 save
  *
  * Endpoints driven (all POST, authenticated with x-funding-alert-secret):
+ *   /api/funding/personal-grants/reminders/sweep every minute personal calendar emails
  *   /api/funding-dept/reminders/sweep   hourly   reminder ladder, escalations,
  *                                                pendency ladder, job health
  *   /api/proposals/reviews/sweep        10 min   resume stranded proposal reviews
@@ -29,6 +30,7 @@
  *   FUNDING_ALERT_CRON_SECRET   required — must match the web app's value
  *   FUNDING_SCHEDULER_BASE_URL  default http://127.0.0.1:3010
  *   FUNDING_DIGEST_HOUR         local hour for digests/weekly report, default 3
+ *   FUNDING_SCHEDULER_ONLY_PERSONAL_GRANTS=true runs just personal calendar emails
  *
  * Requires Node 18+ (global fetch). No dependencies, so PM2 can run it from a
  * plain checkout without a build step.
@@ -123,6 +125,12 @@ function tick() {
   const hourSlot = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}`
   const daySlot = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`
   const minute = now.getMinutes()
+  // A separate process can activate personal reminders without enabling the
+  // institution's older reminder and digest jobs.
+  if (process.env.FUNDING_SCHEDULER_ONLY_PERSONAL_GRANTS === 'true') {
+    if (due('personal-grant-reminders', `${hourSlot}-${minute}`)) void post('/api/funding/personal-grants/reminders/sweep')
+    return
+  }
   // Deploy Source Watch without activating unrelated reminder/report jobs.
   if (process.env.FUNDING_SCHEDULER_ONLY_SOURCE_WATCH === 'true') {
     if (due('monitor', hourSlot)) void post('/api/funding/monitor/sweep')
@@ -131,6 +139,9 @@ function tick() {
   }
 
   // Hourly, offset a few minutes past the hour so top-of-hour restarts miss nothing.
+  if (due('personal-grant-reminders', `${hourSlot}-${minute}`)) {
+    void post('/api/funding/personal-grants/reminders/sweep')
+  }
   if (minute >= 5 && due('reminders', hourSlot)) {
     void post('/api/funding-dept/reminders/sweep')
   }
