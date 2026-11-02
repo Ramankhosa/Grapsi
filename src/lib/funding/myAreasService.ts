@@ -29,8 +29,7 @@
 
 import { EmbeddingService } from '@/lib/services/embeddingService'
 import { getTenantTimeZone } from '@/lib/tenant/locale'
-import { dayKey, deadlineDayKey } from '@/lib/i18n/format'
-import { deadlineDaySql, localTodaySql } from '@/lib/i18n/sql'
+import { callDaysToDeadlineSql, effectiveCallDeadlineSql, openCallSql } from '@/lib/fundingDept/callSql'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -136,7 +135,8 @@ interface CandidateRow {
   source: MyAreasSource
   matched_on: string | null
   /** An imported call the source closed, or whose letter-of-intent date passed. */
-  imported_closed: boolean
+  days_to_close: number | null
+  is_closed: boolean
 }
 
 function callEmbeddingColumn() {
@@ -191,55 +191,38 @@ function visibleCallSql(tenantId: string | null): Prisma.Sql {
 }
 
 /**
- * Open or closed.
+ * Open or closed, by the same rule every department report uses
+ * (`openCallSql`): an imported call's entry date or final-only deadline, a
+ * source that reported the call closed, and the funder's own time zone.
  *
  * A call with no date is rolling, and therefore always open — never expired.
  * That asymmetry matters: dropping undated calls from "open now" would hide the
  * standing schemes researchers apply to most often.
  */
-/**
- * Imported calls also close when the source says so or when the
- * letter-of-intent date (entry_closes_at) has passed. Scoped to imported rows,
- * so a curated call's open/closed rule never changes.
- */
-function importedClosedSql(timeZone: string): Prisma.Sql {
-  // COALESCE: a NULL entry date must read as "not closed", or NOT (...) is
-  // NULL and the call silently drops out of both open and closed.
-  return Prisma.sql`COALESCE(fc.import_run_id IS NOT NULL AND (fc.source_closed_at IS NOT NULL OR fc.entry_closes_at < ${localTodaySql(timeZone)}), false)`
+function openSql(timeZone: string): Prisma.Sql {
+  return Prisma.sql`COALESCE(${openCallSql('fc', timeZone)}, true)`
 }
 
-/**
- * Open or closed in the researcher's organization zone (India unless set).
- * A deadline's day follows deadlineDayKey: a date-only deadline keeps its
- * date in every zone. For India this is the rule it always was.
- */
 function statusSql(status: MyAreasStatus, timeZone: string): Prisma.Sql {
-  const closesAt = Prisma.sql`COALESCE(fc.close_date, fc."deadlineAt")`
-  const closingDay = deadlineDaySql(closesAt, timeZone)
-  const today = localTodaySql(timeZone)
-  const importedClosed = importedClosedSql(timeZone)
-  if (status === 'active') {
-    return Prisma.sql`((${closesAt} IS NULL OR ${closingDay} >= ${today}) AND NOT ${importedClosed})`
-  }
-  if (status === 'expired') {
-    return Prisma.sql`((${closesAt} IS NOT NULL AND ${closingDay} < ${today}) OR ${importedClosed})`
-  }
+  if (status === 'active') return openSql(timeZone)
+  if (status === 'expired') return Prisma.sql`NOT ${openSql(timeZone)}`
   return Prisma.sql`TRUE`
 }
 
-function candidateColumns(timeZone: string, source: MyAreasSource, score: Prisma.Sql, matchedOn: Prisma.Sql) {
+function candidateColumns(timeZone: string, now: Date, source: MyAreasSource, score: Prisma.Sql, matchedOn: Prisma.Sql) {
   return Prisma.sql`
     fc.id,
     COALESCE(fc.scheme_title, fc.title)        AS title,
     COALESCE(fc.agency_name, fc."agencyName")  AS agency_name,
     COALESCE(fc.summary, fc.description)       AS summary,
     fc.disciplines                             AS disciplines,
-    COALESCE(fc.close_date, fc."deadlineAt")   AS closes_at,
+    ${effectiveCallDeadlineSql('fc', timeZone)} AS closes_at,
+    (${callDaysToDeadlineSql(now, 'fc', timeZone)})::int AS days_to_close,
+    NOT ${openSql(timeZone)}                   AS is_closed,
     COALESCE(fc."publishedAt", fc."createdAt") AS published_at,
     (${score})::float                          AS score,
     ${source}::text                            AS source,
-    ${matchedOn}                               AS matched_on,
-    ${importedClosedSql(timeZone)}             AS imported_closed
+    ${matchedOn}                               AS matched_on
   `
 }
 
@@ -306,8 +289,7 @@ export async function findCallsInMyAreas(
   const status = options.status ?? 'active'
   const limit = Math.min(Math.max(options.limit ?? MY_AREAS_DEFAULT_LIMIT, 1), MY_AREAS_MAX_LIMIT)
   const now = options.now ?? new Date()
-  // Internal census mode evaluates every qualifying call. UI searches remain bounded.
-  const sourceLimit = options.complete ? Prisma.sql`` : Prisma.sql`LIMIT ${PER_SOURCE_LIMIT}`
+  const offset = Math.max(0, options.offset || 0)
 
   const profileColumn = Prisma.raw(profileEmbeddingColumn())
   const callColumn = Prisma.raw(callEmbeddingColumn())
@@ -358,109 +340,153 @@ export async function findCallsInMyAreas(
   }
 
   if (readiness.isUnprofiled) {
-    return { calls: [], counts: { active: 0, expired: 0, total: 0 }, readiness }
+    return { calls: [], counts: { active: 0, expired: 0, total: 0 }, readiness, hasNextPage: false }
   }
 
-  const branches: Array<Promise<CandidateRow[]>> = []
-
-  if (hasProfileVector) {
-    branches.push(
-      prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT ${candidateColumns(timeZone, 
-          'profile',
-          Prisma.sql`1 - (fc.${callColumn} <=> rp.${profileColumn})`,
-          Prisma.sql`NULL::text`
-        )}
-          FROM funding_calls fc
-          JOIN researcher_profiles rp ON rp.user_id = ${userId}
-         WHERE fc.${callColumn} IS NOT NULL
-           AND rp.${profileColumn} IS NOT NULL
-           AND 1 - (fc.${callColumn} <=> rp.${profileColumn}) >= ${floor}
-           AND ${visible}
-           AND ${statusSql(status, timeZone)}
-         ORDER BY fc.${callColumn} <=> rp.${profileColumn} ASC
-         ${sourceLimit}
-      `)
-    )
-  }
-
-  if (savedAreas > 0) {
-    branches.push(
-      prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT * FROM (
-        SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, 
-          'research_area',
-          Prisma.sql`1 - (fc.${callColumn} <=> area.${profileColumn})`,
-          Prisma.sql`area.label`
-        )}
-          FROM funding_calls fc
-          JOIN researcher_saved_research_areas area
-            ON area.user_id = ${userId}
-           AND area.use_for_alerts = true
-           AND area.${profileColumn} IS NOT NULL
-         WHERE fc.${callColumn} IS NOT NULL
-           AND 1 - (fc.${callColumn} <=> area.${profileColumn}) >= ${floor}
-           AND ${visible}
-           AND ${statusSql(status, timeZone)}
-         ORDER BY fc.id, fc.${callColumn} <=> area.${profileColumn} ASC
-        ) best_per_call
-        ORDER BY score DESC
-        ${sourceLimit}
-      `)
-    )
-  }
-
-  if (taggedPublications > 0) {
-    branches.push(
-      prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT * FROM (
-        SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, 
-          'publication',
-          Prisma.sql`1 - (fc.${callColumn} <=> ref.${publicationColumn})`,
-          Prisma.sql`ref.title`
-        )}
-          FROM funding_calls fc
-          JOIN reference_library ref
-            ON ref.user_id = ${userId}
-           AND ref."isActive" = true
-           AND ${FUNDING_PUBLICATION_TAG} = ANY(ref.tags)
-           AND ref.${publicationColumn} IS NOT NULL
-         WHERE fc.${callColumn} IS NOT NULL
-           AND 1 - (fc.${callColumn} <=> ref.${publicationColumn}) >= ${floor}
-           AND ${visible}
-           AND ${statusSql(status, timeZone)}
-         ORDER BY fc.id, fc.${callColumn} <=> ref.${publicationColumn} ASC
-        ) best_per_call
-        ORDER BY score DESC
-        ${sourceLimit}
-      `)
-    )
-  }
-
-  // The researcher's own words against the call's full-text document. Always
-  // available, and the only branch that works while the corpus is between
-  // embedding providers.
   const query = terms.length > 0 ? termsQuery(terms) : null
-  if (query) {
-    branches.push(
-      prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
-        SELECT ${candidateColumns(timeZone, 
-          'terms',
-          Prisma.sql`ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query}))`,
-          Prisma.sql`(SELECT string_agg(term, ', ' ORDER BY term) FROM unnest(ARRAY[${Prisma.join(terms)}]::text[]) term WHERE fc.ts_document @@ websearch_to_tsquery('english', '"' || term || '"'))`
-        )}
-          FROM funding_calls fc
-         WHERE fc.ts_document @@ websearch_to_tsquery('english', ${query})
-           AND ${visible}
-           AND ${statusSql(status, timeZone)}
-         ORDER BY ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query})) DESC
-         ${sourceLimit}
-      `)
+  // Each source returns its own top rows; a call several sources found is one
+  // result. `perSource` is how deep each source reads (null: everything).
+  const runBranches = (perSource: number | null) => {
+    const sourceLimit = perSource === null ? Prisma.empty : Prisma.sql`LIMIT ${perSource}`
+    const branches: Array<Promise<CandidateRow[]>> = []
+
+    if (hasProfileVector) {
+      branches.push(
+        prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
+          SELECT ${candidateColumns(timeZone, now,
+            'profile',
+            Prisma.sql`1 - (fc.${callColumn} <=> rp.${profileColumn})`,
+            Prisma.sql`NULL::text`
+          )}
+            FROM funding_calls fc
+            JOIN researcher_profiles rp ON rp.user_id = ${userId}
+           WHERE fc.${callColumn} IS NOT NULL
+             AND rp.${profileColumn} IS NOT NULL
+             AND 1 - (fc.${callColumn} <=> rp.${profileColumn}) >= ${floor}
+             AND ${visible}
+             AND ${statusSql(status, timeZone)}
+           ORDER BY fc.${callColumn} <=> rp.${profileColumn} ASC, fc.id
+           ${sourceLimit}
+        `)
+      )
+    }
+
+    if (savedAreas > 0) {
+      branches.push(
+        prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
+          SELECT * FROM (
+          SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, now,
+            'research_area',
+            Prisma.sql`1 - (fc.${callColumn} <=> area.${profileColumn})`,
+            Prisma.sql`area.label`
+          )}
+            FROM funding_calls fc
+            JOIN researcher_saved_research_areas area
+              ON area.user_id = ${userId}
+             AND area.use_for_alerts = true
+             AND area.${profileColumn} IS NOT NULL
+           WHERE fc.${callColumn} IS NOT NULL
+             AND 1 - (fc.${callColumn} <=> area.${profileColumn}) >= ${floor}
+             AND ${visible}
+             AND ${statusSql(status, timeZone)}
+           ORDER BY fc.id, fc.${callColumn} <=> area.${profileColumn} ASC
+          ) best_per_call
+          ORDER BY score DESC, id
+          ${sourceLimit}
+        `)
+      )
+    }
+
+    if (taggedPublications > 0) {
+      branches.push(
+        prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
+          SELECT * FROM (
+          SELECT DISTINCT ON (fc.id) ${candidateColumns(timeZone, now,
+            'publication',
+            Prisma.sql`1 - (fc.${callColumn} <=> ref.${publicationColumn})`,
+            Prisma.sql`ref.title`
+          )}
+            FROM funding_calls fc
+            JOIN reference_library ref
+              ON ref.user_id = ${userId}
+             AND ref."isActive" = true
+             AND ${FUNDING_PUBLICATION_TAG} = ANY(ref.tags)
+             AND ref.${publicationColumn} IS NOT NULL
+           WHERE fc.${callColumn} IS NOT NULL
+             AND 1 - (fc.${callColumn} <=> ref.${publicationColumn}) >= ${floor}
+             AND ${visible}
+             AND ${statusSql(status, timeZone)}
+           ORDER BY fc.id, fc.${callColumn} <=> ref.${publicationColumn} ASC
+          ) best_per_call
+          ORDER BY score DESC, id
+          ${sourceLimit}
+        `)
+      )
+    }
+
+    // The researcher's own words against the call's full-text document. Always
+    // available, and the only branch that works while the corpus is between
+    // embedding providers.
+    if (query) {
+      branches.push(
+        prisma.$queryRaw<CandidateRow[]>(Prisma.sql`
+          SELECT ${candidateColumns(timeZone, now,
+            'terms',
+            Prisma.sql`ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query}))`,
+            Prisma.sql`(SELECT string_agg(term, ', ' ORDER BY term) FROM unnest(ARRAY[${Prisma.join(terms)}]::text[]) term WHERE fc.ts_document @@ websearch_to_tsquery('english', '"' || term || '"'))`
+          )}
+            FROM funding_calls fc
+           WHERE fc.ts_document @@ websearch_to_tsquery('english', ${query})
+             AND ${visible}
+             AND ${statusSql(status, timeZone)}
+           ORDER BY ts_rank_cd(fc.ts_document, websearch_to_tsquery('english', ${query})) DESC, fc.id
+           ${sourceLimit}
+        `)
+      )
+    }
+    return Promise.all(branches)
+  }
+
+  // Vector evidence outranks a term hit at equal strength: a semantic match is
+  // about meaning, a term match about wording. Within a basis, score decides,
+  // and the call id settles ties so a page boundary never repeats or skips one.
+  const rank = (row: CandidateRow) => (row.source === 'terms' ? 0 : 1)
+  const merge = (rows: CandidateRow[]) => {
+    const bestByCall = new Map<string, CandidateRow>()
+    for (const row of rows) {
+      const existing = bestByCall.get(row.id)
+      if (
+        !existing ||
+        rank(row) > rank(existing) ||
+        (rank(row) === rank(existing) && row.score > existing.score)
+      ) {
+        bestByCall.set(row.id, row)
+      }
+    }
+    return Array.from(bestByCall.values()).sort(
+      (left, right) => rank(right) - rank(left) || right.score - left.score || left.id.localeCompare(right.id)
     )
   }
 
-  const [rows, counts] = await Promise.all([
-    Promise.all(branches).then((results) => results.flat()),
+  // Read deep enough to fill this page and know whether another follows. The
+  // sources overlap, so one call found by three of them takes three rows: when
+  // a source came back full but the merged list is still short, read deeper.
+  // This is what keeps every call in the total reachable by paging.
+  const needed = offset + limit + 1
+  const readAll = async () => {
+    if (options.complete) return merge((await runBranches(null)).flat())
+    let perSource = Math.max(PER_SOURCE_LIMIT, needed)
+    for (;;) {
+      const results = await runBranches(perSource)
+      const merged = merge(results.flat())
+      const saturated = results.some((rows) => rows.length >= perSource)
+      if (merged.length >= needed || !saturated) return merged
+      if (perSource >= needed * 4) return merge((await runBranches(null)).flat())
+      perSource *= 2
+    }
+  }
+  const [ordered, counts] = await Promise.all([
+    readAll(),
     countBothSides(
       userId,
       tenantId,
@@ -468,35 +494,15 @@ export async function findCallsInMyAreas(
       floor
     ),
   ])
-
-  // Vector evidence outranks a term hit at equal strength: a semantic match is
-  // about meaning, a term match about wording. Within a basis, score decides.
-  const rank = (row: CandidateRow) => (row.source === 'terms' ? 0 : 1)
-  const bestByCall = new Map<string, CandidateRow>()
-  for (const row of rows) {
-    const existing = bestByCall.get(row.id)
-    if (
-      !existing ||
-      rank(row) > rank(existing) ||
-      (rank(row) === rank(existing) && row.score > existing.score)
-    ) {
-      bestByCall.set(row.id, row)
-    }
-  }
-
-  const ordered = Array.from(bestByCall.values()).sort(
-    (left, right) => rank(right) - rank(left) || right.score - left.score
-  )
   const topVector = ordered.find((row) => row.source !== 'terms')?.score ?? 0
   const topTerms = ordered.reduce(
     (best, row) => (row.source === 'terms' && row.score > best ? row.score : best),
     0
   )
 
-  const offset=Math.max(0,options.offset||0)
-  const calls: MyAreasCall[] = (options.complete ? ordered : ordered.slice(offset, offset+limit)).map((row) => {
+  const calls: MyAreasCall[] = (options.complete ? ordered : ordered.slice(offset, offset + limit)).map((row) => {
     const closesAt = row.closes_at ? new Date(row.closes_at) : null
-    const daysToClose = closesAt ? Math.ceil((closesAt.getTime() - now.getTime()) / 86400000) : null
+    const daysToClose = row.days_to_close ?? null
     const basis: MyAreasBasis = row.source === 'terms' ? 'terms' : 'vector'
     const ratio = topTerms > 0 ? row.score / topTerms : 0
     const tier: MyAreasTier =
@@ -521,9 +527,7 @@ export async function findCallsInMyAreas(
       closesAt,
       publishedAt: row.published_at ? new Date(row.published_at) : null,
       daysToClose,
-      isExpired:
-        row.imported_closed === true ||
-        Boolean(closesAt && deadlineDayKey(closesAt, timeZone) < dayKey(now, timeZone)),
+      isExpired: row.is_closed === true,
       score: Number(row.score.toFixed(4)),
       tier,
       basis,
@@ -544,7 +548,7 @@ export async function findCallsInMyAreas(
     for (const call of calls) call.alerted = alerted.has(call.id)
   }
 
-  return { calls, counts, readiness, hasNextPage:!options.complete&&ordered.length>offset+limit }
+  return { calls, counts, readiness, hasNextPage: !options.complete && ordered.length > offset + limit }
 }
 
 /**

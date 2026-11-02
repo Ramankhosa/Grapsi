@@ -188,6 +188,60 @@ describe('match-width preview', () => {
   })
 })
 
+describe('Funding in my areas', () => {
+  const calls = Array.from({ length: 150 }, (_, i) => ({
+    id: `call-${String(i).padStart(3, '0')}`, title: 'Quantum sensing grant', score: .9 - i * .001, source: 'profile',
+    matched_on: null, is_closed: false, days_to_close: null, closes_at: null, published_at: null, disciplines: [],
+    agency_name: 'Synthetic agency', summary: 'Synthetic call',
+  }))
+
+  function mockCorpus() {
+    m.query.mockImplementation(async (sql: any) => {
+      const text = sql.sql as string
+      if (text.includes('AS has_vector')) return [{ has_vector: true }]
+      if (text.includes('COUNT(*)::int AS count FROM researcher_saved')) return [{ count: 0 }]
+      if (text.includes('COUNT(*)::int AS count FROM reference_library')) return [{ count: 0 }]
+      if (text.includes('COUNT(*)::int AS count FROM funding_calls')) return [{ count: 150 }]
+      if (text.includes('JOIN researcher_profiles rp')) {
+        // The source honours its LIMIT, as the database would.
+        return /LIMIT \?\s*$/.test(text.trim()) ? calls.slice(0, Number(sql.values.at(-1))) : calls
+      }
+      if (text.includes('ts_rank_cd')) return []
+      return [{ active: 150, expired: 0, total: 150 }]
+    })
+  }
+
+  it('reaches every call in its own total, once, by paging', async () => {
+    const { findCallsInMyAreas } = await import('@/lib/funding/myAreasService')
+    mockCorpus()
+    const seen: string[] = []
+    let page = await findCallsInMyAreas('person', 'tenant', { offset: 0, limit: 12 })
+    expect(page.counts.active).toBe(150)
+    for (let offset = 0; ; offset += 12) {
+      page = await findCallsInMyAreas('person', 'tenant', { offset, limit: 12 })
+      seen.push(...page.calls.map((call) => call.id))
+      if (!page.hasNextPage) break
+    }
+    expect(seen).toHaveLength(150)
+    expect(new Set(seen).size).toBe(150)
+    expect(seen[0]).toBe('call-000')
+  })
+
+  it('decides open and closed with the department deadline rule', async () => {
+    const { findCallsInMyAreas } = await import('@/lib/funding/myAreasService')
+    mockCorpus()
+    await findCallsInMyAreas('person', 'tenant', { offset: 0, limit: 12 })
+    const branch = m.query.mock.calls.map(([sql]) => sql.sql as string).find((text) => text.includes('JOIN researcher_profiles rp'))!
+    // Entry date before final deadline, final-only imported dates, source
+    // closure and the funder's own zone: the same predicate reports use.
+    for (const column of ['entry_closes_at', 'final_deadline_at', 'source_closed_at', 'deadline_timezone']) {
+      expect(branch).toContain(column)
+    }
+    expect(branch).toContain('ORDER BY fc.')
+    expect(branch).toMatch(/ASC, fc\.id/)
+  })
+})
+
 describe('census fingerprint', () => {
   async function fingerprintSql() {
     const actual = await vi.importActual<typeof import('@/lib/fundingDept/callMatchFingerprint')>('@/lib/fundingDept/callMatchFingerprint')
