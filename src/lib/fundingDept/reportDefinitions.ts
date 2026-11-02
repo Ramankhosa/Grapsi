@@ -356,6 +356,7 @@ export function qualifyingMatchSql(matchAlias: string, deadlineExpr: string, wid
   const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
   const zone = timeZoneLiteral(timeZone)
   return Prisma.sql`(${Prisma.raw(`${matchAlias}.inferred = false AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
+    AND ${rerankScoredSql(matchAlias)}
     AND ${countsAtWidthSql(matchAlias, width)}
     ${Prisma.raw(`AND (${deadlineExpr} IS NULL OR (${matchAlias}.first_seen_at AT TIME ZONE 'UTC' AT TIME ZONE ${zone})::date <= ${deadlineDayRaw(deadlineExpr, timeZone)})`)})`
 }
@@ -393,7 +394,18 @@ export function currentAutomaticMatchSql(matchAlias: string): Prisma.Sql {
   const uncounted = UNCOUNTED_MATCH_VERSIONS.map(v => `'${v}'`).join(',')
   return Prisma.sql`(${Prisma.raw(`${matchAlias}.is_current AND ${matchAlias}.inferred = false
     AND COALESCE(${matchAlias}.source_version,'') NOT IN (${uncounted})`)}
+    AND ${rerankScoredSql(matchAlias)}
     AND ${activeTenantMemberSql(matchAlias)})`
+}
+
+/**
+ * Width cutoffs are reranker scores. A census that ran without the reranker
+ * stores raw retrieval similarity, which sits on a different scale, so its rows
+ * are kept (and shown as provisional) but never counted against those cutoffs.
+ * Rows from other sources carry no basis and are unaffected.
+ */
+export function rerankScoredSql(matchAlias: string): Prisma.Sql {
+  return Prisma.raw(`(${matchAlias}.source <> 'matching' OR COALESCE(${matchAlias}.score_basis, 'rerank') = 'rerank')`)
 }
 
 /** The matched person is still an active member of the tenant the match belongs to. */

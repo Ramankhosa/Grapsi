@@ -145,6 +145,26 @@ describe('census scoring', () => {
   })
 })
 
+describe('one scoring basis for one label', () => {
+  it('scores a sole candidate instead of calling it "strong" against itself', async () => {
+    const service = configureSearch()
+    service.searchProfileVectors.mockResolvedValue([person])
+    m.rerank.mockResolvedValue([{ index: 0, relevanceScore: .02 }])
+    const live = await researcherSearchService.search({ query: 'quantum sensing' })
+    expect(m.rerank).toHaveBeenCalledTimes(1)
+    expect(live.scoreBasis).toBe('rerank')
+    // Below the reranker gate, the same as the census would decide.
+    expect(live.results).toEqual([])
+  })
+
+  it('never counts census rows scored without the reranker against the width cutoffs', async () => {
+    const { currentQualifyingMatchSql, qualifyingMatchSql } = await import('@/lib/fundingDept/reportDefinitions')
+    for (const sql of [currentQualifyingMatchSql('m'), qualifyingMatchSql('m', 'fc.close_date')]) {
+      expect(sql.sql).toContain("(m.source <> 'matching' OR COALESCE(m.score_basis, 'rerank') = 'rerank')")
+    }
+  })
+})
+
 describe('what a stored census can conclude', () => {
   const base: CallMatchState = { fresh: true, refreshedAt: new Date(), basis: 'rerank', matched: 0, candidates: 10,
     status: 'ok', truncated: false, lastAttemptAt: new Date(), lastError: null }

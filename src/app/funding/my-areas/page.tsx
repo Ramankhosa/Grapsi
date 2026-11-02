@@ -45,10 +45,13 @@ const TIER_STYLES: Record<MyAreasCall['tier'], string> = {
   weak: 'border-nickel-200 bg-nickel-50 text-nickel-600',
 }
 
+// These tiers are relative to the researcher's own closest call, not the
+// department's calibrated match bands, so they say "how close compared with
+// your other suggestions" rather than borrowing "Strong match" from reports.
 const TIER_LABEL: Record<MyAreasCall['tier'], string> = {
-  strong: 'Strong match',
-  moderate: 'Good match',
-  weak: 'Possible match',
+  strong: 'Closest to your work',
+  moderate: 'Close to your work',
+  weak: 'Related',
 }
 
 /** Said in the researcher's terms: what of theirs the call matched. */
@@ -281,8 +284,9 @@ export default function FundingInMyAreasPage() {
             <nav aria-label="Matching calls pages" className="mt-4 flex items-center gap-4 text-sm"><button type="button" disabled={!offset} onClick={()=>setOffset(value=>Math.max(0,value-12))}>Previous</button><span>Page {Math.floor(offset/12)+1}</span><button type="button" disabled={!data?.hasNextPage} onClick={()=>setOffset(value=>value+12)}>Next</button></nav>
 
             <p className="nk-sub mt-4 text-[11.5px]">
-              Ranked by how closely each call matches your work. A call matching more than one thing
-              of yours is listed once, under its strongest match.
+              Suggestions, ranked by how closely each call matches your work compared with your other
+              suggestions. A call matching more than one thing of yours is listed once, under its
+              strongest match. Check each call&apos;s eligibility before applying.
               {data?.readiness.callVectorsMissing
                 ? ' Matching is running on your research areas and keywords — the call catalog has not been indexed for meaning-based matching yet, so some related calls may be missing.'
                 : ''}

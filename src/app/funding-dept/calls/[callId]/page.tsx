@@ -110,7 +110,7 @@ interface Dossier {
   queueState: string
   people: Person[]
   peopleError: string | null
-  peopleBasis: 'census' | 'pending' | 'failed'
+  peopleBasis: 'census' | 'pending' | 'failed' | 'provisional'
   matchingCheckedAt: string | null
   matchingTruncated: boolean
   matchWidth: MatchWidth
@@ -564,6 +564,11 @@ export default function CallDossierPage({ params }: { params: { callId: string }
                 : 'No run has succeeded yet, so this list is not a finding.'}
             </p>
           )}
+          {data.peopleBasis === 'provisional' && (
+            <p className="nk-sub mt-2 text-xs">
+              Matching ran without the relevance model, so its scores are provisional and nobody is counted yet. It will re-score automatically once the model is available.
+            </p>
+          )}
           {data.matchingTruncated && (
             <p className="nk-sub mt-2 text-xs">
               This call reached the matching ceiling, so the lowest-ranked researchers were not screened.
@@ -576,6 +581,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               <p className="nk-sub p-4">
                 {data.peopleBasis === 'pending' ? 'Matching has not completed for this call.'
                   : data.peopleBasis === 'failed' && !data.matchingCheckedAt ? 'Matching could not run for this call yet.'
+                  : data.peopleBasis === 'provisional' ? 'No researcher is counted until matching can be re-scored.'
                   : 'Nobody in this school meets the selected match width for this call.'}{' '}
                 <Link
                   href={`/researcher-matching?callId=${encodeURIComponent(data.call.id)}`}

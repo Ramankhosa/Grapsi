@@ -1028,7 +1028,9 @@ export class ResearcherSearchService {
     query: string,
     results: ResearcherSearchResult[]
   ): Promise<{ ranked: ResearcherSearchResult[]; basis: ResearcherScoreBasis }> {
-    if (!voyageRerankService.isConfigured() || results.length <= 1) {
+    // A single candidate is scored too: left unscored it would be tiered against
+    // itself and always come out "strong".
+    if (!voyageRerankService.isConfigured() || results.length === 0) {
       return { ranked: results, basis: 'vector' };
     }
 

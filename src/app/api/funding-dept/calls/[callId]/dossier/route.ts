@@ -389,7 +389,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   // would list people who are not yet included in the school's count.
   let people: Array<Record<string, unknown>> = []
   let peopleError: string | null = null
-  let peopleBasis: 'census' | 'pending' | 'failed' = 'census'
+  let peopleBasis: 'census' | 'pending' | 'failed' | 'provisional' = 'census'
   let matchingCheckedAt: Date | null = null
   let matchingTruncated = false
   let matchWidth: MatchWidth = DEFAULT_MATCH_WIDTH
@@ -408,6 +408,10 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     // empty or stale list read as the answer.
     if (censusState?.status === 'failed') {
       peopleBasis = 'failed'
+    } else if (censusState?.basis === 'vector') {
+      // Scored without the reranker: the width cutoffs do not apply to these
+      // scores, so nobody from this run is counted until it is re-scored.
+      peopleBasis = 'provisional'
     } else if (!censusState?.refreshedAt && matched.length === 0) {
       peopleBasis = 'pending'
     }
@@ -604,7 +608,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     /**
      * Where the list came from. `census` means these are the same rows the
      * "Matched faculty" figures count; `pending` means the census has not run;
-     * `failed` means the latest run failed and these are the last good rows.
+     * `failed` means the latest run failed and these are the last good rows;
+     * `provisional` means it ran without the reranker and counts nobody yet.
      */
     peopleBasis,
     /** The last successful census, and whether it had to stop at its ceiling. */
