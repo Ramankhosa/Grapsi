@@ -1,6 +1,6 @@
 import ImportedAreaPicker from './finder/ImportedAreaPicker';
 import PersonalGrantActions, { PersonalGrantProvider, PersonalGrantLoadError } from './funding/PersonalGrantActions';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowUpRight, ChevronDown, Clock3, ExternalLink, Globe2, Search, SlidersHorizontal, X, LayoutGrid, List, Wallet, MapPin } from 'lucide-react';
 import WorkspaceDialog from './ui/WorkspaceDialog';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
@@ -14,6 +14,7 @@ import {
   MOBILITY_LABELS,
   PROJECT_DURATION_BUCKETS,
   RECOMMENDATION_AMOUNT_CURRENCY_OPTIONS,
+  RECOMMENDATION_APPLICATION_LANGUAGE_OPTIONS,
 } from '../lib/recommendations/constants';
 import { facetValues, toggleFacetValue } from '../lib/recommendations/directorySelections';
 import type {
@@ -117,7 +118,6 @@ function appliedChips(filters: Filters, labelFor: (dimension: DirectoryFacetDime
   );
   list('hostCountries', 'Work carried out in', filters.hostCountries);
   list('funderCountries', 'Funder based in', filters.funderCountries);
-  // Filters the directory does not offer, but a shared link or the AI advisor may carry.
   list('applicationLanguages', 'Language (or not stated)', filters.applicationLanguages);
   list('citizenshipRequirements', 'Citizen of', filters.citizenshipRequirements);
   list('residencyRequirements', 'Living in', filters.residencyRequirements);
@@ -454,10 +454,14 @@ function ExpandableCard({
   result,
   onBeginWriting,
   getCallDetailsHref,
+  onOpenDetails,
+  extraActions,
 }: {
   result: RecommendationRawResultItem;
   onBeginWriting?: (result: RecommendationRawResultItem) => void;
   getCallDetailsHref?: (result: RecommendationRawResultItem) => string;
+  onOpenDetails?: (result: RecommendationRawResultItem) => void;
+  extraActions?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const amount = formatAmount(result);
@@ -477,7 +481,9 @@ function ExpandableCard({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-slate-500">{result.agencyName || 'Funding opportunity'}</p>
-              <h3 className="mt-2 text-lg font-semibold leading-snug tracking-[-0.015em] text-slate-950"><a href={callDetailsHref} target="_blank" rel="noreferrer" className="hover:text-blue-700">{result.schemeTitle}</a></h3>
+              <h3 className="mt-2 text-lg font-semibold leading-snug tracking-[-0.015em] text-slate-950">{onOpenDetails
+                ? <button type="button" onClick={() => onOpenDetails(result)} className="text-left hover:text-blue-700">{result.schemeTitle}</button>
+                : <a href={callDetailsHref} target="_blank" rel="noreferrer" className="hover:text-blue-700">{result.schemeTitle}</a>}</h3>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {result.isRolling ? (
@@ -535,8 +541,14 @@ function ExpandableCard({
         <PersonalGrantActions compact callId={result.id} title={result.schemeTitle} />
         <button type="button" onClick={() => setExpanded(prev => !prev)} aria-expanded={expanded} className="inline-flex min-h-10 items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900">{expanded ? 'Less detail' : 'Quick details'}<ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
         <div className="flex flex-wrap items-center gap-2">
+          {extraActions}
           {onBeginWriting && result.authoringReady !== false && <button type="button" onClick={() => onBeginWriting(result)} className="funding-button-secondary">Begin writing</button>}
-          <a href={callDetailsHref} target="_blank" rel="noreferrer" className="funding-button-primary">View opportunity<ArrowUpRight className="h-4 w-4" /></a>
+          {onOpenDetails
+            ? <>
+                <a href={callDetailsHref} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm" aria-label={`Open ${result.schemeTitle} in a new tab`}>Full page<ArrowUpRight className="h-3.5 w-3.5" /></a>
+                <button type="button" onClick={() => onOpenDetails(result)} className="funding-button-primary">Details</button>
+              </>
+            : <a href={callDetailsHref} target="_blank" rel="noreferrer" className="funding-button-primary">View opportunity<ArrowUpRight className="h-4 w-4" /></a>}
         </div>
       </div>
 
@@ -668,6 +680,16 @@ interface FundingDirectoryPanelProps {
   onGoToPage: (page: number) => void;
   onBeginWriting?: (result: RecommendationRawResultItem) => void;
   getCallDetailsHref?: (result: RecommendationRawResultItem) => string;
+  /** When given, a call's title and a Details button open it in place; the full page stays a new-tab link. */
+  onOpenDetails?: (result: RecommendationRawResultItem) => void;
+  /** Extra buttons on each card, before the built-in ones. */
+  renderResultActions?: (result: RecommendationRawResultItem) => ReactNode;
+  /** Wording for a host page that searches differently (e.g. by research description). */
+  searchCopy?: { placeholder: string; label: string; submit: string; help: ReactNode };
+  /** Shown above the search box, e.g. a choice of how to search. */
+  searchHeader?: ReactNode;
+  /** Replaces the result-count line, for results that are not a full count. */
+  resultSummary?: ReactNode;
   preferences: FinderPreferenceValues;
   onChangePreferences: (preferences: FinderPreferenceValues) => void;
 }
@@ -699,6 +721,11 @@ function FundingDirectoryPanelContent({
   onGoToPage,
   onBeginWriting,
   getCallDetailsHref,
+  onOpenDetails,
+  renderResultActions,
+  searchCopy,
+  searchHeader,
+  resultSummary,
   preferences,
   onChangePreferences,
 }: FundingDirectoryPanelProps) {
@@ -746,11 +773,52 @@ function FundingDirectoryPanelContent({
           onChange={(eligibleCountries) => set({ ...filters, eligibleCountries })}
           suggestion={profileCountry}
         />
+        <Disclosure label="Citizenship" count={filters.citizenshipRequirements.length} defaultOpen={filters.citizenshipRequirements.length > 0}>
+          <CountryPicker
+            id="directory-citizenship"
+            label="Applicant is a citizen of"
+            hint="Keeps calls that accept citizens of any chosen country, and calls that set no citizenship rule."
+            values={filters.citizenshipRequirements}
+            onChange={(citizenshipRequirements) => set({ ...filters, citizenshipRequirements })}
+          />
+        </Disclosure>
+        <Disclosure label="Residence" count={filters.residencyRequirements.length} defaultOpen={filters.residencyRequirements.length > 0}>
+          <CountryPicker
+            id="directory-residence"
+            label="Applicant lives in"
+            hint="Keeps calls open to residents of any chosen country, and calls that set no residence rule."
+            values={filters.residencyRequirements}
+            onChange={(residencyRequirements) => set({ ...filters, residencyRequirements })}
+            suggestion={profileCountry}
+          />
+        </Disclosure>
         <FacetGroup dimension="careerStage" items={items('careerStage')} filters={filters} labelFor={labelFor} onChange={set} defaultOpen />
         <FacetGroup dimension="institutionType" items={items('institutionType')} filters={filters} labelFor={labelFor} onChange={set} />
         <FacetGroup dimension="qualification" items={items('qualification')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
         <FacetGroup dimension="targetGroup" items={items('targetGroup')} filters={filters} labelFor={labelFor} onChange={set} hint={CATALOGUE_ONLY_HINT} />
         <FacetGroup dimension="applicationRoute" items={items('applicationRoute')} filters={filters} labelFor={labelFor} onChange={set} />
+        <Disclosure label="Application language" count={filters.applicationLanguages.length} defaultOpen={filters.applicationLanguages.length > 0}>
+          <fieldset>
+            <legend className="sr-only">Application language</legend>
+            {RECOMMENDATION_APPLICATION_LANGUAGE_OPTIONS.map((language) => (
+              <label key={language} className="flex min-h-[32px] cursor-pointer items-center gap-2.5 px-1.5 text-[13px] text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={filters.applicationLanguages.includes(language)}
+                  onChange={() => set({
+                    ...filters,
+                    applicationLanguages: filters.applicationLanguages.includes(language)
+                      ? filters.applicationLanguages.filter((value) => value !== language)
+                      : [...filters.applicationLanguages, language],
+                  })}
+                  className="h-3.5 w-3.5 shrink-0 accent-cobalt-600"
+                />
+                {language}
+              </label>
+            ))}
+            <p className="cb-hint mt-1 px-1.5">Calls that do not state a language are kept.</p>
+          </fieldset>
+        </Disclosure>
         <label className="flex min-h-[40px] cursor-pointer items-center gap-2.5 text-[13px] text-ink">
           <input
             type="checkbox"
@@ -838,6 +906,7 @@ function FundingDirectoryPanelContent({
     <div className="flex-1">
       {/* Search */}
       <div className="cb-card mb-6 p-4 sm:p-5">
+        {searchHeader}
         <form
           className="flex flex-col gap-2 sm:flex-row"
           onSubmit={(event) => {
@@ -853,8 +922,8 @@ function FundingDirectoryPanelContent({
               enterKeyHint="search"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="Search titles, funders and descriptions"
-              aria-label="Search the funding directory"
+              placeholder={searchCopy?.placeholder || 'Search titles, funders and descriptions'}
+              aria-label={searchCopy?.label || 'Search the funding directory'}
               aria-describedby="directory-search-help"
               className="cb-input h-12 pl-10 pr-10 !text-base"
             />
@@ -871,7 +940,7 @@ function FundingDirectoryPanelContent({
           </div>
           <div className="flex gap-2">
             <button type="submit" disabled={loading} className="funding-button-primary flex-1 sm:flex-none">
-              <Search className="h-4 w-4" />{loading ? 'Searching…' : <><span className="hidden sm:inline">Find opportunities</span><span className="sm:hidden">Search calls</span></>}
+              <Search className="h-4 w-4" />{loading ? 'Searching…' : searchCopy ? searchCopy.submit : <><span className="hidden sm:inline">Find opportunities</span><span className="sm:hidden">Search calls</span></>}
             </button>
             <button type="button" onClick={() => setMobileFiltersOpen(true)} className="cb-btn-secondary flex-1 lg:hidden">
               <SlidersHorizontal className="h-4 w-4" />
@@ -880,11 +949,11 @@ function FundingDirectoryPanelContent({
             </button>
           </div>
         </form>
-        <p id="directory-search-help" className="cb-hint mt-3">
+        {searchCopy ? <p id="directory-search-help" className="cb-hint mt-3">{searchCopy.help}</p> : <p id="directory-search-help" className="cb-hint mt-3">
           Every word must appear. Use <span className="font-medium text-ink-soft">or</span> for alternatives,{' '}
           <span className="font-medium text-ink-soft">-word</span> to exclude, and{' '}
           <span className="font-medium text-ink-soft">&ldquo;quotes&rdquo;</span> for an exact phrase.
-        </p>
+        </p>}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[272px_minmax(0,1fr)]">
@@ -946,7 +1015,7 @@ function FundingDirectoryPanelContent({
 
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <p className="text-[13px] text-muted" aria-live="polite">
-              {busy ? 'Updating…' : (
+              {busy ? 'Updating…' : resultSummary ?? (
                 <>
                   <span className="font-semibold text-ink">{totalResults.toLocaleString()}</span> {resultNoun}
                   {activeQuery ? <> for &ldquo;{activeQuery}&rdquo;</> : null}
@@ -1009,7 +1078,8 @@ function FundingDirectoryPanelContent({
             <div aria-busy={loading} className={`space-y-4 ${loading ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'}`} ref={node => { if (node) node.inert = loading }}>
               <div className={`grid gap-4 ${layout === 'grid' ? 'xl:grid-cols-2' : ''}`}>
                 {results.map((result) => (
-                  <ExpandableCard key={result.id} result={result} onBeginWriting={onBeginWriting} getCallDetailsHref={getCallDetailsHref} />
+                  <ExpandableCard key={result.id} result={result} onBeginWriting={onBeginWriting} getCallDetailsHref={getCallDetailsHref}
+                    onOpenDetails={onOpenDetails} extraActions={renderResultActions?.(result)} />
                 ))}
               </div>
 

@@ -12,59 +12,18 @@ import FundingDirectoryPanel from '@/components/FundingDirectoryPanel';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { useFinderChat } from '@/hooks/useFinderChat';
 import type { ResearcherFinderContext } from '@/lib/researcherProfile/types';
-import type {
-  DirectoryFacetResponse,
-  RecommendationDirectoryResponse,
-  RecommendationRawResultItem,
-  RecommendationSearchFilters,
-} from '@/lib/recommendations/types';
+import { useFundingDirectory } from '@/hooks/useFundingDirectory';
+import {
+  BASE_DIRECTORY_FILTERS,
+  decodeDirectoryFilters,
+  encodeDirectoryFilters,
+  type DirectoryFilters,
+} from '@/lib/recommendations/directoryUrl';
 import { useAuth } from '@/lib/auth-context';
 
 type FinderTab = 'manual' | 'ai';
 
-const defaultFilters: Required<RecommendationSearchFilters> = {
-  geographyScope: [],
-  eligibleCountries: [],
-  eligibleRegions: [],
-  hostCountries: [],
-  funderCountries: [],
-  fundingKinds: [],
-  institutionTypes: [],
-  careerStages: [],
-  citizenshipRequirements: [],
-  residencyRequirements: [],
-  applicationLanguages: [],
-  sponsorTypes: [],
-  taxonomyAreaIds: [],
-  importedAreaIds: [],
-  lifecycleStatuses: ['OPEN', 'ROLLING'],
-  funderIds: [],
-  sdgGoals: [],
-  programmeFrameworks: [],
-  qualifications: [],
-  projectDurations: [],
-  targetGroups: [],
-  indirectCostPolicies: [],
-  mobility: [],
-  applicationRoutes: [],
-  noMembershipNeeded: false,
-  deadlineFrom: '',
-  deadlineTo: '',
-  rollingOnly: false,
-  amountMin: null,
-  amountMax: null,
-  amountCurrency: '',
-  includeUnknownAmount: false,
-  includeExpired: false,
-  limit: 10,
-  sort: 'best_match',
-};
-
-const manualDefaultFilters: Required<RecommendationSearchFilters> = {
-  ...defaultFilters,
-  limit: 12,
-  sort: 'best_match',
-};
+const defaultFilters = BASE_DIRECTORY_FILTERS;
 
 async function apiRequest<T>(
   authFetch: (url: string, options?: RequestInit) => Promise<Response>,
@@ -79,42 +38,7 @@ async function apiRequest<T>(
   return payload as T;
 }
 
-type DirectoryFilters = Required<RecommendationSearchFilters>;
 const DIRECTORY_URL_KEYS = ['tab', 'q', 'f', 'page'];
-
-/** The filters that differ from the defaults, for the address bar (null when none). */
-function encodeDirectoryFilters(filters: DirectoryFilters): string | null {
-  const changed = Object.fromEntries(
-    Object.entries(filters).filter(
-      ([key, value]) => key !== 'limit' && JSON.stringify(value) !== JSON.stringify(manualDefaultFilters[key as keyof DirectoryFilters])
-    )
-  );
-  return Object.keys(changed).length > 0 ? JSON.stringify(changed) : null;
-}
-
-/** Filters from a shared link: unknown keys and wrongly typed values are ignored. */
-function decodeDirectoryFilters(raw: unknown): DirectoryFilters {
-  if (typeof raw !== 'string') return manualDefaultFilters;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object') return manualDefaultFilters;
-    const out: Record<string, unknown> = { ...manualDefaultFilters };
-    for (const [key, fallback] of Object.entries(manualDefaultFilters)) {
-      if (!(key in parsed) || key === 'limit') continue;
-      const value = parsed[key];
-      const ok = Array.isArray(fallback)
-        ? Array.isArray(value) && value.every((item) => typeof item === 'string')
-        : fallback === null
-          ? value === null || (typeof value === 'number' && Number.isFinite(value))
-          : typeof value === typeof fallback;
-      if (ok) out[key] = value;
-    }
-    if (parsed.includeExpired === true && !('lifecycleStatuses' in parsed)) out.lifecycleStatuses = [];
-    return out as DirectoryFilters;
-  } catch {
-    return manualDefaultFilters;
-  }
-}
 
 export default function FinderPage() {
   const { user, isLoading, authFetch } = useAuth();
@@ -127,26 +51,8 @@ export default function FinderPage() {
     usePublicationContext: false,
   });
   const [finderContext, setFinderContext] = useState<ResearcherFinderContext | null>(null);
-  const [manualQuery, setManualQuery] = useState('');
-  const [manualActiveQuery, setManualActiveQuery] = useState('');
-  // One filter state drives the results, the facet counts and the address
-  // bar; facets, pickers and chips all edit it, so no control can drop
-  // another's filters.
-  const [manualFilters, setManualFilters] = useState<DirectoryFilters>(manualDefaultFilters);
-  const [manualResults, setManualResults] = useState<RecommendationRawResultItem[]>([]);
-  const [manualLoading, setManualLoading] = useState(false);
-  const [manualPage, setManualPage] = useState(1);
-  const [manualTotalPages, setManualTotalPages] = useState(1);
-  const [manualTotalResults, setManualTotalResults] = useState(0);
-  const [manualHasNextPage, setManualHasNextPage] = useState(false);
-  const [manualHasPreviousPage, setManualHasPreviousPage] = useState(false);
-  const [directoryFacets, setDirectoryFacets] = useState<DirectoryFacetResponse | null>(null);
-  const [directoryFacetsLoading, setDirectoryFacetsLoading] = useState(false);
-  const [facetLabels, setFacetLabels] = useState<Record<string, string>>({});
-  const directorySeq = useRef(0);
   const directoryBootRef = useRef(false);
   const directoryNavigationRef = useRef<string | null>(null);
-  const directoryFetchedRef = useRef(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   // Grant Studio is plan-gated. When the tenant's plan excludes it, the
   // "begin writing" affordances are hidden rather than 403-ing on click.
@@ -159,6 +65,8 @@ export default function FinderPage() {
     user?.ati_id === 'PLATFORM';
   const uploadQueryHandledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+
+  const directory = useFundingDirectory({ authFetch, preferences, onError: setError, onSync: writeDirectoryUrl });
 
   const chat = useFinderChat({
     authFetch,
@@ -215,90 +123,6 @@ export default function FinderPage() {
     router.replace({ pathname: router.pathname, query: next }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
   }
 
-  /**
-   * Loads the directory for a query, filters and page. Facets are reloaded
-   * unless only the page or the order changed. A newer request wins: a
-   * response that arrives after a later click is dropped.
-   */
-  async function runDirectory(
-    options: { query?: string; filters?: DirectoryFilters; page?: number; prefs?: FinderPreferenceValues; facets?: boolean; syncUrl?: boolean } = {}
-  ) {
-    const query = options.query ?? manualActiveQuery;
-    const filters = options.filters ?? manualFilters;
-    const page = options.page ?? 1;
-    const prefs = options.prefs ?? preferences;
-    const withFacets = options.facets ?? true;
-    directoryFetchedRef.current = true;
-    const seq = ++directorySeq.current;
-
-    setManualActiveQuery(query);
-    setManualPage(page);
-    setManualFilters(filters);
-    setManualLoading(true);
-    if (withFacets) setDirectoryFacetsLoading(true);
-    setError(null);
-    if (options.syncUrl !== false) writeDirectoryUrl(query, filters, page);
-
-    const listing = apiRequest<RecommendationDirectoryResponse>(authFetch, '/api/recommendations/manual-search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        page,
-        filters,
-        useEligibilityProfile: prefs.useEligibilityProfile,
-        usePublicationContext: prefs.usePublicationContext,
-      }),
-    });
-    const facetRequest = withFacets
-      ? apiRequest<DirectoryFacetResponse>(authFetch, '/api/recommendations/directory/facets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: query || undefined, filters }),
-        })
-      : null;
-
-    try {
-      const response = await listing;
-      if (seq !== directorySeq.current) return;
-      setManualResults(response.results);
-      setManualPage(response.page);
-      setManualTotalPages(response.totalPages);
-      setManualTotalResults(response.totalResults);
-      setManualHasNextPage(response.hasNextPage);
-      setManualHasPreviousPage(response.hasPreviousPage);
-    } catch (err) {
-      if (seq === directorySeq.current) {
-        setManualResults([]);
-        setManualTotalResults(0);
-        setError(err instanceof Error ? err.message : 'Failed to load funding directory');
-      }
-    } finally {
-      if (seq === directorySeq.current) setManualLoading(false);
-    }
-
-    if (!facetRequest) return;
-    try {
-      const response = await facetRequest;
-      if (seq !== directorySeq.current) return;
-      setDirectoryFacets(response);
-      // Remember labels, so a chosen research area or funder keeps its name
-      // in the chips after it drops out of the facet list.
-      const learned: Record<string, string> = {};
-      for (const [dimension, items] of Object.entries(response.facets)) {
-        for (const item of items) {
-          const label = dimension === 'taxonomyArea' ? item.level2Name || item.level1Name || item.label : item.label;
-          if (label) learned[`${dimension}:${item.value}`] = label;
-        }
-      }
-      setFacetLabels((previous) => ({ ...previous, ...learned }));
-    } catch {
-      // Facets are non-critical: the results are still right without counts.
-    } finally {
-      if (seq === directorySeq.current) setDirectoryFacetsLoading(false);
-    }
-  }
-
   // First load: the address bar may carry a shared search (?tab=directory&q=…&f=…).
   useEffect(() => {
     if (!user || !router.isReady || directoryBootRef.current) return;
@@ -308,8 +132,8 @@ export default function FinderPage() {
     directoryNavigationRef.current = router.asPath;
     const query = typeof router.query.q === 'string' ? router.query.q.slice(0, 300) : '';
     const page = Number(router.query.page) > 1 ? Math.floor(Number(router.query.page)) : 1;
-    setManualQuery(query);
-    runDirectory({ query, filters: decodeDirectoryFilters(router.query.f), page, syncUrl: false }).catch(() => undefined);
+    directory.setQuery(query);
+    directory.run({ query, filters: decodeDirectoryFilters(router.query.f), page, syncUrl: false }).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, router.isReady]);
 
@@ -322,9 +146,9 @@ export default function FinderPage() {
       const query = typeof router.query.q === 'string' ? router.query.q : '';
       const filters = decodeDirectoryFilters(router.query.f);
       const page = Math.max(1, Number(router.query.page) || 1);
-      if (!directoryFetchedRef.current || query !== manualActiveQuery || JSON.stringify(filters) !== JSON.stringify(manualFilters) || page !== manualPage) {
-        setManualQuery(query);
-        runDirectory({query,filters,page,syncUrl:false}).catch(()=>undefined);
+      if (!directory.fetched.current || query !== directory.activeQuery || JSON.stringify(filters) !== JSON.stringify(directory.filters) || page !== directory.page) {
+        directory.setQuery(query);
+        directory.run({ query, filters, page, syncUrl: false }).catch(() => undefined);
       }
     }
     // Navigation changes drive restoration, not each result state update.
@@ -334,35 +158,11 @@ export default function FinderPage() {
   function handleSelectTab(tab: FinderTab) {
     setFinderTab(tab);
     if (tab === 'manual') {
-      writeDirectoryUrl(manualActiveQuery, manualFilters, manualPage);
+      writeDirectoryUrl(directory.activeQuery, directory.filters, directory.page);
     } else {
       const kept = Object.fromEntries(Object.entries(router.query).filter(([key]) => !DIRECTORY_URL_KEYS.includes(key)));
       router.replace({ pathname: router.pathname, query: { ...kept, tab: 'ai' } }, undefined, { shallow: true, scroll: false }).catch(() => undefined);
     }
-  }
-
-  function handleDirectoryFiltersChange(next: DirectoryFilters) {
-    const withoutOrder = (filters: DirectoryFilters) => JSON.stringify({ ...filters, sort: '' });
-    runDirectory({ filters: next, facets: withoutOrder(next) !== withoutOrder(manualFilters) }).catch(() => undefined);
-  }
-
-  function handleDirectoryClearFilters() {
-    runDirectory({ filters: { ...manualDefaultFilters, sort: manualFilters.sort } }).catch(() => undefined);
-  }
-
-  function handleManualGoToPage(page: number) {
-    if (page === manualPage || page < 1 || page > manualTotalPages) return;
-    runDirectory({ page, facets: false }).catch(() => undefined);
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function handleDirectorySearch() {
-    runDirectory({ query: manualQuery.trim() }).catch(() => undefined);
-  }
-
-  function handleDirectoryClearQuery() {
-    setManualQuery('');
-    runDirectory({ query: '' }).catch(() => undefined);
   }
 
   async function handlePreferenceChange(value: FinderPreferenceValues) {
@@ -370,7 +170,7 @@ export default function FinderPage() {
     // Preferences rank and badge the results; they never change what
     // matches, so the facet counts stay as they are.
     if (finderTab === 'manual') {
-      await runDirectory({ prefs: value, page: manualPage, facets: false });
+      await directory.run({ prefs: value, page: directory.page, facets: false });
     }
   }
 
@@ -474,33 +274,33 @@ export default function FinderPage() {
 
         {error ? (
           <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            <span>{error}</span><button type="button" className="inline-flex items-center gap-2 font-semibold" onClick={() => runDirectory({ page: manualPage }).catch(() => undefined)}>Try again<ArrowRight className="h-4 w-4" /></button>
+            <span>{error}</span><button type="button" className="inline-flex items-center gap-2 font-semibold" onClick={() => directory.run({ page: directory.page }).catch(() => undefined)}>Try again<ArrowRight className="h-4 w-4" /></button>
           </div>
         ) : null}
 
         <div id={`finder-panel-${finderTab}`} role="tabpanel" aria-labelledby={`finder-tab-${finderTab}`} tabIndex={0}>
         {finderTab === 'manual' ? (
           <FundingDirectoryPanel
-            query={manualQuery}
-            activeQuery={manualActiveQuery}
-            filters={manualFilters}
-            facets={directoryFacets}
-            facetsLoading={directoryFacetsLoading}
-            loading={manualLoading}
-            results={manualResults}
-            totalResults={manualTotalResults}
-            page={manualPage}
-            totalPages={manualTotalPages}
-            hasNextPage={manualHasNextPage}
-            hasPreviousPage={manualHasPreviousPage}
-            facetLabels={facetLabels}
+            query={directory.query}
+            activeQuery={directory.activeQuery}
+            filters={directory.filters}
+            facets={directory.facets}
+            facetsLoading={directory.facetsLoading}
+            loading={directory.loading}
+            results={directory.results}
+            totalResults={directory.totalResults}
+            page={directory.page}
+            totalPages={directory.totalPages}
+            hasNextPage={directory.hasNextPage}
+            hasPreviousPage={directory.hasPreviousPage}
+            facetLabels={directory.facetLabels}
             profileCountry={finderContext?.profile?.countryOfResidence || null}
-            onQueryChange={setManualQuery}
-            onRunSearch={handleDirectorySearch}
-            onClearQuery={handleDirectoryClearQuery}
-            onFiltersChange={handleDirectoryFiltersChange}
-            onClearFilters={handleDirectoryClearFilters}
-            onGoToPage={handleManualGoToPage}
+            onQueryChange={directory.setQuery}
+            onRunSearch={directory.search}
+            onClearQuery={directory.clearQuery}
+            onFiltersChange={directory.changeFilters}
+            onClearFilters={directory.clearFilters}
+            onGoToPage={directory.goToPage}
             onBeginWriting={canUseGrantStudio ? (result) => handleBeginWritingFromCall(result.id) : undefined}
             getCallDetailsHref={(result) => buildFundingCallDetailHref(result.id)}
             preferences={preferences}
