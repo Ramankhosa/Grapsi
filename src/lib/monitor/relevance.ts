@@ -33,10 +33,11 @@ export function scoreRelevance(title: string, context: string, url: string, conf
  * tools/local-worker/shortlist-rules.cjs so the laptop broker's own sweep
  * applies exactly the same ones; see that file for what they are and why.
  */
-export type ShortlistSkip = 'SITEMAP_NOT_FUNDING' | 'NOT_FUNDING_SECTION' | 'OLD_DATED_PAGE' | 'NOT_FUNDING_TITLE'
+export type ShortlistSkip = 'SITEMAP_NOT_FUNDING' | 'NOT_FUNDING_SECTION' | 'OLD_DATED_PAGE' | 'NOT_FUNDING_TITLE' | 'EVENT_PAGE' | 'NEWS_PAGE' | 'WINNERS_PAGE'
 const rules = require('../../../tools/local-worker/shortlist-rules.cjs') as {
   REASONS: Record<ShortlistSkip, string>
   addressSkip: (url: string, onlyInSitemaps: boolean, now?: Date) => ShortlistSkip | null
+  sectionSkip: (url: string, title: string) => ShortlistSkip | null
   shortlistSkip: (url: string, title: string, onlyInSitemaps: boolean, now?: Date) => ShortlistSkip | null
 }
 export const SHORTLIST_REASONS = rules.REASONS
@@ -47,11 +48,17 @@ export function shortlistSkip(url: string, onlyInSitemaps: boolean, now = new Da
 
 /**
  * The keyword score, narrowed for pages with no funding word: a page whose
- * title or address carries one (in any watched language, e.g. "£7 million
- * awarded", "ansøg nu") is always read.
+ * title or address carries one (in any watched language, e.g. "ansøg nu") is
+ * read, except in event, news and winner folders (see sectionSkip).
  */
 export function scoreShortlist(title: string, context: string, url: string, config: RelevanceConfig, onlyInSitemaps: boolean, now = new Date()) {
   const score = scoreRelevance(title, context, url, config)
+  // Event, news and winner folders hold no calls even when the page talks about
+  // funding; only a reviewer's own keyword in the title brings one back.
+  const section = rules.sectionSkip(url, title)
+  if (section && score.outcome !== 'STRONG_NEGATIVE' && !hits(normal(title), config.include ?? []).length) {
+    return { ...score, outcome: 'STRONG_NEGATIVE' as RelevanceOutcome, reasons: [SHORTLIST_REASONS[section]] }
+  }
   if (score.outcome !== 'UNCERTAIN') return score
   const skip = rules.shortlistSkip(url, title, onlyInSitemaps, now)
   return skip ? { ...score, outcome: 'STRONG_NEGATIVE' as RelevanceOutcome, reasons: [SHORTLIST_REASONS[skip]] } : score

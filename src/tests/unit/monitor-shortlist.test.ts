@@ -4,6 +4,7 @@ import { scoreShortlist, shortlistSkip } from '@/lib/monitor/relevance'
 
 // Addresses taken from what production queued for the laptop on 29 Oct 2026.
 const NOW = new Date('2026-10-29T00:00:00Z')
+const shortlistReason = (title: string, url: string) => scoreShortlist(title, '', url, {}, false, NOW).reasons.join(' ')
 const outcome = (title: string, url: string, onlyInSitemaps = false, context = '', include: string[] = []) =>
   scoreShortlist(title, context, url, { include }, onlyInSitemaps, NOW).outcome
 
@@ -31,11 +32,10 @@ describe('shortlist rules', () => {
     expect(outcome('updates', 'https://www.nsf.gov/edu/updates', false)).toBe('UNCERTAIN')
   })
 
-  it('never drops a page with a funding word, a source keyword, or a document', () => {
+  it('outside event, news and winner folders, never drops a page with a funding word, a source keyword, or a document', () => {
     expect(outcome('New call for proposals opens', 'https://www.ukri.org/news/new-call-opens/')).toBe('STRONG_POSITIVE')
-    expect(outcome('Info session', 'https://www.nsf.gov/events/info-session', false, 'Learn how to apply for the fellowship')).toBe('STRONG_POSITIVE')
+    expect(outcome('Info session', 'https://www.nsf.gov/funding/info-session', false, 'Learn how to apply for the fellowship')).toBe('STRONG_POSITIVE')
     expect(outcome('Open day', 'https://example.org/events/open-day', false, '', ['open day'])).toBe('STRONG_POSITIVE')
-    expect(outcome('Over 7 million awarded to help AI boost growth', 'https://www.ukri.org/news/over-7-million-awarded/')).toBe('UNCERTAIN')
     expect(outcome('Nu kan du ansøge om støtte', 'https://novonordiskfonden.dk/nyheder/nu-kan-du-ansoege/')).toBe('UNCERTAIN')
     expect(outcome('Guidelines', 'https://example.org/media/2023-01-10/guidelines.pdf')).toBe('UNCERTAIN')
   })
@@ -52,8 +52,8 @@ describe('shortlist rules', () => {
     expect(outcome('CVU California kick off event', 'https://example.org/happenings/cvu-california')).toBe('STRONG_NEGATIVE')
   })
 
-  it('keeps a page whose title or slug has a funding word, even inside a noise folder', () => {
-    expect(outcome('Info session', 'https://www.nsf.gov/events/cybersecurity-innovation-cici-program')).toBe('UNCERTAIN')
+  it('keeps a page whose title or slug has a funding word inside a people or archive folder', () => {
+    expect(outcome('Programme lead', 'https://example.org/people/fellowship-programme-lead')).not.toBe('STRONG_NEGATIVE')
     // A noise folder whose name contains "award" does not save a profile beneath it.
     expect(outcome('john m prausnitz', 'https://www.nsf.gov/honorary-awards/national-medal-science/recipients/john-m-prausnitz')).toBe('STRONG_NEGATIVE')
     // DFG publishes real calls under /aktuelles/ with no funding word in the address.
@@ -64,5 +64,33 @@ describe('shortlist rules', () => {
 
   it('leaves an ordinary page with no funding word uncertain, as before', () => {
     expect(outcome('About the foundation', 'https://example.org/about')).toBe('UNCERTAIN')
+  })
+
+  // The 30 Oct 2026 link check: paid extraction ran on these, and none was an open call.
+  it('drops event, news and winner pages even when they talk about funding', () => {
+    expect(outcome('Faculty Early Career Development Program (CAREER)', 'https://www.nsf.gov/events/deb-virtual-office-hour-career-solicitation-0', false, 'funding opportunity, apply, deadline')).toBe('STRONG_NEGATIVE')
+    expect(outcome('Funding Opportunities in GeoHealth', 'https://www.nsf.gov/events/geohealth-funding-opportunities-office-hour')).toBe('STRONG_NEGATIVE')
+    expect(outcome('2025 10 09', 'https://www.nsf.gov/events/nsf-supplemental-funding-opportunities-expanding-k-12/2025-10-09')).toBe('STRONG_NEGATIVE')
+    expect(outcome('AHRC welcomes significant DCMS funding for creative industries', 'https://www.ukri.org/news/ahrc-welcomes-significant-dcms-funding-for-creative-industries/')).toBe('STRONG_NEGATIVE')
+    expect(outcome('Ernest Rutherford Fellowship', 'https://www.ukri.org/news/stfc-announces-latest-ernest-rutherford-fellows/')).toBe('STRONG_NEGATIVE')
+    expect(outcome('Over 7 million awarded to help AI boost growth', 'https://www.ukri.org/news/over-7-million-awarded/')).toBe('STRONG_NEGATIVE')
+    expect(outcome('Postdoc Fellowship for Research Abroad', 'https://novonordiskfonden.dk/nyheder/stipendier-sender-forskertalenter-til-foerende-institutioner/')).toBe('STRONG_NEGATIVE')
+    expect(outcome('2019 International Research Seed Funding', 'https://verticalurbanism.org/competition-winner/2019-international-research-seed-funding/')).toBe('STRONG_NEGATIVE')
+    expect(shortlistReason('Ernest Rutherford Fellowship', 'https://www.ukri.org/news/stfc-announces-latest-ernest-rutherford-fellows/')).toMatch(/does not say a call is open/)
+  })
+
+  it('still reads a news post that says the call is open, and documents in any folder', () => {
+    expect(outcome('Take-off phase 2, autumn round 2026', 'https://www.nwo.nl/en/news/take-off-phase-2-autumn-round-2026-open-for-proposals')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Pre-announcement: BiodivFuture call opens on 9 September', 'https://www.nwo.nl/en/news/pre-announcement-biodivfuture-call-opens-on-9-september')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Final round of the Perspectief programme', 'https://www.nwo.nl/en/news/final-round-of-the-perspectief-programme-open-for-research-proposals')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Changes to the 2026 call Take-off phase 1', 'https://www.nwo.nl/en/news/changes-to-the-2026-call-take-off-phase-1')).not.toBe('STRONG_NEGATIVE')
+    // DFG publishes the call itself in a calls folder under /news/.
+    expect(outcome('Priority Programme "Net-Zero Concrete" (SPP 2436)', 'https://www.dfg.de/en/news/news-topics/announcements-proposals/2026/ifr-26-74')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Call open: Triple planetary crisis in the polar regions', 'https://www.nwo.nl/en/news/call-open-triple-planetary-crisis-in-the-polar-regions')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Nu kan du ansøge om støtte', 'https://novonordiskfonden.dk/nyheder/nu-kan-du-ansoege/')).toBe('UNCERTAIN')
+    expect(outcome('Fellowship guidelines', 'https://example.org/news/2026/guidelines.pdf')).not.toBe('STRONG_NEGATIVE')
+    // Real calls on the same sites, outside those folders.
+    expect(outcome('Rubicon 2026-3', 'https://www.nwo.nl/en/calls/rubicon-2026-3')).not.toBe('STRONG_NEGATIVE')
+    expect(outcome('Leslie Earl Robertson & SawTeen See Fellowship', 'http://verticalurbanism.org/competition/leslie-earl-robertson-sawteen-see-fellowship/')).not.toBe('STRONG_NEGATIVE')
   })
 })
