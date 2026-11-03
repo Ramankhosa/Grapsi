@@ -588,5 +588,17 @@
       "POST"
     ],
     "guard": "withCatalogueProtection"
+  },
+  "src/app/api/discovery/org/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
+  },
+  "src/app/api/discovery/people/[userId]/route.ts": {
+    "methods": [
+      "GET"
+    ],
+    "guard": "withCatalogueProtection"
   }
 }

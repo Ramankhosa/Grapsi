@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { FinderPreferenceValues } from '@/components/FinderPreferencesPanel';
 import { DIRECTORY_DEFAULT_FILTERS, type DirectoryFilters } from '@/lib/recommendations/directoryUrl';
@@ -39,12 +39,17 @@ export function useFundingDirectory({
   preferences,
   onError,
   onSync,
+  loadListing,
+  facetQuery,
 }: {
   authFetch: AuthFetch;
   preferences: FinderPreferenceValues;
   onError: (message: string | null) => void;
   /** Write the address bar for this query, filters and page. */
   onSync?: (query: string, filters: DirectoryFilters, page: number) => void;
+  /** A host may rank research suggestions while retaining the directory controls. */
+  loadListing?: (options: { query: string; filters: DirectoryFilters; page: number }) => Promise<RecommendationDirectoryResponse>;
+  facetQuery?: (query: string) => string;
 }) {
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
@@ -61,6 +66,7 @@ export function useFundingDirectory({
   const [facetLabels, setFacetLabels] = useState<Record<string, string>>({});
   const seq = useRef(0);
   const fetched = useRef(false);
+  useEffect(() => () => { seq.current += 1; }, []);
 
   /**
    * Loads the directory for a query, filters and page. Facets are reloaded
@@ -84,7 +90,7 @@ export function useFundingDirectory({
     onError(null);
     if (options.syncUrl !== false) onSync?.(nextQuery, nextFilters, nextPage);
 
-    const listing = apiRequest<RecommendationDirectoryResponse>(authFetch, '/api/recommendations/manual-search', {
+    const listing = loadListing ? loadListing({ query: nextQuery, filters: nextFilters, page: nextPage }) : apiRequest<RecommendationDirectoryResponse>(authFetch, '/api/recommendations/manual-search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -99,8 +105,8 @@ export function useFundingDirectory({
       ? apiRequest<DirectoryFacetResponse>(authFetch, '/api/recommendations/directory/facets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: nextQuery || undefined, filters: nextFilters }),
-        })
+          body: JSON.stringify({ query: (facetQuery ? facetQuery(nextQuery) : nextQuery) || undefined, filters: nextFilters }),
+        }).then(value => ({ value, error: null }), error => ({ value: null, error }))
       : null;
 
     try {
@@ -124,7 +130,9 @@ export function useFundingDirectory({
 
     if (!facetRequest) return;
     try {
-      const response = await facetRequest;
+      const settled = await facetRequest;
+      if (settled.error || !settled.value) return;
+      const response = settled.value;
       if (current !== seq.current) return;
       setFacets(response);
       // Remember labels, so a chosen research area or funder keeps its name

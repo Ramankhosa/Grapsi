@@ -100,6 +100,8 @@ export interface ResearcherSearchFilters {
   countries?: string[];
   institutionTypes?: string[];
   careerStages?: string[];
+  /** A literal profile-stage option from Discovery, without vocabulary conversion. */
+  exactCareerStage?: string;
   applicationLanguages?: string[];
   /** Department org-unit ids. A School selection expands to its departments. */
   orgUnitIds?: string[];
@@ -332,6 +334,8 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
 
   if (filters.tenantOnly && input.requesterTenantId) {
     conditions.push(Prisma.sql`u."tenantId" = ${input.requesterTenantId}`);
+    // Platform staff attached to a tenant are not its faculty.
+    conditions.push(Prisma.sql`NOT (u.roles && ARRAY['SUPER_ADMIN','SUPER_ADMIN_VIEWER','PLATFORM_STAFF']::"UserRole"[])`);
   }
 
   const countries =
@@ -351,6 +355,9 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
     normalizeCareerStageList(filters.careerStages || []) || normalizeFilterValues(filters.careerStages);
   if (careerStages.length > 0) {
     conditions.push(Prisma.sql`LOWER(COALESCE(rp.career_stage, '')) = ANY(${sqlLowerTextArray(careerStages)})`);
+  }
+  if (filters.exactCareerStage?.trim()) {
+    conditions.push(Prisma.sql`LOWER(BTRIM(COALESCE(rp.career_stage, ''))) = LOWER(${filters.exactCareerStage.trim()})`);
   }
 
   const applicationLanguages =
@@ -372,7 +379,7 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
 
   const designations = normalizeFilterValues(filters.designations);
   if (designations.length > 0) {
-    conditions.push(Prisma.sql`LOWER(COALESCE(rp.designation, '')) = ANY(${sqlLowerTextArray(designations)})`);
+    conditions.push(Prisma.sql`LOWER(BTRIM(COALESCE(rp.designation, ''))) = ANY(${sqlLowerTextArray(designations)})`);
   }
 
   const researchAreas = normalizeFilterValues(filters.researchAreas);

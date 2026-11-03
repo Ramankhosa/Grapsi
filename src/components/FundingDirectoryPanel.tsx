@@ -690,6 +690,8 @@ interface FundingDirectoryPanelProps {
   searchHeader?: ReactNode;
   /** Replaces the result-count line, for results that are not a full count. */
   resultSummary?: ReactNode;
+  emptyState?: ReactNode;
+  showPreferences?: boolean;
   preferences: FinderPreferenceValues;
   onChangePreferences: (preferences: FinderPreferenceValues) => void;
 }
@@ -726,6 +728,8 @@ function FundingDirectoryPanelContent({
   searchCopy,
   searchHeader,
   resultSummary,
+  emptyState,
+  showPreferences = true,
   preferences,
   onChangePreferences,
 }: FundingDirectoryPanelProps) {
@@ -1037,7 +1041,7 @@ function FundingDirectoryPanelContent({
                   <option value="deadline_soonest">Deadline, soonest first</option>
                 </select>
               </label>
-              <button
+              {showPreferences ? <button
                 type="button"
                 onClick={() => setPreferencesOpen((open) => !open)}
                 aria-expanded={preferencesOpen}
@@ -1047,11 +1051,11 @@ function FundingDirectoryPanelContent({
               >
                 My preferences
                 <span className="text-[11px]">{activePreferenceCount > 0 ? `${activePreferenceCount} on` : 'off'}</span>
-              </button>
+              </button> : null}
             </div>
           </div>
 
-          {preferencesOpen ? (
+          {showPreferences && preferencesOpen ? (
             <div className="cb-card mb-3 p-3">
               <FinderPreferencesPanel preferences={preferences} onChange={onChangePreferences} compact />
               <p className="cb-hint mt-2">Preferences change the order of results and the eligibility badges, not which calls match.</p>
@@ -1060,7 +1064,7 @@ function FundingDirectoryPanelContent({
 
           {loading && results.length === 0 ? (
             <div role="status" aria-label="Loading opportunities" className="grid gap-4 xl:grid-cols-2">{[0,1,2,3].map(n => <div key={n} className="cb-card animate-pulse p-6"><div className="h-3 w-24 rounded bg-slate-100" /><div className="mt-4 h-5 w-4/5 rounded bg-slate-200" /><div className="mt-3 h-3 rounded bg-slate-100" /><div className="mt-6 h-20 rounded-xl bg-slate-50" /></div>)}</div>
-          ) : results.length === 0 ? (
+          ) : results.length === 0 && emptyState ? emptyState : results.length === 0 ? (
             <div className="rounded-xl border border-dashed border-hairline bg-ground px-6 py-12 text-center">
               <p className="text-[15px] font-semibold text-ink">No calls match all of these.</p>
               <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-6 text-muted">

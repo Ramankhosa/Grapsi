@@ -1,6 +1,7 @@
 'use client'
 
-import { ReactNode, useEffect, useState } from 'react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
 
 import { useAuth } from '@/lib/auth-context'
 import AllocateCallButton from '@/components/funding-dept/AllocateCallButton'
@@ -74,7 +75,31 @@ interface Props {
   onAllocated?: () => void
   /** Actions for this context — "Assign call", "Shortlist" — beside Close. */
   children?: ReactNode
+  /** Where the profile is read from; Research Discovery uses its own member-wide endpoint. */
+  profileUrl?: string
+  /** nickel: the department's centred panel. cobalt: a side sheet in the researcher workspace style. */
+  tone?: 'nickel' | 'cobalt'
 }
+
+/** The few classes that differ between the two shells; content layout is shared. */
+const TONES = {
+  nickel: {
+    overlay: 'fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4',
+    panel: 'flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-nickel-200 bg-white shadow-nk-sheet',
+    rule: 'border-nickel-200', eyebrow: 'nk-eyebrow', sub: 'nk-sub', title: 'text-nickel-900', body: 'text-nickel-700',
+    quiet: 'nk-panel-quiet', secondary: 'nk-btn-secondary', ghost: 'nk-btn-ghost nk-btn-sm', link: 'nk-btn-secondary nk-btn-sm',
+    area: 'nk-badge nk-badge-live normal-case tracking-normal', keyword: 'nk-badge normal-case tracking-normal',
+    bar: 'border-nickel-200', skeleton: 'bg-nickel-100',
+  },
+  cobalt: {
+    overlay: 'fixed inset-0 z-50 flex justify-end bg-slate-950/35 backdrop-blur-sm',
+    panel: 'flex h-full w-[min(96vw,560px)] flex-col bg-white shadow-2xl',
+    rule: 'border-slate-200', eyebrow: 'cb-eyebrow', sub: 'text-[13px] text-slate-500', title: 'text-slate-950', body: 'text-slate-600',
+    quiet: 'rounded-xl bg-slate-50', secondary: 'cb-btn-secondary', ghost: 'cb-btn-ghost cb-btn-sm', link: 'cb-btn-secondary cb-btn-sm',
+    area: 'cb-badge-cobalt', keyword: 'cb-badge',
+    bar: 'border-slate-200', skeleton: 'bg-slate-100',
+  },
+} as const
 
 export default function FacultyProfileDrawer({
   userId,
@@ -83,11 +108,15 @@ export default function FacultyProfileDrawer({
   onClose,
   onAllocated,
   children,
+  profileUrl,
+  tone = 'nickel',
 }: Props) {
+  const t = TONES[tone]
   const { authFetch } = useAuth()
   const [data, setData] = useState<FacultyProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const returnFocus = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -97,7 +126,7 @@ export default function FacultyProfileDrawer({
     ;(async () => {
       try {
         const response = await authFetch(
-          `/api/researcher-matching?action=profile&userId=${encodeURIComponent(userId)}`
+          profileUrl || `/api/researcher-matching?action=profile&userId=${encodeURIComponent(userId)}`
         )
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error || 'Could not load the profile')
@@ -111,7 +140,7 @@ export default function FacultyProfileDrawer({
     return () => {
       cancelled = true
     }
-  }, [authFetch, userId])
+  }, [authFetch, userId, profileUrl])
 
   // Escape closes it. A drawer opened from a table row is dismissed far more
   // often than it is read through.
@@ -126,25 +155,22 @@ export default function FacultyProfileDrawer({
 
   const hasAnyLink = data ? PROFILE_LINKS.some((link) => data.links[link.key]) : false
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4"
-      onClick={onClose}
-    >
+  const panel = (
       <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-nickel-200 bg-white shadow-nk-sheet"
+        className={t.panel}
         role="dialog"
         aria-modal="true"
         aria-label="Faculty profile"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-nickel-200 px-6 py-4">
+        <div className={`flex items-start justify-between gap-3 border-b ${t.rule} px-6 py-4`}>
           <div className="min-w-0">
-            <p className="nk-eyebrow">Faculty profile</p>
-            <h3 className="mt-1 text-[17px] font-semibold text-nickel-900">
+            {tone === 'cobalt' && <Dialog.Title className="sr-only">Faculty profile</Dialog.Title>}
+            <p className={t.eyebrow}>Faculty profile</p>
+            <h3 className={`mt-1 text-[17px] font-semibold ${t.title}`}>
               {data?.name || fallbackName}
             </h3>
-            <p className="nk-sub mt-0.5">
+            <p className={`${t.sub} mt-0.5`}>
               {[data?.designation, data?.department, data?.school].filter(Boolean).join(' · ') ||
                 fallbackHint ||
                 ''}
@@ -152,7 +178,7 @@ export default function FacultyProfileDrawer({
           </div>
           <button
             type="button"
-            className="nk-btn-ghost nk-btn-sm"
+            className={t.ghost}
             onClick={onClose}
             aria-label="Close profile"
           >
@@ -163,9 +189,9 @@ export default function FacultyProfileDrawer({
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {loading ? (
             <div className="animate-pulse space-y-3" aria-hidden>
-              <div className="h-4 w-1/2 rounded bg-nickel-100" />
-              <div className="h-3 w-2/3 rounded bg-nickel-100" />
-              <div className="h-3 w-1/3 rounded bg-nickel-100" />
+              <div className={`h-4 w-1/2 rounded ${t.skeleton}`} />
+              <div className={`h-3 w-2/3 rounded ${t.skeleton}`} />
+              <div className={`h-3 w-1/3 rounded ${t.skeleton}`} />
             </div>
           ) : error ? (
             <p className="text-[13px] text-red-700">{error}</p>
@@ -174,7 +200,7 @@ export default function FacultyProfileDrawer({
               {/* External research profiles — the quick outbound checks, first
                   because they are what an officer opens the panel for. */}
               <div>
-                <p className="nk-eyebrow mb-2">Research profiles</p>
+                <p className={`${t.eyebrow} mb-2`}>Research profiles</p>
                 <div className="flex flex-wrap gap-2">
                   {PROFILE_LINKS.filter((link) => data.links[link.key]).map((link) => (
                     <a
@@ -182,13 +208,13 @@ export default function FacultyProfileDrawer({
                       href={data.links[link.key] as string}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="nk-btn-secondary nk-btn-sm"
+                      className={t.link}
                     >
                       {link.label} ↗
                     </a>
                   ))}
                   {!hasAnyLink && (
-                    <p className="nk-sub">
+                    <p className={t.sub}>
                       No external profiles on file — ask them to add Google Scholar / Scopus / ORCID
                       links to their researcher profile.
                     </p>
@@ -197,8 +223,8 @@ export default function FacultyProfileDrawer({
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="nk-panel-quiet px-3.5 py-2.5">
-                  <p className="nk-eyebrow">Contact</p>
+                <div className={`${t.quiet} px-3.5 py-2.5`}>
+                  <p className={t.eyebrow}>Contact</p>
                   <a
                     href={`mailto:${data.email}`}
                     className="mt-1 block truncate text-[13px] font-medium text-cobalt-700 hover:underline"
@@ -206,12 +232,12 @@ export default function FacultyProfileDrawer({
                     {data.email}
                   </a>
                   {data.employeeId && (
-                    <p className="nk-sub mt-0.5 text-[11.5px]">Employee ID {data.employeeId}</p>
+                    <p className={`${t.sub} mt-0.5 text-[11.5px]`}>Employee ID {data.employeeId}</p>
                   )}
                 </div>
-                <div className="nk-panel-quiet px-3.5 py-2.5">
-                  <p className="nk-eyebrow">Standing</p>
-                  <p className="mt-1 text-[13px] text-nickel-800">
+                <div className={`${t.quiet} px-3.5 py-2.5`}>
+                  <p className={t.eyebrow}>Standing</p>
+                  <p className={`mt-1 text-[13px] ${t.title}`}>
                     {[
                       data.careerStage?.replace(/_/g, ' '),
                       data.yearsOfExperience ? `${data.yearsOfExperience} yrs experience` : null,
@@ -221,7 +247,7 @@ export default function FacultyProfileDrawer({
                       .join(' · ') || '—'}
                   </p>
                   {data.languages.length > 0 && (
-                    <p className="nk-sub mt-0.5 text-[11.5px]">
+                    <p className={`${t.sub} mt-0.5 text-[11.5px]`}>
                       Applies in {data.languages.join(', ')}
                     </p>
                   )}
@@ -230,19 +256,19 @@ export default function FacultyProfileDrawer({
 
               {data.summary && (
                 <div>
-                  <p className="nk-eyebrow mb-1.5">Research summary</p>
-                  <p className="text-[13px] leading-relaxed text-nickel-700">{data.summary}</p>
+                  <p className={`${t.eyebrow} mb-1.5`}>Research summary</p>
+                  <p className={`text-[13px] leading-relaxed ${t.body}`}>{data.summary}</p>
                 </div>
               )}
 
               {data.researchAreas.length > 0 && (
                 <div>
-                  <p className="nk-eyebrow mb-1.5">Research areas</p>
+                  <p className={`${t.eyebrow} mb-1.5`}>Research areas</p>
                   <div className="flex flex-wrap gap-1">
                     {data.researchAreas.map((area) => (
                       <span
                         key={area}
-                        className="nk-badge nk-badge-live normal-case tracking-normal"
+                        className={t.area}
                       >
                         {area}
                       </span>
@@ -253,10 +279,10 @@ export default function FacultyProfileDrawer({
 
               {data.keywords.length > 0 && (
                 <div>
-                  <p className="nk-eyebrow mb-1.5">Keywords</p>
+                  <p className={`${t.eyebrow} mb-1.5`}>Keywords</p>
                   <div className="flex flex-wrap gap-1">
                     {data.keywords.map((keyword) => (
-                      <span key={keyword} className="nk-badge normal-case tracking-normal">
+                      <span key={keyword} className={t.keyword}>
                         {keyword}
                       </span>
                     ))}
@@ -265,11 +291,11 @@ export default function FacultyProfileDrawer({
               )}
 
               <div>
-                <p className="nk-eyebrow mb-1.5">
+                <p className={`${t.eyebrow} mb-1.5`}>
                   Publications on file ({data.publications.length})
                 </p>
                 {data.publications.length === 0 ? (
-                  <p className="nk-sub">
+                  <p className={t.sub}>
                     None recorded. Publications are the ones a researcher marks for funding matching
                     in their own profile, so an empty list means nobody has marked any — not that
                     they have not published.
@@ -280,20 +306,20 @@ export default function FacultyProfileDrawer({
                     {data.publications.map((pub) => {
                       const href = publicationHref(pub)
                       return (
-                        <li key={pub.id} className="border-l-2 border-nickel-200 pl-3">
+                        <li key={pub.id} className={`border-l-2 ${t.rule} pl-3`}>
                           {href ? (
                             <a
                               href={href}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-[13px] font-medium text-nickel-900 hover:text-cobalt-700 hover:underline"
+                              className={`text-[13px] font-medium ${t.title} hover:text-cobalt-700 hover:underline`}
                             >
                               {pub.title}
                             </a>
                           ) : (
-                            <p className="text-[13px] font-medium text-nickel-900">{pub.title}</p>
+                            <p className={`text-[13px] font-medium ${t.title}`}>{pub.title}</p>
                           )}
-                          <p className="nk-sub text-[11.5px]">
+                          <p className={`${t.sub} text-[11.5px]`}>
                             {[
                               pub.authors.length > 0
                                 ? pub.authors.slice(0, 4).join(', ') +
@@ -315,14 +341,22 @@ export default function FacultyProfileDrawer({
           ) : null}
         </div>
 
-        <div className="flex flex-wrap justify-end gap-2 border-t border-nickel-200 px-6 py-4">
-          <button type="button" className="nk-btn-secondary" onClick={onClose}>
+        <div className={`flex flex-wrap justify-end gap-2 border-t ${t.bar} px-6 py-4`}>
+          <button type="button" className={t.secondary} onClick={onClose}>
             Close
           </button>
-          <AllocateCallButton person={{ userId, name: data?.name || fallbackName, email: data?.email, school: data?.school, department: data?.department, employeeId: data?.employeeId }} onAssigned={onAllocated} />
+          {tone === 'nickel' && <AllocateCallButton person={{ userId, name: data?.name || fallbackName, email: data?.email, school: data?.school, department: data?.department, employeeId: data?.employeeId }} onAssigned={onAllocated} />}
           {children}
         </div>
       </div>
-    </div>
   )
+  if (tone === 'cobalt') return <Dialog.Root open onOpenChange={open => { if (!open) onClose() }}><Dialog.Portal>
+    <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/35 backdrop-blur-sm" />
+    <Dialog.Content asChild aria-describedby={undefined} className="fixed inset-y-0 right-0 z-50 outline-none"
+      onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null }}
+      onCloseAutoFocus={event => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus() } }}>
+      {panel}
+    </Dialog.Content>
+  </Dialog.Portal></Dialog.Root>
+  return <div className={t.overlay} onClick={onClose}>{panel}</div>
 }

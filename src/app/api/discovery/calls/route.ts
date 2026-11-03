@@ -5,11 +5,14 @@ import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/re
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 import { loadStandardAreas } from '@/lib/researchAreas/store'
 import { validateDiscoveryAreas } from '@/lib/discovery/server'
+import { directoryFilterSchema } from '@/lib/recommendations/directorySchema'
 
 export const dynamic = 'force-dynamic'
 const schema = z.object({ mode: z.enum(['standard', 'semantic']), query: z.string().trim().max(300).default(''),
   areaIds: z.array(z.string().max(120)).max(20).default([]), page: z.number().int().min(1).max(500).default(1),
-  includeClosed: z.boolean().default(false), sort: z.enum(['best_match', 'deadline_soonest']).default('best_match') }).strict()
+  includeClosed: z.boolean().default(false), sort: z.enum(['best_match', 'deadline_soonest']).default('best_match'),
+  /** The directory's filters, applied to meaning-based suggestions too. */
+  filters: directoryFilterSchema }).strict()
 
 export const GET = withCatalogueProtection(async (request: NextRequest) => {
   const auth = await requireRecommendationUser(request)
@@ -28,8 +31,9 @@ export const POST = withCatalogueProtection(async (request: NextRequest) => {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 })
   }
   const access = toRecommendationAccessScope(auth.actor)
-  const filters = { lifecycleStatuses: input.includeClosed ? [] : ['OPEN', 'ROLLING'] as Array<'OPEN' | 'ROLLING'>,
-    importedAreaIds: input.mode === 'standard' ? input.areaIds : [], limit: input.mode === 'semantic' ? 50 : 12, sort: input.sort }
+  const legacy = { lifecycleStatuses: input.includeClosed ? [] : ['OPEN', 'ROLLING'] as Array<'OPEN' | 'ROLLING'>,
+    importedAreaIds: input.mode === 'standard' ? input.areaIds : [], sort: input.sort }
+  const filters = { ...legacy, ...(input.filters || {}), limit: input.mode === 'semantic' ? 50 : 12 }
   try {
     if (input.mode === 'standard') {
       const result = await recommendationSearchService.browseDirectory({ query: input.query, filters, access, page: input.page })
@@ -37,7 +41,8 @@ export const POST = withCatalogueProtection(async (request: NextRequest) => {
     }
     // A topic is input evidence, not an instruction to generate or expand a query.
     const result = await recommendationSearchService.search({ inputMode: 'paper_metadata', query: { title: input.query }, filters, access })
-    return NextResponse.json({ calls: result.results, total: result.results.length, page: 1, totalPages: 1, basis: 'semantic', bounded: true,
+    // Full rows, so suggestions render on the same cards as the directory.
+    return NextResponse.json({ calls: input.filters ? result.rawResults : result.results, total: result.results.length, page: 1, totalPages: 1, basis: 'semantic', bounded: true,
       warning: result.degradedMode ? 'Semantic retrieval is unavailable. These suggestions use text matching.' : result.lowConfidence ? 'These suggestions have limited evidence of relevance. Check the call scope carefully.' : null })
   } catch {
     return NextResponse.json({ error: 'Call search is temporarily unavailable. Please retry.' }, { status: 503 })

@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope, type TenantScopeContext } from '@/lib/auth/tenantAccess'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { intersectRequestedUnits } from '@/lib/orgUnits/scope'
+import { loadFacultyProfile } from '@/lib/faculty/profile'
 
 /**
  * Tenant-scoped researcher matching.
@@ -202,35 +203,11 @@ async function catalogueGET(request: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: 'userId is required' }, { status: 400 })
     }
-    const managed = auth.scope.managedUnitIds
-    const profile = await prisma.researcherProfile.findFirst({
-      where: {
-        user_id: userId,
-        user: { tenantId },
-        ...(auth.scope.isTenantWide
-          ? {}
-          : { org_unit_id: { in: managed.length > 0 ? managed : ['__none__'] } }),
-      },
-      select: {
-        user: { select: { id: true, name: true, email: true } },
-        display_name: true,
-        employee_id: true,
-        designation: true,
-        school: true,
-        department: true,
-        institution_name: true,
-        career_stage: true,
-        years_of_experience: true,
-        country_of_residence: true,
-        application_languages: true,
-        research_summary: true,
-        research_areas: true,
-        keywords: true,
-        linkedin_url: true,
-        google_scholar_url: true,
-        scopus_url: true,
-        orcid_url: true,
-      },
+    const profile = await loadFacultyProfile({
+      tenantId,
+      userId,
+      unitIds: auth.scope.isTenantWide ? null : auth.scope.managedUnitIds,
+      includeEmployeeId: true,
     })
     if (!profile) {
       return NextResponse.json(
@@ -238,48 +215,7 @@ async function catalogueGET(request: NextRequest) {
         { status: 404 }
       )
     }
-
-    const publications = await prisma.referenceLibrary.findMany({
-      where: { userId, isActive: true, tags: { has: 'my-publication' } },
-      select: { id: true, title: true, authors: true, year: true, venue: true, doi: true, url: true },
-      orderBy: [{ year: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
-      take: 25,
-    })
-
-    return NextResponse.json({
-      profile: {
-        userId: profile.user.id,
-        name: profile.display_name || profile.user.name || profile.user.email,
-        email: profile.user.email,
-        employeeId: profile.employee_id,
-        designation: profile.designation,
-        school: profile.school,
-        department: profile.department,
-        institution: profile.institution_name,
-        careerStage: profile.career_stage,
-        yearsOfExperience: profile.years_of_experience,
-        country: profile.country_of_residence,
-        languages: profile.application_languages,
-        summary: profile.research_summary,
-        researchAreas: profile.research_areas,
-        keywords: profile.keywords,
-        links: {
-          googleScholar: profile.google_scholar_url,
-          scopus: profile.scopus_url,
-          orcid: profile.orcid_url,
-          linkedin: profile.linkedin_url,
-        },
-        publications: publications.map((p) => ({
-          id: p.id,
-          title: p.title,
-          authors: p.authors,
-          year: p.year,
-          venue: p.venue,
-          doi: p.doi,
-          url: p.url,
-        })),
-      },
-    })
+    return NextResponse.json({ profile })
   }
 
   // Default: list funding calls visible to this tenant for the dropdown.

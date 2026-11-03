@@ -25,6 +25,21 @@ describe('discovery scores the research evidence that retrieved the person', () 
     const service = new ResearcherSearchService() as any
     vi.spyOn(service, 'buildQueryVectorLiteral').mockResolvedValue('[0]')
     await service.search({ query: 'biosensors', requesterTenantId: 'tenant', filters: { tenantOnly: true }, recordRun: false })
-    for (const [sql] of m.query.mock.calls) expect(sql.sql).toContain("u.status = 'ACTIVE'")
+    for (const [sql] of m.query.mock.calls) {
+      expect(sql.sql).toContain("u.status = 'ACTIVE'")
+      expect(sql.sql).toContain("'SUPER_ADMIN','SUPER_ADMIN_VIEWER','PLATFORM_STAFF'")
+    }
+  })
+  it('uses literal profile-stage options for Discovery instead of silently converting their vocabulary', async () => {
+    m.query.mockResolvedValue([])
+    const service = new ResearcherSearchService() as any
+    vi.spyOn(service, 'buildQueryVectorLiteral').mockResolvedValue('[0]')
+    await service.search({ query: 'biosensors', requesterTenantId: 'tenant', filters: { tenantOnly: true, exactCareerStage: 'SENIOR', designations: ['Professor'] }, recordRun: false })
+    expect(m.query).toHaveBeenCalled()
+    for (const [sql] of m.query.mock.calls) {
+      expect(sql.values).toContain('SENIOR')
+      expect(sql.sql).toContain("BTRIM(COALESCE(rp.career_stage, ''))")
+      expect(sql.sql).toContain("BTRIM(COALESCE(rp.designation, ''))")
+    }
   })
 })
