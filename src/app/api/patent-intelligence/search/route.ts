@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingActor } from '@/lib/funding/access'
 import { searchRequestSchema } from '@/lib/patentIntelligence/schemas'
+import { PATENT_PRIVATE_HEADERS, readPatentJson } from '@/lib/patentIntelligence/http'
 import {
   enforcePatentRateLimit,
   isPatentSearchEnabled,
@@ -10,9 +11,10 @@ import {
 } from '@/lib/patentIntelligence/service'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-// Semantic patent search over the PatentNest corpus. Deliberately unmetered
+// Hybrid and structured patent search over the PatentNest corpus. Deliberately unmetered
 // (no usage-ledger write): it is a lookup, not an LLM run. Per-user and global
 // rate limits plus a short cache protect the shared PatentNest key instead.
 export async function POST(request: NextRequest) {
@@ -30,9 +32,10 @@ export async function POST(request: NextRequest) {
   if (limited) return limited
 
   try {
-    const input = searchRequestSchema.parse(await request.json())
+    const body = await readPatentJson(request)
+    const input = searchRequestSchema.parse(body)
     const result = await patentIntelligenceService.searchPatents(input)
-    const headers = new Headers()
+    const headers = new Headers(PATENT_PRIVATE_HEADERS)
     if (result.diagnostics.requestId) headers.set('X-Request-ID', result.diagnostics.requestId)
     return NextResponse.json(result, { headers })
   } catch (error) {

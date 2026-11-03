@@ -44,7 +44,7 @@ describe('createPatentIntelligenceService', () => {
     const client = fakeClient()
     const service = createPatentIntelligenceService({ client: () => client })
     const result = await service.searchPatents({ query: '  solar   cell ', limit: 30 })
-    expect(client.searchPatents).toHaveBeenCalledWith('solar cell', { limit: 30, jurisdictions: [] })
+    expect(client.searchPatents).toHaveBeenCalledWith('solar cell', { limit: 30 })
     expect(result.results[0]).toMatchObject({ publicationNumberKey: 'IN1', jurisdiction: 'IN', title: 'One' })
     expect(result.facets.jurisdictions).toEqual([{ value: 'IN', count: 1 }])
     expect(result.coverage).toEqual({ corpus: 'indian-patent-journal', description: 'Indian patent corpus', jurisdiction: 'IN', documents: 160000, semanticCoveragePercent: 99.2, searchMode: 'hybrid', embeddingModel: 'voyage' })
@@ -92,17 +92,19 @@ describe('createPatentIntelligenceService', () => {
     expect(client.searchPatents).toHaveBeenCalledTimes(202)
   })
 
-  it('forwards jurisdictions only when the env flag is on', async () => {
+  it('forwards jurisdictions by default and rejects an explicit legacy restriction', async () => {
     const client = fakeClient()
     const service = createPatentIntelligenceService({ client: () => client })
     delete process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER
     await service.searchPatents({ query: 'pump', jurisdictions: ['in'] })
-    expect(client.searchPatents).toHaveBeenLastCalledWith('pump', { limit: 30, jurisdictions: [] })
+    expect(client.searchPatents).toHaveBeenLastCalledWith('pump', { limit: 30, jurisdictions: ['IN'] })
 
     process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER = 'true'
-    const result = await service.searchPatents({ query: 'pump', jurisdictions: ['in', 'US', 'xx1'] })
+    const result = await service.searchPatents({ query: 'pump', jurisdictions: ['in', 'US'] })
     expect(client.searchPatents).toHaveBeenLastCalledWith('pump', { limit: 30, jurisdictions: ['IN', 'US'] })
     expect(result.diagnostics.jurisdictionFilterApplied).toBe(true)
+    process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER = 'false'
+    await expect(service.searchPatents({ query: 'pump', jurisdictions: ['US'] })).rejects.toMatchObject({ code: 'INVALID_REQUEST', status: 400 })
   })
 
   it('rejects invalid queries before calling upstream and caches detail lookups by normalized key', async () => {
@@ -150,6 +152,14 @@ describe('enforcePatentRateLimit', () => {
     expect(limited?.status).toBe(429)
     expect(calls).toBe(global + 1)
     await expect(limited?.json()).resolves.toMatchObject({ code: 'RATE_LIMITED', error: expect.stringContaining('busy') })
+  })
+
+  it('shares the upstream budget between search and detail requests', () => {
+    for (let index = 0; index < PATENT_RATE_LIMITS.searchGlobal; index += 1) {
+      expect(enforcePatentRateLimit(`reader-${index}`, 'detail')).toBeNull()
+    }
+    expect(enforcePatentRateLimit('another-reader', 'search')?.status).toBe(429)
+    expect(enforcePatentRateLimit('another-reader', 'shortlist')).toBeNull()
   })
 })
 

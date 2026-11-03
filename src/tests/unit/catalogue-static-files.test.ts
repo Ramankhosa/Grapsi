@@ -13,7 +13,7 @@ describe('private funding source files',()=>{
   expect(middleware(new NextRequest('http://localhost'+path)).status).toBe(404)
  })
  it('leaves unrelated uploads and images available',()=>{
+  expect(middleware(new NextRequest('http://localhost/brand/aigrantmentor-mark.svg')).status).toBe(200)
   expect(middleware(new NextRequest('http://localhost/uploads/avatar.png')).status).toBe(200)
-  expect(middleware(new NextRequest('http://localhost/_next/image?url=%2Fuploads%2Favatar.png&w=640&q=75')).status).toBe(200)
  })
 })

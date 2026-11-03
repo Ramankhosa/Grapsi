@@ -20,14 +20,12 @@ import {
   isPatentNestJurisdictionFilterEnabled,
   type PatentNestSearchOptions,
 } from '@/lib/patentnest/client'
-import type { IndianPatentRecord, PatentNestResponse, PatentNestSearchCoverage, PatentNestSearchData } from '@/lib/patentnest/types'
+import type { IndianPatentRecord, PatentNestResponse, PatentNestSearchCoverage, PatentNestSearchData, PatentNestSearchRequest, PatentNestField } from '@/lib/patentnest/types'
+import { patentNestFieldsSchema } from '@/lib/patentnest/searchContract'
 import { checkRateLimit } from '@/lib/recommendations/rateLimit'
 
 import {
-  buildSearchCacheKey,
-  clampLimit,
   derivePatentFacets,
-  isValidQuery,
   normalizePublicationNumberKey,
   normalizeQuery,
   toPatentSearchItem,
@@ -39,10 +37,12 @@ import type {
   PatentSearchResponse,
   PatentUpstreamRemaining,
 } from './types'
+import { searchRequestSchema } from './schemas'
+import { PATENT_PRIVATE_HEADERS } from './http'
 
 export type PatentNestClientLike = {
   searchPatents(query: string, options?: PatentNestSearchOptions): Promise<PatentNestResponse<PatentNestSearchData>>
-  getPatent(publicationNumber: string): Promise<PatentNestResponse<IndianPatentRecord>>
+  getPatent(publicationNumber: string, options?: { fields?: PatentNestField[] }): Promise<PatentNestResponse<IndianPatentRecord>>
 }
 
 export type PatentIntelligenceServiceDeps = {
@@ -51,7 +51,7 @@ export type PatentIntelligenceServiceDeps = {
   now?: () => number
 }
 
-export type PatentSearchInput = { query: string; limit?: number; jurisdictions?: string[] }
+export type PatentSearchInput = PatentNestSearchRequest
 
 // Interactive budget: one retry, never pausing more than 2s even if PatentNest
 // sends Retry-After: 20. A busy upstream then surfaces as a countdown banner
@@ -122,6 +122,9 @@ function toCoverage(raw: PatentNestSearchCoverage | null | undefined): PatentSea
     semanticCoveragePercent: num(raw.semanticCoveragePercent),
     searchMode: text(raw.searchMode),
     embeddingModel: text(raw.embeddingModel),
+    ...(raw.jurisdictions ? { jurisdictions: raw.jurisdictions } : {}),
+    ...(raw.sources ? { sources: raw.sources } : {}),
+    ...(raw.limitations ? { limitations: raw.limitations } : {}),
   }
 }
 
@@ -139,43 +142,62 @@ export function createPatentIntelligenceService(deps: PatentIntelligenceServiceD
   const detailCache = createCache<PatentSearchItem>(DETAIL_CACHE_MAX_KEYS)
   const detailInflight = new Map<string, Promise<PatentSearchItem>>()
 
-  async function fetchSearch(query: string, limit: number, jurisdictions: string[]): Promise<PatentSearchResponse> {
+  async function fetchSearch(query: string, options: PatentNestSearchOptions & { limit: number }): Promise<PatentSearchResponse> {
     const client = makeClient()
-    const response = await client.searchPatents(query, { limit, jurisdictions })
-    const results = (Array.isArray(response.data?.results) ? response.data.results : [])
+    const response = await client.searchPatents(query, options)
+    const mode = options.mode || (query ? 'hybrid' : 'structured')
+    const pagination = response.data?.pagination
+    if (!Array.isArray(response.data?.results) || (mode === 'structured' && (
+      !pagination || pagination.offset !== (options.offset || 0) || pagination.limit !== options.limit
+      || typeof pagination.hasMore !== 'boolean'
+      || (pagination.nextOffset !== null && (!Number.isInteger(pagination.nextOffset) || pagination.nextOffset <= pagination.offset || pagination.nextOffset > 10000))
+    ))) {
+      throw new PatentNestApiError({ code: 'PATENTNEST_INVALID_RESPONSE', message: 'PatentNest returned invalid search results.', status: 502, requestId: response.meta?.requestId })
+    }
+    const results = response.data.results
       .map(toPatentSearchItem)
       .filter((item): item is PatentSearchItem => Boolean(item))
     return {
       query,
-      limit,
+      limit: options.limit,
       results,
       facets: derivePatentFacets(results),
       coverage: toCoverage(response.data?.coverage),
-      capped: results.length >= limit,
+      mode,
+      ...(mode === 'structured' ? { pagination } : {}),
+      capped: mode === 'hybrid' && results.length >= options.limit,
       diagnostics: {
         requestId: response.meta?.requestId ?? null,
         durationMs: typeof response.meta?.durationMs === 'number' ? response.meta.durationMs : null,
         cached: false,
-        jurisdictionFilterApplied: jurisdictions.length > 0 && isPatentNestJurisdictionFilterEnabled(),
+        jurisdictionFilterApplied: Boolean(options.jurisdictions?.length),
         upstreamRemaining: toUpstreamRemaining(response.meta),
       },
     }
   }
 
   async function searchPatents(input: PatentSearchInput): Promise<PatentSearchResponse> {
-    const query = normalizeQuery(input.query)
-    if (!isValidQuery(query)) {
+    const parsed = searchRequestSchema.safeParse(input)
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]
       throw new PatentNestApiError({
-        code: 'INVALID_QUERY',
-        message: 'Search query must contain between 2 and 2,000 characters.',
+        code: issue.path[0] === 'query' ? 'INVALID_QUERY' : 'INVALID_REQUEST',
+        message: issue.message,
         status: 400,
       })
     }
-    const limit = clampLimit(input.limit)
-    const jurisdictions = isPatentNestJurisdictionFilterEnabled()
-      ? Array.from(new Set((input.jurisdictions || []).map((value) => value.trim().toUpperCase()).filter((value) => /^[A-Z]{2}$/.test(value))))
-      : []
-    const key = buildSearchCacheKey(query, limit, jurisdictions)
+    const { query: rawQuery, ...options } = parsed.data
+    const query = options.mode === 'structured' ? (rawQuery || '').trim() : normalizeQuery(rawQuery)
+    if (options.jurisdictions) {
+      if (!isPatentNestJurisdictionFilterEnabled()) {
+        throw new PatentNestApiError({ code: 'INVALID_REQUEST', message: 'Jurisdiction filtering is disabled for this PatentNest origin.', status: 400 })
+      }
+      options.jurisdictions = Array.from(new Set(options.jurisdictions)).sort()
+    }
+    // Every parameter affecting the returned page belongs in the cache key.
+    const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value
+    const key = JSON.stringify(canonical({ ...options, query: query.toLowerCase() }))
 
     const cached = SEARCH_CACHE_TTL_MS > 0 ? searchCache.get(key, now()) : undefined
     if (cached) return { ...cached, diagnostics: { ...cached.diagnostics, cached: true } }
@@ -183,7 +205,7 @@ export function createPatentIntelligenceService(deps: PatentIntelligenceServiceD
     const inflight = searchInflight.get(key)
     if (inflight) return inflight
 
-    const promise = fetchSearch(query, limit, jurisdictions)
+    const promise = fetchSearch(query, options)
       .then((result) => {
         if (SEARCH_CACHE_TTL_MS > 0) searchCache.set(key, result, now() + SEARCH_CACHE_TTL_MS)
         return result
@@ -195,9 +217,9 @@ export function createPatentIntelligenceService(deps: PatentIntelligenceServiceD
     return promise
   }
 
-  async function fetchDetail(publicationNumber: string): Promise<PatentSearchItem> {
+  async function fetchDetail(publicationNumber: string, fields?: PatentNestField[]): Promise<PatentSearchItem> {
     const client = makeClient()
-    const response = await client.getPatent(publicationNumber)
+    const response = fields ? await client.getPatent(publicationNumber, { fields }) : await client.getPatent(publicationNumber)
     const item = toPatentSearchItem(response.data)
       ?? toPatentSearchItem({ ...(response.data || {}), publicationNumber })
     if (!item) {
@@ -211,10 +233,10 @@ export function createPatentIntelligenceService(deps: PatentIntelligenceServiceD
     return item
   }
 
-  async function getPatent(publicationNumber: string): Promise<PatentDetailResponse> {
+  async function getPatent(publicationNumber: string, options: { fields?: PatentNestField[] } = {}): Promise<PatentDetailResponse> {
     const trimmed = String(publicationNumber ?? '').trim()
-    const key = normalizePublicationNumberKey(trimmed)
-    if (!key || trimmed.length > 200) {
+    const publicationKey = normalizePublicationNumberKey(trimmed)
+    if (!publicationKey || trimmed.length > 200) {
       throw new PatentNestApiError({
         code: 'INVALID_PUBLICATION_NUMBER',
         message: 'A valid publication number is required.',
@@ -222,12 +244,15 @@ export function createPatentIntelligenceService(deps: PatentIntelligenceServiceD
       })
     }
 
+    const fields = options.fields === undefined ? undefined : Array.from(new Set(patentNestFieldsSchema.parse(options.fields))).sort()
+    const key = fields ? `${publicationKey}|${fields.join(',')}` : publicationKey
+
     const cached = detailCache.get(key, now())
     if (cached) return { patent: cached, diagnostics: { requestId: null, cached: true } }
 
     let promise = detailInflight.get(key)
     if (!promise) {
-      promise = fetchDetail(trimmed)
+      promise = fetchDetail(trimmed, fields)
         .then((item) => {
           detailCache.set(key, item, now() + DETAIL_CACHE_TTL_MS)
           return item
@@ -262,7 +287,7 @@ function rateLimitResponse(message: string, resetAt: number): NextResponse {
     { error: message, code: 'RATE_LIMITED', resetAt: new Date(resetAt).toISOString() },
     {
       status: 429,
-      headers: { 'Retry-After': String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))) },
+      headers: { ...PATENT_PRIVATE_HEADERS, 'Retry-After': String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))) },
     },
   )
 }
@@ -280,8 +305,8 @@ export function enforcePatentRateLimit(userId: string, bucket: PatentRateBucket)
       : 'Too many patent requests. Please wait and try again.'
     return rateLimitResponse(message, perUser.resetAt)
   }
-  if (bucket === 'search') {
-    const global = checkRateLimit('patent-search:global', PATENT_RATE_LIMITS.searchGlobal, RATE_WINDOW_MS)
+  if (bucket === 'search' || bucket === 'detail') {
+    const global = checkRateLimit('patent-upstream:global', PATENT_RATE_LIMITS.searchGlobal, RATE_WINDOW_MS)
     if (!global.allowed) {
       return rateLimitResponse('Patent search is busy right now. Please try again in a moment.', global.resetAt)
     }
@@ -302,6 +327,10 @@ function mapUpstreamError(error: PatentNestApiError): MappedError {
     return { status: 502, code: 'PATENTNEST_UPSTREAM_ERROR', message: 'PatentNest returned an unexpected response.' }
   }
   if (error.status === 400) return { status: 400, code: 'INVALID_REQUEST', message: error.message }
+  if (error.status === 413) return { status: 413, code: 'PAYLOAD_TOO_LARGE', message: error.message }
+  if (error.status === 403 && error.upstreamCode === 'JURISDICTION_NOT_AVAILABLE') {
+    return { status: 400, code: 'JURISDICTION_NOT_AVAILABLE', message: 'The selected patent offices are not available. Choose India or another enabled office.' }
+  }
   if (error.status === 401 || error.status === 403) {
     // Never let an upstream key problem look like an expired Grapsi session.
     return { status: 502, code: 'PATENTNEST_UPSTREAM_AUTH', message: 'Patent search is temporarily unavailable (upstream authentication failed).' }
@@ -318,12 +347,12 @@ export function patentErrorResponse(error: unknown): NextResponse {
   if (error instanceof ZodError) {
     return NextResponse.json(
       { error: error.errors[0]?.message || 'Invalid patent request.', code: 'INVALID_REQUEST' },
-      { status: 400 },
+      { status: 400, headers: PATENT_PRIVATE_HEADERS },
     )
   }
   if (error instanceof PatentNestApiError) {
     const mapped = mapUpstreamError(error)
-    const headers = new Headers()
+    const headers = new Headers(PATENT_PRIVATE_HEADERS)
     if (error.requestId) headers.set('X-Request-ID', error.requestId)
     if (error.retryAfterSeconds !== undefined) headers.set('Retry-After', String(Math.max(1, error.retryAfterSeconds)))
     if (mapped.status >= 500) {
@@ -348,7 +377,7 @@ export function patentErrorResponse(error: unknown): NextResponse {
   })
   return NextResponse.json(
     { error: 'Unable to complete the patent request.', code: 'INTERNAL_ERROR' },
-    { status: 500 },
+    { status: 500, headers: PATENT_PRIVATE_HEADERS },
   )
 }
 

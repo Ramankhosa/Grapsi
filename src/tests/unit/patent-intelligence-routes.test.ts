@@ -121,9 +121,32 @@ describe('patent-intelligence routes', () => {
       expect(response.headers.get('Retry-After')).toBe('5')
       await expect(response.json()).resolves.toMatchObject({ code: 'UPSTREAM_RATE_LIMITED', retryAfterSeconds: 5 })
     })
+
+    it('accepts filter-only structured requests with selected fields and paging', async () => {
+      const { POST } = await import('@/app/api/patent-intelligence/search/route')
+      const input = { filters: { applicants: ['Institute, Delhi'], grantDateFrom: '2024-01-01' }, mode: 'structured', sort: 'grantDateDesc', offset: 50, fields: ['title', 'grantDate'], jurisdictions: ['*'], limit: 25 }
+      expect((await POST(jsonRequest('/api/patent-intelligence/search', input))).status).toBe(200)
+      expect(mocks.service.searchPatents).toHaveBeenCalledWith(input)
+    })
+
+    it('returns 400 for malformed JSON and rejects unknown filters', async () => {
+      const { POST } = await import('@/app/api/patent-intelligence/search/route')
+      const invalidJson = new NextRequest('http://localhost/api/patent-intelligence/search', { method: 'POST', body: '{', headers: { 'content-type': 'application/json' } })
+      expect((await POST(invalidJson)).status).toBe(400)
+      const unknownFilter = await POST(jsonRequest('/api/patent-intelligence/search', { filters: { owner: 'Acme' } }))
+      expect(unknownFilter.status).toBe(400)
+      expect(mocks.service.searchPatents).not.toHaveBeenCalled()
+    })
   })
 
   describe('GET /api/patent-intelligence/patents/[publicationNumber]', () => {
+    it('forwards selected lookup fields and rejects unknown fields', async () => {
+      const { GET } = await import('@/app/api/patent-intelligence/patents/[publicationNumber]/route')
+      expect((await GET(getRequest('/api/patent-intelligence/patents/US1?fields=title,grantDate'), { params: { publicationNumber: 'US1' } })).status).toBe(200)
+      expect(mocks.service.getPatent).toHaveBeenCalledWith('US1', { fields: ['title', 'grantDate'] })
+      expect((await GET(getRequest('/api/patent-intelligence/patents/US1?fields=claims'), { params: { publicationNumber: 'US1' } })).status).toBe(400)
+      expect(mocks.service.getPatent).toHaveBeenCalledTimes(1)
+    })
     it('decodes the number and returns the patent', async () => {
       const { GET } = await import('@/app/api/patent-intelligence/patents/[publicationNumber]/route')
       const response = await GET(getRequest('/api/patent-intelligence/patents/IN%202028%2F2005%20A'), { params: { publicationNumber: 'IN%202028%2F2005%20A' } })

@@ -28,11 +28,12 @@ export default function PatentFacetsPanel({ facets, filters, onChange, onClear }
       <div className="flex items-center justify-between border-b border-slate-200 pb-4">
         <div className="flex items-center gap-2">
           <SlidersHorizontal className="h-4 w-4 text-teal-700" />
-          <span className="font-semibold text-slate-900">Refine results</span>
+          <span className="font-semibold text-slate-900">Refine this page</span>
           {activeCount ? <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-800">{activeCount}</span> : null}
         </div>
         {activeCount ? <button type="button" onClick={onClear} className="text-xs font-semibold text-teal-700 hover:text-teal-900">Clear all</button> : null}
       </div>
+      <p className="pt-3 text-xs leading-5 text-slate-500">These filters apply to this page. Use the search form above to filter the full patent corpus.</p>
       {!hasAny ? <p className="pt-4 text-xs leading-5 text-slate-500">Facets appear once a search returns results.</p> : null}
       <FilterSection label="Jurisdiction" items={facets.jurisdictions} selected={filters.jurisdictions} onToggle={(value) => toggle('jurisdictions', value)} />
       <FilterSection label="Applicant" items={facets.applicants} selected={filters.applicants} onToggle={(value) => toggle('applicants', value)} maxItems={15} />

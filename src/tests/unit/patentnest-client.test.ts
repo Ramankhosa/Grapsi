@@ -51,7 +51,7 @@ describe('PatentNestClient', () => {
           Authorization: `Bearer ${API_KEY}`,
           'Content-Type': 'application/json',
         }),
-        body: JSON.stringify({ query: 'battery cooling', limit: 12 }),
+        body: JSON.stringify({ query: 'battery cooling', limit: 12, jurisdictions: ['IN'] }),
         cache: 'no-store',
       }),
     )
@@ -137,17 +137,40 @@ describe('PatentNestClient', () => {
     expect(fetchMock).toHaveBeenLastCalledWith('http://localhost:4010/api/v1/patents/search', expect.anything())
   })
 
-  it('only sends jurisdictions when the env flag is on', async () => {
+  it('sends normalized jurisdictions by default and refuses to silently drop restrictions on legacy origins', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => successResponse({ query: 'q', count: 0, results: [] }))
     const client = new PatentNestClient({ apiKey: API_KEY, fetchImplementation: fetchMock })
 
     delete process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER
     await client.searchPatents('battery cooling', { limit: 10, jurisdictions: ['in', 'US'] })
-    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ query: 'battery cooling', limit: 10 })
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ query: 'battery cooling', limit: 10, jurisdictions: ['IN', 'US'] })
 
     process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER = 'true'
-    await client.searchPatents('battery cooling', { limit: 10, jurisdictions: ['in', 'US', 'in', 'bad'] })
+    await client.searchPatents('battery cooling', { limit: 10, jurisdictions: ['in', 'US', 'in'] })
     expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({ query: 'battery cooling', limit: 10, jurisdictions: ['IN', 'US'] })
+    process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER = 'false'
+    await expect(client.searchPatents('battery cooling', { jurisdictions: ['US'] })).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await client.searchIndianPatents('battery cooling')
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({ query: 'battery cooling', limit: 20 })
+  })
+
+  it('sends filter-only structured searches, paging, sorting, selected fields and worldwide scope', async () => {
+    const pagination = { offset: 25, limit: 25, hasMore: true, nextOffset: 50 }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(successResponse({ query: '', count: 1, results: [{ publicationNumber: 'US1', source: { name: 'Google Patents Public Data' }, grantDate: null }], mode: 'structured', pagination }))
+    const client = new PatentNestClient({ apiKey: API_KEY, fetchImplementation: fetchMock })
+    const request = { mode: 'structured', filters: { applicants: ['Example University'], grantDateFrom: '2024-02-29', grantDateTo: '2024-02-29' }, fields: ['title', 'grantDate'], jurisdictions: ['*'], sort: 'grantDateDesc', limit: 25, offset: 25 } as const
+    const response = await client.searchPatents({ ...request, fields: [...request.fields], jurisdictions: [...request.jurisdictions], filters: { ...request.filters, applicants: [...request.filters.applicants] } })
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual(request)
+    expect(response.data.pagination).toEqual(pagination)
+    expect(response.data.results[0].grantDate).toBeNull()
+  })
+
+  it('supports selected fields on encoded detail lookups', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(successResponse({ publicationNumber: 'IN 1/A', source: { name: 'IP India' } }))
+    const client = new PatentNestClient({ apiKey: API_KEY, fetchImplementation: fetchMock })
+    await client.getPatent('IN 1/A', { fields: ['title', 'grantDate', 'title'] })
+    expect(fetchMock).toHaveBeenCalledWith('https://patentnest.ai/api/v1/patents/IN%201%2FA?fields=title%2CgrantDate', expect.objectContaining({ method: 'GET' }))
   })
 
   it('lifts the upstream machine code into the error while keeping our own message', async () => {

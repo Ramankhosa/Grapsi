@@ -1,12 +1,9 @@
 import { z } from 'zod'
 
-import { PATENT_QUERY_BOUNDS, PATENT_SEARCH_LIMITS } from './searchCore'
+import { PATENT_SEARCH_LIMITS } from './searchCore'
+import { createPatentNestSearchSchema } from '@/lib/patentnest/searchContract'
 
-export const searchRequestSchema = z.object({
-  query: z.string().trim().min(PATENT_QUERY_BOUNDS.min, 'Enter at least 2 characters.').max(PATENT_QUERY_BOUNDS.max, 'Keep the query under 2,000 characters.'),
-  limit: z.number().int().min(PATENT_SEARCH_LIMITS.min).max(PATENT_SEARCH_LIMITS.max).optional().default(PATENT_SEARCH_LIMITS.default),
-  jurisdictions: z.array(z.string().trim().length(2)).max(10).optional(),
-})
+export const searchRequestSchema = createPatentNestSearchSchema(PATENT_SEARCH_LIMITS.default)
 
 const shortText = (max: number) => z.string().max(max)
 const nullableShortText = (max: number) => z.string().max(max).nullable()
@@ -20,6 +17,7 @@ export const patentSearchItemSchema = z.object({
   applicationNumber: nullableShortText(200),
   kind: nullableShortText(20),
   country: nullableShortText(80),
+  familyId: nullableShortText(200).optional(),
   jurisdiction: nullableShortText(8),
   title: shortText(1000),
   abstract: z.string().max(5000).nullable(),
@@ -29,17 +27,19 @@ export const patentSearchItemSchema = z.object({
   classificationGroups: z.array(shortText(8)).max(50),
   filingDate: nullableShortText(32),
   publicationDate: nullableShortText(32),
+  grantDate: nullableShortText(32).optional(),
   filingYear: z.number().int().nullable(),
   publicationYear: z.number().int().nullable(),
   numberOfPages: z.number().nullable(),
   numberOfClaims: z.number().nullable(),
   extractionConfidence: z.number().nullable(),
-  source: z.object({ name: shortText(200), document: nullableShortText(300), page: z.number().nullable() }).nullable(),
+  source: z.object({ name: shortText(200), document: nullableShortText(300), page: z.number().nullable(), license: nullableShortText(100).optional(), attribution: nullableShortText(2000).optional() }).nullable(),
   relevance: z.object({
     score: z.number().nullable(),
     semanticScore: z.number().nullable(),
     textScore: z.number().nullable(),
     matchedFields: z.array(shortText(60)).max(20),
+    matchedViaFamilyMember: nullableShortText(200).optional(),
   }).nullable(),
 })
 

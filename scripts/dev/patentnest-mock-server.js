@@ -1,11 +1,13 @@
 // Local stand-in for https://patentnest.ai/api/v1 so the Patent Search UI can be
 // exercised end-to-end without a real pn_live_ key (see the grapsi-dev-patentmock
-// launch config). Mirrors the v1.1 contract: POST /api/v1/patents/search
-// {query, limit}, GET /api/v1/patents/{number}, bearer auth (pn_live_mock),
+// launch config). Mirrors the v1.3 contract: structured/hybrid search, filters,
+// pagination, selected fields, offices, GET /api/v1/patents/{number}, bearer auth (pn_live_mock),
 // {data, meta} envelope, coverage manifest, RateLimit-* headers. Queries containing
 // "ratelimit", "corpus down" or "nothing" trigger 429 / 503 / empty responses.
 // Run: node scripts/dev/patentnest-mock-server.js   (MOCK_PORT, default 4010)
 const http = require('http')
+require('tsx/cjs')
+const { patentNestSearchSchema, patentNestFieldsSchema } = require('../../src/lib/patentnest/searchContract.ts')
 
 const PORT = Number(process.env.MOCK_PORT || 4010)
 const KEY = 'pn_live_mock'
@@ -26,7 +28,10 @@ function record([publicationNumber, applicationNumber, kind, country, title, abs
     publicationNumber, applicationNumber, kind, country, title, abstract,
     applicants: applicants.map(([name, address], index) => ({ name, address, sequence: index + 1 })),
     inventors, classifications, filingDate, publicationDate, numberOfPages, numberOfClaims, extractionConfidence,
-    source: { name: 'IP India Patent Journal', document, page },
+    grantDate: publicationNumber === 'IN 202041012345 A' ? '2024-03-03' : null,
+    familyId: null,
+    source: country === 'IN' ? { name: 'IP India Patent Journal', document, page, license: null, attribution: null }
+      : { name: 'Google Patents Public Data', document: null, page: null, license: 'CC-BY-4.0', attribution: 'Contains data from Google Patents Public Data by IFI CLAIMS Patent Services and Google, used under CC BY 4.0.' },
     ...(withRelevance ? { relevance: { score, semanticScore, textScore, matchedFields: ['title', 'abstract'] } } : {}),
   }
 }
@@ -57,29 +62,68 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/v1/patents/search') {
       let body = {}
       try { body = JSON.parse(raw || '{}') } catch { return send(res, 400, { error: { code: 'INVALID_REQUEST', message: 'bad json', requestId: 'mock' } }) }
-      const unsupported = Object.keys(body).filter((key) => !['query', 'limit'].includes(key))
-      if (unsupported.length) return send(res, 400, { error: { code: 'INVALID_REQUEST', message: `Unsupported request field: ${unsupported[0]}.`, requestId: 'mock' } })
+      const parsed = patentNestSearchSchema.safeParse(body)
+      if (!parsed.success) return send(res, 400, { error: { code: 'INVALID_REQUEST', message: parsed.error.issues[0].message, requestId: 'mock' } })
+      body = parsed.data
       const query = String(body.query || '')
       if (query.toLowerCase().includes('ratelimit')) return send(res, 429, { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'slow down', requestId: 'mock' } }, { 'Retry-After': '20' })
       if (query.toLowerCase().includes('corpus down')) return send(res, 503, { error: { code: 'CORPUS_NOT_READY', message: 'rebuilding', requestId: 'mock' } })
-      if (query.toLowerCase().includes('nothing')) return send(res, 200, { data: { query, count: 0, results: [], coverage: coverage() }, meta: { requestId: 'mock-empty', durationMs: 5 } })
-      const limit = Number(body.limit || 20)
-      const results = PATENTS.slice(0, limit).map((row) => record(row, true))
-      return send(res, 200, { data: { query, count: results.length, results, coverage: coverage() }, meta: { requestId: `mock-${Date.now()}`, durationMs: Date.now() - started + 180 } })
+      const mode = body.mode || (query ? 'hybrid' : 'structured')
+      const limit = body.limit
+      const offset = body.offset || 0
+      const offices = body.jurisdictions || ['IN']
+      let matches = PATENTS.map(row => record(row, mode === 'hybrid')).filter(row => (offices.includes('*') || offices.includes(row.country)) && matchesFilters(row, body.filters || {}))
+      if (query.toLowerCase().includes('nothing')) matches = []
+      if (mode === 'structured') {
+        if (query) matches = matches.filter(row => [row.title, row.abstract].some(text => text.toLowerCase().includes(query.toLowerCase())))
+        const field = { filingDateDesc: 'filingDate', grantDateDesc: 'grantDate', titleAsc: 'title' }[body.sort] || 'publicationDate'
+        matches.sort((a, b) => {
+          if (!a[field] || !b[field]) return a[field] ? -1 : b[field] ? 1 : a.publicationNumber.localeCompare(b.publicationNumber)
+          const comparison = a[field].localeCompare(b[field]) * (field === 'title' ? 1 : -1)
+          return comparison || a.publicationNumber.localeCompare(b.publicationNumber)
+        })
+      } else matches.sort((a, b) => b.relevance.score - a.relevance.score)
+      const results = matches.slice(offset, offset + limit).map(row => selectFields(row, body.fields))
+      const hasMore = matches.length > offset + limit
+      const pagination = mode === 'structured' ? { mode, pagination: { offset, limit, hasMore, nextOffset: hasMore && offset + limit <= 10000 ? offset + limit : null } } : {}
+      return send(res, 200, { data: { query, count: results.length, results, coverage: coverage(offices, mode), ...pagination }, meta: { requestId: `mock-${Date.now()}`, durationMs: Date.now() - started + 180 } })
     }
     const match = /^\/api\/v1\/patents\/(.+)$/.exec(url.pathname)
     if (req.method === 'GET' && match) {
       const key = norm(decodeURIComponent(match[1]))
       const row = PATENTS.find((entry) => norm(entry[0]) === key)
       if (!row) return send(res, 404, { error: { code: 'PATENT_NOT_FOUND', message: 'No patent was found for that publication number.', requestId: 'mock' } })
-      return send(res, 200, { data: record(row, false), meta: { requestId: `mock-${Date.now()}`, durationMs: 12 } })
+      const rawFields = url.searchParams.getAll('fields')
+      const fields = rawFields.length ? patentNestFieldsSchema.safeParse(rawFields.flatMap(value => value.split(','))) : null
+      if (fields && !fields.success) return send(res, 400, { error: { code: 'INVALID_REQUEST', message: 'Invalid fields.', requestId: 'mock' } })
+      return send(res, 200, { data: selectFields(record(row, false), fields?.data), meta: { requestId: `mock-${Date.now()}`, durationMs: 12 } })
     }
     return send(res, 404, { error: { code: 'NOT_FOUND', message: 'no route', requestId: 'mock' } })
   })
 })
 
-function coverage() {
-  return { corpus: 'indian-patent-journal', description: 'Indian patent corpus sourced from IP India Patent Journal publications (mock)', jurisdiction: 'IN', documents: 160412, semanticCoveragePercent: 99.4, searchMode: 'hybrid-semantic-text', embeddingModel: 'voyage-3.5-lite' }
+function selectFields(row, fields) {
+  return fields ? Object.fromEntries(Object.entries(row).filter(([key]) => ['publicationNumber', 'source', ...fields].includes(key))) : row
+}
+
+function matchesFilters(row, filters) {
+  for (const [key, value] of Object.entries(filters)) {
+    if (key.endsWith('From') || key.endsWith('To')) {
+      const field = key.replace(/From$|To$/, '')
+      if (!row[field] || (key.endsWith('From') ? row[field] < value : row[field] > value)) return false
+    } else if (Array.isArray(value)) {
+      const values = row[key].map(item => item.name || item)
+      if (!value.some(term => values.some(text => key === 'classifications' ? norm(text).startsWith(norm(term)) : text.toLowerCase().includes(term.toLowerCase())))) return false
+    } else if (key.endsWith('Number')) {
+      if (!norm(row[key]).includes(norm(value))) return false
+    } else if (!(row[key] || '').toLowerCase().includes(value.toLowerCase())) return false
+  }
+  return true
+}
+
+function coverage(offices, mode) {
+  const worldwide = offices.some(code => code !== 'IN')
+  return { corpus: worldwide ? 'worldwide' : 'indian-patent-journal', description: `${worldwide ? 'Worldwide' : 'Indian'} patent corpus (mock)`, jurisdiction: worldwide ? null : 'IN', jurisdictions: offices, documents: worldwide ? null : 160412, semanticCoveragePercent: mode === 'structured' ? null : 99.4, searchMode: mode === 'structured' ? 'structured' : 'hybrid-semantic-text', embeddingModel: mode === 'structured' ? null : 'voyage-3.5-lite', ...(worldwide ? { limitations: ['Worldwide mock fixture records; production coverage refreshes quarterly.'] } : {}) }
 }
 
 server.listen(PORT, () => console.log(`[patentnest-mock] listening on http://localhost:${PORT} (key ${KEY})`))

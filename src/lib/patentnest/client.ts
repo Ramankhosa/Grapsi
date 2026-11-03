@@ -7,7 +7,10 @@ import type {
   PatentNestRateLimitSnapshot,
   PatentNestResponse,
   SearchIndianPatentsData,
+  PatentNestField,
+  PatentNestSearchRequest,
 } from './types'
+import { patentNestFieldsSchema, patentNestSearchSchema } from './searchContract'
 
 const DEFAULT_PATENTNEST_API_BASE_URL = 'https://patentnest.ai'
 const DEFAULT_TIMEOUT_MS = 20_000
@@ -35,11 +38,7 @@ export interface PatentNestClientOptions {
   sleep?: SleepImplementation
 }
 
-export interface PatentNestSearchOptions {
-  limit?: number
-  /** Forwarded only when PATENTNEST_SEARCH_JURISDICTION_FILTER=true (see types.ts). */
-  jurisdictions?: string[]
-}
+export type PatentNestSearchOptions = Omit<PatentNestSearchRequest, 'query'>
 
 export class PatentNestApiError extends Error {
   readonly code: string
@@ -72,18 +71,26 @@ export function isPatentNestConfigured(): boolean {
 }
 
 /**
- * The public API v1.1 rejects any request field other than `query`/`limit`, so
- * a jurisdictions filter must stay off until PatentNest ships it. Flip the env
- * flag once the OpenAPI spec at /api/v1/openapi.json lists `jurisdictions`.
+ * v1.3 supports jurisdictions by default. Explicit false supports older staging
+ * origins; configured restrictions must not be silently discarded.
  */
 export function isPatentNestJurisdictionFilterEnabled(): boolean {
-  return process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER === 'true'
+  return process.env.PATENTNEST_SEARCH_JURISDICTION_FILTER !== 'false'
 }
 
 export function resolvePatentNestBaseUrl(override?: string): string {
   const candidate = (override ?? process.env.PATENTNEST_API_BASE_URL ?? '').trim()
   const base = candidate || DEFAULT_PATENTNEST_API_BASE_URL
-  return base.replace(/\/+$/, '')
+  let url: URL
+  try { url = new URL(base) } catch {
+    throw new PatentNestApiError({ code: 'PATENTNEST_INVALID_CONFIGURATION', message: 'PatentNest API origin is invalid.', status: 503 })
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash
+    || (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))) {
+    throw new PatentNestApiError({ code: 'PATENTNEST_INVALID_CONFIGURATION', message: 'PatentNest requires an HTTPS origin (HTTP is allowed only on loopback).', status: 503 })
+  }
+  return url.origin
 }
 
 export class PatentNestClient {
@@ -123,32 +130,27 @@ export class PatentNestClient {
 
   /** Hybrid semantic + text search. Jurisdiction-agnostic: returns whatever corpus PatentNest exposes. */
   async searchPatents(
-    query: string,
+    query: string | PatentNestSearchRequest,
     options: PatentNestSearchOptions = {},
   ): Promise<PatentNestResponse<SearchIndianPatentsData>> {
-    const limit = options.limit ?? 20
-    const normalizedQuery = typeof query === 'string' ? query.trim() : ''
-    if (Array.from(normalizedQuery).length < 2 || Array.from(normalizedQuery).length > 2_000) {
+    const input = typeof query === 'string'
+      ? { ...options, ...(query.trim() ? { query: query.trim() } : {}) }
+      : query
+    const parsed = patentNestSearchSchema.safeParse(input)
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]
       throw new PatentNestApiError({
-        code: 'INVALID_QUERY',
-        message: 'Search query must contain between 2 and 2,000 characters.',
+        code: issue.path[0] === 'query' ? 'INVALID_QUERY' : issue.path[0] === 'limit' ? 'INVALID_LIMIT' : 'INVALID_REQUEST',
+        message: issue.message,
         status: 400,
       })
     }
-    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
-      throw new PatentNestApiError({
-        code: 'INVALID_LIMIT',
-        message: 'Search limit must be an integer between 1 and 50.',
-        status: 400,
-      })
-    }
-
-    const jurisdictions = (options.jurisdictions || [])
-      .map((value) => String(value || '').trim().toUpperCase())
-      .filter((value) => /^[A-Z]{2}$/.test(value))
-    const body: Record<string, unknown> = { query: normalizedQuery, limit }
-    if (jurisdictions.length && isPatentNestJurisdictionFilterEnabled()) {
-      body.jurisdictions = Array.from(new Set(jurisdictions))
+    const body = parsed.data
+    if (body.jurisdictions) {
+      if (!isPatentNestJurisdictionFilterEnabled()) {
+        throw new PatentNestApiError({ code: 'INVALID_REQUEST', message: 'Jurisdiction filtering is disabled for this PatentNest origin.', status: 400 })
+      }
+      body.jurisdictions = Array.from(new Set(body.jurisdictions))
     }
 
     return this.request<SearchIndianPatentsData>('/api/v1/patents/search', {
@@ -159,14 +161,14 @@ export class PatentNestClient {
 
   /** Back-compat alias kept for evidenceSources.ts and the original tests. */
   searchIndianPatents(query: string, limit = 20): Promise<PatentNestResponse<SearchIndianPatentsData>> {
-    return this.searchPatents(query, { limit })
+    return this.searchPatents(query, { limit, ...(isPatentNestJurisdictionFilterEnabled() ? { jurisdictions: ['IN'] } : {}) })
   }
 
-  async getPatent(publicationNumber: string): Promise<PatentNestResponse<IndianPatentRecord>> {
+  async getPatent(publicationNumber: string, options: { fields?: PatentNestField[] } = {}): Promise<PatentNestResponse<IndianPatentRecord>> {
     const normalizedPublicationNumber = typeof publicationNumber === 'string'
       ? publicationNumber.trim()
       : ''
-    if (!normalizedPublicationNumber || normalizedPublicationNumber.length > 200) {
+    if (!/[A-Za-z0-9]/.test(normalizedPublicationNumber) || normalizedPublicationNumber.length > 200) {
       throw new PatentNestApiError({
         code: 'INVALID_PUBLICATION_NUMBER',
         message: 'A valid publication number is required.',
@@ -174,8 +176,13 @@ export class PatentNestClient {
       })
     }
 
+    const fields = options.fields === undefined ? undefined : patentNestFieldsSchema.safeParse(options.fields)
+    if (fields && !fields.success) {
+      throw new PatentNestApiError({ code: 'INVALID_REQUEST', message: 'Select valid patent response fields.', status: 400 })
+    }
+    const suffix = fields?.success ? `?${new URLSearchParams({ fields: Array.from(new Set(fields.data)).join(',') })}` : ''
     return this.request<IndianPatentRecord>(
-      `/api/v1/patents/${encodeURIComponent(normalizedPublicationNumber)}`,
+      `/api/v1/patents/${encodeURIComponent(normalizedPublicationNumber)}${suffix}`,
       { method: 'GET' },
     )
   }
@@ -205,6 +212,7 @@ export class PatentNestClient {
             Accept: 'application/json',
           },
           cache: 'no-store',
+          redirect: 'error',
           signal: controller.signal,
         })
         const requestId = response.headers.get('x-request-id') || undefined
@@ -363,12 +371,12 @@ function createHttpError(
   })
 }
 
-export function searchPatents(query: string, options: PatentNestSearchOptions = {}) {
+export function searchPatents(query: string | PatentNestSearchRequest, options: PatentNestSearchOptions = {}) {
   return new PatentNestClient().searchPatents(query, options)
 }
 
-export function getPatent(publicationNumber: string) {
-  return new PatentNestClient().getPatent(publicationNumber)
+export function getPatent(publicationNumber: string, options: { fields?: PatentNestField[] } = {}) {
+  return new PatentNestClient().getPatent(publicationNumber, options)
 }
 
 export function searchIndianPatents(query: string, limit = 20) {

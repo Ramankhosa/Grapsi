@@ -1,3 +1,6 @@
+import type { z } from 'zod'
+import type { PATENTNEST_FIELDS, patentNestFiltersSchema, patentNestSearchSchema } from './searchContract'
+
 export interface PatentNestRateLimitSnapshot {
   limit: number | null
   remaining: number | null
@@ -23,6 +26,8 @@ export interface PatentNestSource {
   name: string
   document?: string | null
   page?: number | null
+  license?: string | null
+  attribution?: string | null
 }
 
 export interface PatentNestRelevance {
@@ -30,6 +35,7 @@ export interface PatentNestRelevance {
   semanticScore?: number | null
   textScore?: number | null
   matchedFields?: string[]
+  matchedViaFamilyMember?: string | null
 }
 
 export interface IndianPatentRecord {
@@ -37,6 +43,7 @@ export interface IndianPatentRecord {
   applicationNumber?: string | null
   kind?: string | null
   country?: string | null
+  familyId?: string | null
   title?: string | null
   abstract?: string | null
   applicants?: PatentNestApplicant[]
@@ -44,6 +51,8 @@ export interface IndianPatentRecord {
   classifications?: string[]
   filingDate?: string | null
   publicationDate?: string | null
+  /** Explicit recorded grant date only; never inferred from publication date or kind. */
+  grantDate?: string | null
   numberOfPages?: number | null
   numberOfClaims?: number | null
   extractionConfidence?: number | null
@@ -64,16 +73,32 @@ export interface PatentNestSearchCoverage {
   semanticCoveragePercent?: number | null
   searchMode?: string | null
   embeddingModel?: string | null
+  jurisdictions?: string[]
+  sources?: PatentNestCoverageSource[]
+  limitations?: string[]
 }
 
-export interface PatentNestSearchRequest {
-  query: string
-  limit?: number
-  /**
-   * Not accepted by the public API v1.1 (any unknown field is a 400). Only sent
-   * when PATENTNEST_SEARCH_JURISDICTION_FILTER=true, for the day the API grows it.
-   */
-  jurisdictions?: string[]
+export interface PatentNestCoverageSource {
+  corpus?: string | null
+  description?: string | null
+  jurisdiction?: string | null
+  documents?: number | null
+  semanticCoveragePercent?: number | null
+  semanticUnit?: string | null
+  license?: string | null
+  attribution?: string | null
+}
+
+export type PatentNestField = typeof PATENTNEST_FIELDS[number]
+export type PatentNestSearchFilters = z.infer<typeof patentNestFiltersSchema>
+export type PatentNestSearchRequest = z.input<typeof patentNestSearchSchema>
+export type PatentNestSearchMode = 'hybrid' | 'structured'
+export type PatentNestSearchSort = NonNullable<PatentNestSearchRequest['sort']>
+export interface PatentNestPagination {
+  offset: number
+  limit: number
+  hasMore: boolean
+  nextOffset: number | null
 }
 
 export interface PatentNestSearchData {
@@ -81,6 +106,8 @@ export interface PatentNestSearchData {
   count: number
   results: IndianPatentRecord[]
   coverage?: PatentNestSearchCoverage | null
+  mode?: PatentNestSearchMode
+  pagination?: PatentNestPagination
 }
 
 export interface PatentNestSuccessResponse<T> {

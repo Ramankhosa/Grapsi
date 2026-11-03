@@ -30,6 +30,10 @@ export function describePatentError(body: Partial<PatentApiErrorBody> | null | u
   const requestId = body?.requestId
   const retryAfterSeconds = body?.retryAfterSeconds ?? secondsUntil(body?.resetAt, now)
 
+  if (code === 'JURISDICTION_NOT_AVAILABLE') {
+    return { code, tone: 'warn', requestId, title: 'The selected patent offices are not available.', detail: 'Choose India (IN) or another office enabled by your PatentNest plan.' }
+  }
+
   if (code === 'PATENT_SEARCH_NOT_CONFIGURED') {
     return {
       code, tone: 'info', disablesSearch: true, requestId,
@@ -62,7 +66,9 @@ export function describePatentError(body: Partial<PatentApiErrorBody> | null | u
     return {
       code, tone: 'warn', requestId, retryAfterSeconds,
       title: 'The patent corpus is temporarily unavailable.',
-      detail: body?.upstreamCode === 'CORPUS_NOT_READY'
+      detail: body?.upstreamCode === 'PATENT_SEARCH_UNAVAILABLE'
+        ? 'Try fewer filters or a narrower date range, then search again.'
+        : body?.upstreamCode === 'CORPUS_NOT_READY'
         ? 'PatentNest is rebuilding its search index. Please retry in a minute.'
         : 'Please retry in a minute.',
     }

@@ -141,6 +141,7 @@ export function toPatentSearchItem(record: IndianPatentRecord | null | undefined
       semanticScore: cleanNumber(record.relevance.semanticScore),
       textScore: cleanNumber(record.relevance.textScore),
       matchedFields: cleanStringList(record.relevance.matchedFields),
+      ...(record.relevance.matchedViaFamilyMember !== undefined ? { matchedViaFamilyMember: cleanString(record.relevance.matchedViaFamilyMember) } : {}),
     }
     : null
 
@@ -150,6 +151,8 @@ export function toPatentSearchItem(record: IndianPatentRecord | null | undefined
       name: sourceName,
       document: cleanString(record.source.document),
       page: cleanNumber(record.source.page),
+      ...(record.source.license !== undefined ? { license: cleanString(record.source.license) } : {}),
+      ...(record.source.attribution !== undefined ? { attribution: cleanString(record.source.attribution) } : {}),
     }
     : null
 
@@ -158,6 +161,7 @@ export function toPatentSearchItem(record: IndianPatentRecord | null | undefined
     publicationNumber,
     publicationNumberKey,
     applicationNumber: cleanString(record.applicationNumber),
+    familyId: cleanString(record.familyId),
     kind: cleanString(record.kind)?.toUpperCase() ?? null,
     country,
     jurisdiction,
@@ -169,6 +173,7 @@ export function toPatentSearchItem(record: IndianPatentRecord | null | undefined
     classificationGroups,
     filingDate,
     publicationDate,
+    grantDate: cleanString(record.grantDate),
     filingYear: yearOf(filingDate),
     publicationYear: yearOf(publicationDate),
     numberOfPages: cleanNumber(record.numberOfPages),
@@ -323,11 +328,15 @@ export function formatPatentCitation(item: PatentSearchItem, style: 'plain' | 'm
   const dates = [
     item.filingDate ? `Filed ${item.filingDate}` : null,
     item.publicationDate ? `published ${item.publicationDate}` : null,
+    item.grantDate ? `granted ${item.grantDate}` : null,
   ].filter(Boolean)
   if (dates.length) parts.push(dates.join('; '))
   if (item.classifications.length) parts.push(`IPC/CPC: ${item.classifications.slice(0, 6).map(formatClassification).join('; ')}`)
   const sourceBits = [item.source?.document, item.source?.page != null ? `p. ${item.source.page}` : null].filter(Boolean)
-  parts.push(`Source: PatentNest${sourceBits.length ? ` (${sourceBits.join(', ')})` : ''}`)
+  parts.push(`Source: PatentNest${item.source?.name ? ` / ${item.source.name}` : ''}${sourceBits.length ? ` (${sourceBits.join(', ')})` : ''}`)
+  if (item.source?.license) parts.push(`Licence: ${item.source.license}`)
+  if (item.source?.attribution) parts.push(item.source.attribution)
+  if (item.relevance?.matchedViaFamilyMember) parts.push(`Matched via family publication ${item.relevance.matchedViaFamilyMember}`)
   if (style === 'markdown') return `- ${parts[0]} — ${parts.slice(1).join('. ')}.`
   return `${parts.join('. ')}.`
 }
@@ -346,10 +355,13 @@ export function formatShortlistMarkdown(items: PatentShortlistItemDto[], options
 export const SHORTLIST_CSV_COLUMNS = [
   'publication_number', 'title', 'applicants', 'inventors', 'kind', 'jurisdiction', 'filing_date',
   'publication_date', 'classifications', 'relevance_score', 'note', 'saved_at', 'source',
+  'grant_date', 'family_id', 'matched_via_family_member', 'license', 'attribution',
 ] as const
 
 function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? '' : String(value)
+  const raw = value === null || value === undefined ? '' : String(value)
+  // Spreadsheet programs evaluate formula prefixes even inside quoted CSV cells.
+  const text = typeof value === 'string' && (/^[\s\u0000-\u001f]*[=+@-]/.test(raw) || /^[\t\r\n]/.test(raw)) ? `'${raw}` : raw
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
@@ -368,6 +380,11 @@ export function buildShortlistCsv(items: PatentShortlistItemDto[]): string {
     item.note,
     item.createdAt,
     item.record.source?.name || 'PatentNest',
+    item.record.grantDate,
+    item.record.familyId,
+    item.record.relevance?.matchedViaFamilyMember,
+    item.record.source?.license,
+    item.record.source?.attribution,
   ].map(csvCell).join(','))
   return [SHORTLIST_CSV_COLUMNS.join(','), ...rows].join('\r\n') + '\r\n'
 }

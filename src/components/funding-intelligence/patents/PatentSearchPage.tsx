@@ -31,6 +31,8 @@ import ShortlistDrawer from './ShortlistDrawer'
 import ShortlistRail from './ShortlistRail'
 import { describePatentError, formatCountdown, type PatentErrorCopy } from './patentErrorCopy'
 import { authHeaders, usePatentShortlist } from './usePatentShortlist'
+import AdvancedPatentSearch from './AdvancedPatentSearch'
+import { readAdvancedPatentSearch, readPatentOffset, writeAdvancedPatentSearch } from '@/lib/patentIntelligence/advancedSearch'
 
 const SAMPLE_QUERIES = [
   'Low-cost electrochemical biosensor for point-of-care diagnostics in rural clinics',
@@ -77,8 +79,13 @@ export default function PatentSearchPage() {
   const runId = searchParams?.get('runId')?.trim() || null
   const filters = useMemo(() => readPatentFiltersFromParams((key) => searchParams?.get(key) ?? null), [searchParams])
   const contextParams = searchParams?.toString() || ''
+  const advanced = useMemo(() => readAdvancedPatentSearch(key => searchParams?.get(key) ?? null), [searchParams])
+  const offset = advanced.mode === 'structured' ? readPatentOffset(searchParams?.get('offset')) : 0
+  const requestOptions = JSON.stringify({ ...advanced, offset, jurisdictions: advanced.jurisdictions.length ? advanced.jurisdictions : undefined, filters: Object.keys(advanced.filters).length ? advanced.filters : undefined })
+  const hasSearch = Boolean(query || Object.keys(advanced.filters).length)
 
   const [draftQuery, setDraftQuery] = useState(query)
+  const [draftAdvanced, setDraftAdvanced] = useState(advanced)
   const [data, setData] = useState<PatentSearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [errorCopy, setErrorCopy] = useState<PatentErrorCopy | null>(null)
@@ -92,7 +99,7 @@ export default function PatentSearchPage() {
   const shortlist = usePatentShortlist(token)
   const terms = useMemo(() => tokenizeHighlightTerms(query), [query])
   const activeFilterCount = countActivePatentFilters(filters)
-  const visible = useMemo(() => sortPatents(applyPatentFilters(data?.results || [], filters), sort), [data, filters, sort])
+  const visible = useMemo(() => sortPatents(applyPatentFilters(data?.results || [], filters), data?.mode === 'structured' ? 'relevance' : sort), [data, filters, sort])
   const searchDisabled = Boolean(errorCopy?.disablesSearch)
 
   const updateUrlState = useCallback((next: { query?: string; limit?: number; sort?: PatentSort; filters?: PatentFilters; shortlist?: boolean }) => {
@@ -107,6 +114,7 @@ export default function PatentSearchPage() {
     if (nextSort !== 'relevance') params.set('sort', nextSort)
     else params.delete('sort')
     writePatentFiltersToParams(params, next.filters ?? filters)
+    if (next.query !== undefined || next.limit !== undefined) params.delete('offset')
     if (next.shortlist !== undefined) {
       if (next.shortlist) params.set('shortlist', '1')
       else params.delete('shortlist')
@@ -119,6 +127,7 @@ export default function PatentSearchPage() {
   }, [filters, limit, pathname, query, router, searchParams, sort])
 
   useEffect(() => { setDraftQuery(query) }, [query])
+  useEffect(() => { setDraftAdvanced(advanced) }, [advanced])
 
   // Auto-grow the textarea with the pasted idea, within reason.
   useEffect(() => {
@@ -145,7 +154,8 @@ export default function PatentSearchPage() {
   }, [runId, token])
 
   const runSearch = useCallback(async (searchQuery: string, searchLimit: number) => {
-    if (!token || !searchQuery) return
+    const options = JSON.parse(requestOptions)
+    if (!token || (!searchQuery && !options.filters)) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -156,10 +166,11 @@ export default function PatentSearchPage() {
       const response = await fetch('/api/patent-intelligence/search', {
         method: 'POST',
         headers: authHeaders(token, true),
-        body: JSON.stringify({ query: searchQuery, limit: searchLimit }),
+        body: JSON.stringify({ ...options, ...(searchQuery ? { query: searchQuery } : {}), limit: searchLimit }),
         signal: controller.signal,
       })
       const body = await response.json().catch(() => null)
+      if (abortRef.current !== controller) return
       if (!response.ok) {
         const copy = describePatentError(body, response.status)
         setErrorCopy(copy)
@@ -170,24 +181,31 @@ export default function PatentSearchPage() {
       setData(body as PatentSearchResponse)
     } catch (searchError) {
       if ((searchError as Error)?.name === 'AbortError') return
+      if (abortRef.current !== controller) return
       setErrorCopy({ code: 'NETWORK', tone: 'error', title: 'Patent search failed.', detail: 'Check your connection and try again.' })
       setData(null)
     } finally {
       if (abortRef.current === controller) setLoading(false)
     }
-  }, [token])
+  }, [token, requestOptions])
 
   useEffect(() => {
-    if (!query) { setData(null); setErrorCopy(null); return }
+    if (!hasSearch) { abortRef.current?.abort(); setLoading(false); setData(null); setErrorCopy(null); return }
     void runSearch(query, limit)
-  }, [limit, query, runSearch])
+    return () => abortRef.current?.abort()
+  }, [hasSearch, limit, query, runSearch])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    const next = draftQuery.replace(/\s+/g, ' ').trim()
-    if (next.length < PATENT_QUERY_BOUNDS.min) return
-    if (next === query) { void runSearch(next, limit); return }
-    updateUrlState({ query: next.slice(0, PATENT_QUERY_BOUNDS.max), filters: EMPTY_PATENT_FILTERS })
+    const next = draftAdvanced.mode === 'structured' ? draftQuery.trim() : draftQuery.replace(/\s+/g, ' ').trim()
+    if ((!next && !Object.keys(draftAdvanced.filters).length) || (next && next.length < PATENT_QUERY_BOUNDS.min)) return
+    const params = new URLSearchParams(searchParams?.toString() || '')
+    if (next) params.set('q', next.slice(0, PATENT_QUERY_BOUNDS.max))
+    else params.delete('q')
+    writeAdvancedPatentSearch(params, { ...draftAdvanced, jurisdictions: draftAdvanced.jurisdictions.map(value => value.trim().toUpperCase()).filter(Boolean) })
+    writePatentFiltersToParams(params, EMPTY_PATENT_FILTERS)
+    if (params.toString() === searchParams?.toString()) { void runSearch(next, limit); return }
+    router.replace(`${pathname || '/funding/intelligence/patents'}?${params}`, { scroll: false })
   }
   const onTextareaKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -197,7 +215,17 @@ export default function PatentSearchPage() {
   }
   const chooseSample = (sample: string) => {
     setDraftQuery(sample)
-    updateUrlState({ query: sample, filters: EMPTY_PATENT_FILTERS })
+    const params = new URLSearchParams(searchParams?.toString() || '')
+    params.set('q', sample)
+    writeAdvancedPatentSearch(params, { mode: 'hybrid', sort: 'relevance', jurisdictions: [], filters: {} })
+    writePatentFiltersToParams(params, EMPTY_PATENT_FILTERS)
+    router.replace(`${pathname || '/funding/intelligence/patents'}?${params}`, { scroll: false })
+  }
+  const goToOffset = (nextOffset: number) => {
+    const params = new URLSearchParams(searchParams?.toString() || '')
+    params.set('offset', String(nextOffset))
+    writePatentFiltersToParams(params, EMPTY_PATENT_FILTERS)
+    router.replace(`${pathname || '/funding/intelligence/patents'}?${params}`, { scroll: false })
   }
   const clearFilters = () => updateUrlState({ filters: EMPTY_PATENT_FILTERS })
   const openDrawer = () => { setDrawerOpen(true); updateUrlState({ shortlist: true }) }
@@ -214,10 +242,11 @@ export default function PatentSearchPage() {
     <main className="funding-workspace">
       <section className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
         <FundingWorkspaceHeader section="intelligence" title="Find the prior art that shapes your next proposal."
-          description="Search patents by meaning, inspect the evidence, and keep a shortlist of the inventions relevant to your research."
+          description="Search patents by meaning or by fields and dates, inspect the evidence, and shortlist inventions relevant to your research."
           actions={<button type="button" onClick={openDrawer} className="funding-button-secondary"><Bookmark className="h-4 w-4" />Shortlist <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs text-blue-700">{shortlist.items.length}</span></button>} />
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <form onSubmit={submit} role="search" className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-2 sm:flex-row sm:items-end">
+          <form onSubmit={submit} role="search" className="space-y-4 rounded-xl border border-slate-200 bg-white p-2">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2">
               <Search className="mt-2.5 h-5 w-5 shrink-0 text-slate-400" />
               <div className="min-w-0 flex-1">
@@ -241,9 +270,11 @@ export default function PatentSearchPage() {
               </div>
               {draftQuery ? <button type="button" onClick={() => setDraftQuery('')} className="mt-1.5 rounded-full p-1 text-slate-400 hover:bg-slate-100" aria-label="Clear query"><X className="h-4 w-4" /></button> : null}
             </div>
-            <button type="submit" disabled={searchDisabled || loading || draftLength < PATENT_QUERY_BOUNDS.min} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
+            <button type="submit" disabled={searchDisabled || loading || (draftAdvanced.mode === 'hybrid' ? draftLength < PATENT_QUERY_BOUNDS.min : !draftQuery.trim() && !Object.keys(draftAdvanced.filters).length)} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Search patents
             </button>
+            </div>
+            <AdvancedPatentSearch value={draftAdvanced} onChange={setDraftAdvanced} disabled={searchDisabled || loading} />
           </form>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Try:</span>{SAMPLE_QUERIES.map((sample) => <button type="button" key={sample} onClick={() => chooseSample(sample)} disabled={searchDisabled} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left transition hover:bg-blue-50 disabled:opacity-50">{sample}</button>)}</div>
@@ -266,7 +297,7 @@ export default function PatentSearchPage() {
               <p><span className="font-semibold">Shortlist update failed.</span> {shortlist.error}</p>
             </div>
           ) : null}
-          {data ? <PatentCoverageLine coverage={data.coverage} resultCount={resultCount} limit={data.limit} capped={data.capped} cached={data.diagnostics.cached} upstreamRemaining={data.diagnostics.upstreamRemaining} /> : null}
+          {data ? <PatentCoverageLine coverage={data.coverage} resultCount={resultCount} limit={data.limit} capped={data.capped} cached={data.diagnostics.cached} upstreamRemaining={data.diagnostics.upstreamRemaining} mode={data.mode} pagination={data.pagination} /> : null}
         </div>
 
         <div className="mb-5 mt-5 flex items-center justify-between gap-3 lg:hidden">
@@ -291,22 +322,23 @@ export default function PatentSearchPage() {
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-teal-700">Related patents</p>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">{query ? 'Patents matched to your query' : 'Search the patent corpus'}</h2>
                 <p className="mt-1 text-sm text-slate-500" aria-live="polite">
-                  {loading ? 'Searching PatentNest…' : data ? `Showing ${visible.length} of ${resultCount} (top ${data.limit} by relevance)` : 'Describe an invention above to see the closest patents.'}
+                  {loading ? 'Searching PatentNest…' : data ? data.mode === 'structured' ? `Showing ${visible.length} publications on this page` : `Showing ${visible.length} of ${resultCount} (top ${data.limit} by relevance)` : 'Describe an invention or use field filters to search.'}
                 </p>
               </div>
               <div className="flex items-end gap-3">
                 <label className="text-xs font-semibold text-slate-500">Results per search
                   <select value={limit} onChange={(event) => updateUrlState({ limit: Number(event.target.value) })} className="mt-1 block rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-teal-500">
+                    {!PATENT_SEARCH_LIMIT_CHOICES.some(choice => choice === limit) ? <option value={limit}>{limit}</option> : null}
                     {PATENT_SEARCH_LIMIT_CHOICES.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
                   </select>
                 </label>
-                <label className="text-xs font-semibold text-slate-500">Sort
+                {advanced.mode === 'hybrid' ? <label className="text-xs font-semibold text-slate-500">Sort this shortlist
                   <select value={sort} onChange={(event) => updateUrlState({ sort: readPatentSort(event.target.value) })} className="mt-1 block rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-teal-500">
                     <option value="relevance">Relevance</option>
                     <option value="newest">Newest</option>
                     <option value="oldest">Oldest</option>
                   </select>
-                </label>
+                </label> : null}
               </div>
             </div>
 
@@ -315,17 +347,23 @@ export default function PatentSearchPage() {
             {!loading && data && visible.length ? (
               <div className="space-y-4">
                 {visible.map((item) => <PatentResultCard key={item.id} item={item} terms={terms} shortlist={shortlist} ideaRunId={runId} detailHref={detailHref(item.publicationNumber)} />)}
-                {data.capped ? <p className="px-1 pt-2 text-center text-xs leading-5 text-slate-500">Showing the top {data.limit} by relevance — PatentNest returns at most 50 per search. Narrow or rephrase the query to see different patents.</p> : null}
+                {data.capped ? <p className="px-1 pt-2 text-center text-xs leading-5 text-slate-500">Showing the top {data.limit} by relevance. Use field and date search to browse individual publications across pages.</p> : null}
               </div>
             ) : null}
 
             {!loading && data && !resultCount && !errorCopy ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center"><Search className="mx-auto h-8 w-8 text-slate-300" /><h3 className="mt-4 text-lg font-semibold text-slate-900">No patents matched</h3><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Try a longer, plainer description of the invention — one or two sentences about the problem and the approach work best.</p></div>
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center"><Search className="mx-auto h-8 w-8 text-slate-300" /><h3 className="mt-4 text-lg font-semibold text-slate-900">No patents matched</h3><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{data.mode === 'structured' ? 'Try fewer filters, a wider date range, or another patent office.' : 'Try one or two plain sentences about the problem and the approach.'}</p></div>
             ) : null}
 
             {!loading && data && resultCount && !visible.length ? (
               <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center"><Filter className="mx-auto h-8 w-8 text-slate-300" /><h3 className="mt-4 text-lg font-semibold text-slate-900">Your filters hide all {resultCount} results</h3><button type="button" onClick={clearFilters} className="mt-4 text-sm font-semibold text-teal-700">Clear filters</button></div>
             ) : null}
+
+            {!loading && data?.pagination ? <nav aria-label="Patent result pages" className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+              <button type="button" disabled={data.pagination.offset === 0} onClick={() => goToOffset(Math.max(0, data.pagination!.offset - data.limit))} className="font-semibold text-blue-700 disabled:opacity-40">Previous page</button>
+              <span className="text-xs text-slate-500">{resultCount ? `Publications ${data.pagination.offset + 1}–${data.pagination.offset + resultCount}` : 'No publications on this page'}</span>
+              <button type="button" disabled={data.pagination.nextOffset === null} onClick={() => goToOffset(data.pagination!.nextOffset!)} className="font-semibold text-blue-700 disabled:opacity-40">Next page</button>
+            </nav> : null}
 
             {!loading && !data && !errorCopy ? (
               <div className="grid gap-4 sm:grid-cols-3">

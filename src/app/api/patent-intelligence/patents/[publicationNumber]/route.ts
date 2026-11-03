@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingActor } from '@/lib/funding/access'
+import { patentNestFieldsSchema } from '@/lib/patentnest/searchContract'
+import { PATENT_PRIVATE_HEADERS } from '@/lib/patentIntelligence/http'
 import {
   enforcePatentRateLimit,
   isPatentSearchEnabled,
@@ -9,6 +11,7 @@ import {
 } from '@/lib/patentIntelligence/service'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
 export async function GET(request: NextRequest, { params }: { params: { publicationNumber: string } }) {
@@ -36,8 +39,10 @@ export async function GET(request: NextRequest, { params }: { params: { publicat
   }
 
   try {
-    const result = await patentIntelligenceService.getPatent(publicationNumber)
-    return NextResponse.json(result)
+    const rawFields = request.nextUrl.searchParams.getAll('fields')
+    const fields = rawFields.length ? patentNestFieldsSchema.parse(rawFields.flatMap(value => value.split(',').map(field => field.trim()))) : undefined
+    const result = fields ? await patentIntelligenceService.getPatent(publicationNumber, { fields }) : await patentIntelligenceService.getPatent(publicationNumber)
+    return NextResponse.json(result, { headers: PATENT_PRIVATE_HEADERS })
   } catch (error) {
     return patentErrorResponse(error)
   }

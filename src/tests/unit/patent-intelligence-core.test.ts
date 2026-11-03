@@ -193,10 +193,10 @@ describe('citations and exports', () => {
   it('formats plain and markdown citations, omitting missing parts', () => {
     const full = item()
     expect(formatPatentCitation(full)).toBe(
-      'Graphene oxide membrane for arsenic removal. Indian Institute of Technology, Delhi. Publication No. IN 2028/2005 A (kind A), IN. Filed 2005-08-10; published 2007-02-16. IPC/CPC: B01D 71/02; C02F 1/44; B01D71/02. Source: PatentNest (journal-2007-07.pdf, p. 41).',
+      'Graphene oxide membrane for arsenic removal. Indian Institute of Technology, Delhi. Publication No. IN 2028/2005 A (kind A), IN. Filed 2005-08-10; published 2007-02-16. IPC/CPC: B01D 71/02; C02F 1/44; B01D71/02. Source: PatentNest / IP India Patent Journal (journal-2007-07.pdf, p. 41).',
     )
     expect(formatPatentCitation(full, 'markdown')).toBe(
-      '- **Graphene oxide membrane for arsenic removal** — Indian Institute of Technology, Delhi. Publication No. `IN 2028/2005 A (kind A)`, IN. Filed 2005-08-10; published 2007-02-16. IPC/CPC: B01D 71/02; C02F 1/44; B01D71/02. Source: PatentNest (journal-2007-07.pdf, p. 41).',
+      '- **Graphene oxide membrane for arsenic removal** — Indian Institute of Technology, Delhi. Publication No. `IN 2028/2005 A (kind A)`, IN. Filed 2005-08-10; published 2007-02-16. IPC/CPC: B01D 71/02; C02F 1/44; B01D71/02. Source: PatentNest / IP India Patent Journal (journal-2007-07.pdf, p. 41).',
     )
     const sparse = toPatentSearchItem({ publicationNumber: 'US 1', title: 'Sparse' }) as PatentSearchItem
     expect(formatPatentCitation(sparse)).toBe('Sparse. Publication No. US 1, US. Source: PatentNest.')
@@ -212,7 +212,7 @@ describe('citations and exports', () => {
   it('builds RFC 4180 CSV with escaped cells', () => {
     const csv = buildShortlistCsv([dto(item({ title: 'Quote "me", please\nnow' }), { note: 'a,b' })])
     const [header, row] = csv.split('\r\n')
-    expect(header).toBe('publication_number,title,applicants,inventors,kind,jurisdiction,filing_date,publication_date,classifications,relevance_score,note,saved_at,source')
+    expect(header).toBe('publication_number,title,applicants,inventors,kind,jurisdiction,filing_date,publication_date,classifications,relevance_score,note,saved_at,source,grant_date,family_id,matched_via_family_member,license,attribution')
     expect(row.startsWith('IN 2028/2005 A,"Quote ""me"", please\nnow"'.split('\n')[0])).toBe(true)
     expect(csv).toContain('"a,b"')
     expect(csv).toContain('"Indian Institute of Technology, Delhi"')

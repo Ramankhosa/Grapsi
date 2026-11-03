@@ -4,6 +4,7 @@ import { requireFundingActor } from '@/lib/funding/access'
 import { shortlistPatchSchema } from '@/lib/patentIntelligence/schemas'
 import { enforcePatentRateLimit, patentErrorResponse } from '@/lib/patentIntelligence/service'
 import { removeFromShortlist, updateShortlistNote } from '@/lib/patentIntelligence/shortlist'
+import { PATENT_PRIVATE_HEADERS, readPatentJson } from '@/lib/patentIntelligence/http'
 
 export const runtime = 'nodejs'
 
@@ -15,10 +16,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   if (limited) return limited
 
   try {
-    const input = shortlistPatchSchema.parse(await request.json())
+    const input = shortlistPatchSchema.parse(await readPatentJson(request))
     const item = await updateShortlistNote(auth.actor.id, params.id, input.note)
     if (!item) return NextResponse.json({ error: 'Shortlist item not found', code: 'NOT_FOUND' }, { status: 404 })
-    return NextResponse.json({ item })
+    return NextResponse.json({ item }, { headers: PATENT_PRIVATE_HEADERS })
   } catch (error) {
     return patentErrorResponse(error)
   }
@@ -34,7 +35,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
   try {
     const removed = await removeFromShortlist(auth.actor.id, params.id)
     if (!removed) return NextResponse.json({ error: 'Shortlist item not found', code: 'NOT_FOUND' }, { status: 404 })
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true }, { headers: PATENT_PRIVATE_HEADERS })
   } catch (error) {
     return patentErrorResponse(error)
   }

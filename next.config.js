@@ -18,6 +18,9 @@ const standalone = process.env.NEXT_OUTPUT_STANDALONE === '1'
 const skipChecks = process.env.NEXT_SKIP_CHECKS === '1'
 
 const nextConfig = {
+  // Public images are served directly. Grapsi does not need an exposed image
+  // optimizer; disabling it removes the native image-decoder attack surface.
+  images: { unoptimized: true },
   // Self-contained server bundle in `.next/standalone`, for the release-dir
   // layout described in ecosystem.config.js. Off by default: producing it means
   // tracing every server file through ~1.7 GB of node_modules and then copying

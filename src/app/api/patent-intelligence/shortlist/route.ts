@@ -4,8 +4,10 @@ import { requireFundingActor } from '@/lib/funding/access'
 import { shortlistCreateSchema } from '@/lib/patentIntelligence/schemas'
 import { enforcePatentRateLimit, patentErrorResponse } from '@/lib/patentIntelligence/service'
 import { assertIdeaRunOwnership, listShortlist, saveToShortlist } from '@/lib/patentIntelligence/shortlist'
+import { PATENT_PRIVATE_HEADERS, readPatentJson } from '@/lib/patentIntelligence/http'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 function readRunId(request: NextRequest): string | null {
   const value = request.nextUrl.searchParams.get('runId')?.trim() || ''
@@ -19,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const items = await listShortlist(auth.actor.id, { ideaRunId: readRunId(request) })
-    return NextResponse.json({ items })
+    return NextResponse.json({ items }, { headers: PATENT_PRIVATE_HEADERS })
   } catch (error) {
     return patentErrorResponse(error)
   }
@@ -35,7 +37,7 @@ export async function POST(request: NextRequest) {
   if (limited) return limited
 
   try {
-    const input = shortlistCreateSchema.parse(await request.json())
+    const input = shortlistCreateSchema.parse(await readPatentJson(request))
     if (input.ideaRunId) {
       const owned = await assertIdeaRunOwnership(auth.actor.id, input.ideaRunId)
       if (!owned) {
@@ -49,7 +51,7 @@ export async function POST(request: NextRequest) {
       note: input.note,
       ideaRunId: input.ideaRunId,
     })
-    return NextResponse.json(result, { status: result.created ? 201 : 200 })
+    return NextResponse.json(result, { status: result.created ? 201 : 200, headers: PATENT_PRIVATE_HEADERS })
   } catch (error) {
     return patentErrorResponse(error)
   }

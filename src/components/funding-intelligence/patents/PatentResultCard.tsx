@@ -95,12 +95,15 @@ export default function PatentResultCard({ item, terms, shortlist, ideaRunId, de
         <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
           {item.filingDate ? <span className="flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" /> Filed {formatPatentDate(item.filingDate)}</span> : null}
           {item.publicationDate ? <span>Published {formatPatentDate(item.publicationDate)}</span> : null}
+          {item.grantDate ? <span>Granted {formatPatentDate(item.grantDate)}</span> : null}
         </span>
         <span className="flex items-center gap-2">
           <ShortlistButton item={item} shortlist={shortlist} ideaRunId={ideaRunId} />
           <Link href={detailHref} className="inline-flex min-h-[40px] items-center gap-1 px-2 text-sm font-semibold text-teal-700 hover:text-teal-900">View details <ArrowRight className="h-4 w-4" /></Link>
         </span>
       </div>
+      {item.relevance?.matchedViaFamilyMember ? <p className="mt-3 text-xs text-slate-500">Matched through family publication {item.relevance.matchedViaFamilyMember}.</p> : null}
+      {item.source?.attribution ? <p className="mt-3 text-xs leading-5 text-slate-500">{item.source.attribution}{item.source.license ? ` (${item.source.license})` : ''}</p> : null}
     </article>
   )
 }

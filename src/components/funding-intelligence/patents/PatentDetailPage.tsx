@@ -193,10 +193,14 @@ export default function PatentDetailPage({ publicationNumber }: { publicationNum
           <EvidenceSection title="Record">
             <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div><dt className="text-xs uppercase tracking-wide text-slate-400">Application no.</dt><dd className="mt-1 font-mono text-sm text-slate-800">{patent.applicationNumber || '—'}</dd></div>
+              <div><dt className="text-xs uppercase tracking-wide text-slate-400">Recorded grant date</dt><dd className="mt-1 text-sm text-slate-800">{formatPatentDate(patent.grantDate || null) || 'Not recorded'}</dd></div>
+              {patent.familyId ? <div><dt className="text-xs uppercase tracking-wide text-slate-400">Patent family</dt><dd className="mt-1 text-sm text-slate-800">{patent.familyId}</dd></div> : null}
               <div><dt className="text-xs uppercase tracking-wide text-slate-400">Pages / claims</dt><dd className="mt-1 text-sm text-slate-800">{patent.numberOfPages ?? '—'} / {patent.numberOfClaims ?? '—'}</dd></div>
               <div><dt className="text-xs uppercase tracking-wide text-slate-400">Extraction confidence</dt><dd className="mt-1 text-sm text-slate-800">{patent.extractionConfidence != null ? `${Math.round(patent.extractionConfidence * 100)}%` : '—'}</dd></div>
               <div><dt className="text-xs uppercase tracking-wide text-slate-400">Source</dt><dd className="mt-1 text-sm text-slate-800">{patent.source?.name || 'PatentNest'}{patent.source?.document ? <span className="block text-xs text-slate-500">{patent.source.document}{patent.source.page != null ? `, p. ${patent.source.page}` : ''}</span> : null}</dd></div>
             </dl>
+            {patent.relevance?.matchedViaFamilyMember ? <p className="mt-3 text-xs text-slate-500">Matched through family publication {patent.relevance.matchedViaFamilyMember}.</p> : null}
+            {patent.source?.attribution ? <p className="mt-3 text-xs leading-5 text-slate-500">{patent.source.attribution}{patent.source.license ? ` (${patent.source.license})` : ''}</p> : null}
           </EvidenceSection>
         </div>
 

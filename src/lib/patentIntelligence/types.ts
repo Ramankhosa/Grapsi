@@ -5,6 +5,7 @@
  * App Router routes under /api/patent-intelligence and the React pages under
  * /funding/intelligence/patents. No imports from server modules.
  */
+import type { PatentNestCoverageSource, PatentNestPagination, PatentNestSearchMode } from '@/lib/patentnest/types'
 
 export type PatentApplicant = { name: string; address: string | null }
 
@@ -13,9 +14,10 @@ export type PatentRelevance = {
   semanticScore: number | null
   textScore: number | null
   matchedFields: string[]
+  matchedViaFamilyMember?: string | null
 }
 
-export type PatentSourceRef = { name: string; document: string | null; page: number | null }
+export type PatentSourceRef = { name: string; document: string | null; page: number | null; license?: string | null; attribution?: string | null }
 
 export type PatentSearchItem = {
   /** Stable id for React keys and the shortlist — equals publicationNumberKey. */
@@ -24,6 +26,7 @@ export type PatentSearchItem = {
   /** Upper-cased alphanumerics only, e.g. "IN20282005A". */
   publicationNumberKey: string
   applicationNumber: string | null
+  familyId?: string | null
   kind: string | null
   /** Country as PatentNest reported it (already "IN" for the Indian corpus). */
   country: string | null
@@ -38,6 +41,7 @@ export type PatentSearchItem = {
   classificationGroups: string[]
   filingDate: string | null
   publicationDate: string | null
+  grantDate?: string | null
   filingYear: number | null
   publicationYear: number | null
   numberOfPages: number | null
@@ -75,6 +79,9 @@ export type PatentSearchCoverage = {
   semanticCoveragePercent: number | null
   searchMode: string | null
   embeddingModel: string | null
+  jurisdictions?: string[]
+  sources?: PatentNestCoverageSource[]
+  limitations?: string[]
 }
 
 export type PatentUpstreamRemaining = {
@@ -97,7 +104,9 @@ export type PatentSearchResponse = {
   results: PatentSearchItem[]
   facets: PatentFacets
   coverage: PatentSearchCoverage | null
-  /** True when PatentNest returned as many records as we asked for (it never pages past 50). */
+  mode?: PatentNestSearchMode
+  pagination?: PatentNestPagination
+  /** True when a hybrid search fills its ranked shortlist. Structured searches use pagination. */
   capped: boolean
   diagnostics: PatentSearchDiagnostics
 }
