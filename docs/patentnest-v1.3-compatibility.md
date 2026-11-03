@@ -67,7 +67,8 @@ private/no-store responses, shared search/lookup rate limits, and CSV formula
 neutralization. Security patches update Next.js to 14.2.35, NextAuth to 4.24.15
 and Undici to 7.30.1. The unused image optimizer is disabled at configuration
 and middleware levels; ordinary image files remain available. The repository
-contains no Server Actions. Existing unrelated dependency advisories require
+contains no Server Actions. Unused `jspdf` and `pdf2text` packages were removed;
+the LinkedIn client's Lodash dependency was updated to 4.18.1. Existing unrelated dependency advisories require
 separate assessment; these measures are not a claim of a vulnerability-free app.
 
 The production credential was accepted on 2026-11-03: live Indian hybrid search,
