@@ -1,6 +1,8 @@
 /**
  * Runs once when the Next.js server boots (enabled by
- * `experimental.instrumentationHook` in next.config.js).
+ * `experimental.instrumentationHook` in next.config.js). It lives at the repo
+ * root, not src/: Next looks for it beside the pages dir, and the root
+ * `pages/` wins over `src/`. A copy under src/ is silently never built.
  *
  * Node 20 connects with "happy eyeballs" and gives each resolved address only
  * 250 ms before moving on. From the production box (asia-south2) a TCP
@@ -12,10 +14,8 @@
  * connection, so other distant APIs benefit too.
  */
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return
-
-  const net = await import('node:net')
-  if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') {
-    net.setDefaultAutoSelectFamilyAttemptTimeout(1000)
+  // Node-only code sits in its own module so the edge bundle never sees `net`.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    await import('./instrumentation-node')
   }
 }

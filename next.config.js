@@ -49,7 +49,7 @@ const nextConfig = {
 
   experimental: {
     webpackBuildWorker: true,
-    // Runs src/instrumentation.ts once at server boot (sets the outbound
+    // Runs instrumentation.ts once at server boot (sets the outbound
     // connect timeout, see that file).
     instrumentationHook: true,
     // `optimizeCss` (critters) was inlining 1.8 kB of a 285 kB stylesheet, i.e.
