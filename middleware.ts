@@ -20,6 +20,16 @@ export function middleware(request: NextRequest) {
   // Get the pathname of the request (e.g. /api/users, /dashboard)
   const { pathname } = request.nextUrl
 
+  // The app defines no Server Actions (no 'use server' anywhere), so any request
+  // carrying the action header is a scanner, typically React2Shell
+  // (CVE-2025-55182) probes sending `Next-Action: x`. React 18 is not vulnerable,
+  // but each probe made Next throw "Failed to find Server Action" with a full
+  // stack trace in pm2 logs. Refuse them before they reach the renderer. If a
+  // Server Action is ever added, remove this block.
+  if (request.headers.has('next-action')) {
+    return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'private, no-store' } })
+  }
+
   if (pathname === '/_next/image') {
     return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'private, no-store' } })
   }
