@@ -195,10 +195,15 @@ export default function PatentSearchPage() {
     return () => abortRef.current?.abort()
   }, [hasSearch, limit, query, runSearch])
 
+  const trimmedQuery = draftQuery.trim()
+  const canSubmitSearch = trimmedQuery.length >= PATENT_QUERY_BOUNDS.min || (
+    !trimmedQuery && draftAdvanced.mode === 'structured' && Object.keys(draftAdvanced.filters).length > 0
+  )
+
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const next = draftAdvanced.mode === 'structured' ? draftQuery.trim() : draftQuery.replace(/\s+/g, ' ').trim()
-    if ((!next && !Object.keys(draftAdvanced.filters).length) || (next && next.length < PATENT_QUERY_BOUNDS.min)) return
+    if (searchDisabled || loading || !canSubmitSearch) return
     const params = new URLSearchParams(searchParams?.toString() || '')
     if (next) params.set('q', next.slice(0, PATENT_QUERY_BOUNDS.max))
     else params.delete('q')
@@ -217,7 +222,7 @@ export default function PatentSearchPage() {
     setDraftQuery(sample)
     const params = new URLSearchParams(searchParams?.toString() || '')
     params.set('q', sample)
-    writeAdvancedPatentSearch(params, { mode: 'hybrid', sort: 'relevance', jurisdictions: [], filters: {} })
+    writeAdvancedPatentSearch(params, { mode: 'hybrid', sort: 'relevance', jurisdictions: draftAdvanced.jurisdictions, filters: {} })
     writePatentFiltersToParams(params, EMPTY_PATENT_FILTERS)
     router.replace(`${pathname || '/funding/intelligence/patents'}?${params}`, { scroll: false })
   }
@@ -241,16 +246,16 @@ export default function PatentSearchPage() {
   return (
     <main className="funding-workspace">
       <section className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
-        <FundingWorkspaceHeader section="intelligence" title="Find the prior art that shapes your next proposal."
+        <FundingWorkspaceHeader section="intelligence" title="Patent Search"
           description="Search patents by meaning or by fields and dates, inspect the evidence, and shortlist inventions relevant to your research."
           actions={<button type="button" onClick={openDrawer} className="funding-button-secondary"><Bookmark className="h-4 w-4" />Shortlist <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs text-blue-700">{shortlist.items.length}</span></button>} />
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <form onSubmit={submit} role="search" className="space-y-4 rounded-xl border border-slate-200 bg-white p-2">
+          <form onSubmit={submit} role="search" className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2">
+            <div className="flex min-w-0 flex-1 items-start gap-3 rounded-xl border border-slate-300 px-3 py-2 focus-within:border-blue-600 focus-within:ring-1 focus-within:ring-blue-600">
               <Search className="mt-2.5 h-5 w-5 shrink-0 text-slate-400" />
               <div className="min-w-0 flex-1">
-                <label htmlFor="patent-query" className="sr-only">Describe the invention or research idea</label>
+                <label htmlFor="patent-query" className="mb-1 block text-sm font-semibold text-slate-900">{draftAdvanced.mode === 'structured' ? 'Keywords (optional with filters)' : 'Invention or research idea'}</label>
                 <textarea
                   id="patent-query"
                   ref={textareaRef}
@@ -260,7 +265,7 @@ export default function PatentSearchPage() {
                   maxLength={PATENT_QUERY_BOUNDS.max}
                   rows={1}
                   disabled={searchDisabled}
-                  placeholder="Describe the invention or paste a paragraph of your idea…"
+                  placeholder={draftAdvanced.mode === 'structured' ? 'Search for words in a title or abstract' : 'e.g. Graphene membranes for water purification'}
                   className="block w-full resize-none bg-transparent text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:text-base"
                 />
                 <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
@@ -270,14 +275,14 @@ export default function PatentSearchPage() {
               </div>
               {draftQuery ? <button type="button" onClick={() => setDraftQuery('')} className="mt-1.5 rounded-full p-1 text-slate-400 hover:bg-slate-100" aria-label="Clear query"><X className="h-4 w-4" /></button> : null}
             </div>
-            <button type="submit" disabled={searchDisabled || loading || (draftAdvanced.mode === 'hybrid' ? draftLength < PATENT_QUERY_BOUNDS.min : !draftQuery.trim() && !Object.keys(draftAdvanced.filters).length)} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
+            <button type="submit" disabled={searchDisabled || loading || !canSubmitSearch} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Search patents
             </button>
             </div>
             <AdvancedPatentSearch value={draftAdvanced} onChange={setDraftAdvanced} disabled={searchDisabled || loading} />
           </form>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Try:</span>{SAMPLE_QUERIES.map((sample) => <button type="button" key={sample} onClick={() => chooseSample(sample)} disabled={searchDisabled} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left transition hover:bg-blue-50 disabled:opacity-50">{sample}</button>)}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Example searches</span>{SAMPLE_QUERIES.map((sample) => <button type="button" key={sample} onClick={() => chooseSample(sample)} disabled={searchDisabled} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left transition hover:bg-blue-50 disabled:opacity-50">{sample}</button>)}</div>
 
           {runId ? (
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">

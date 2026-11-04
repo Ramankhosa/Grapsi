@@ -1,5 +1,6 @@
 'use client'
 
+import PatentOfficePicker from './PatentOfficePicker'
 import { PATENT_DATE_FILTERS, PATENT_TEXT_FILTERS, type PatentAdvancedSearch } from '@/lib/patentIntelligence/advancedSearch'
 
 export default function AdvancedPatentSearch({ value, onChange, disabled }: {
@@ -8,11 +9,11 @@ export default function AdvancedPatentSearch({ value, onChange, disabled }: {
   disabled?: boolean
 }) {
   const inputClass = 'mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800'
-  const scope = value.jurisdictions.length === 0 ? 'india' : value.jurisdictions.join(',') === '*' ? 'worldwide' : 'selected'
   return (
     <fieldset disabled={disabled} className="space-y-4 border-t border-slate-100 pt-4">
       <legend className="sr-only">Search options</legend>
-      <div className="grid gap-4 sm:grid-cols-3">
+      <PatentOfficePicker value={value.jurisdictions} onChange={jurisdictions => onChange({ ...value, jurisdictions })} />
+      <div className="grid gap-4 sm:grid-cols-2">
         <label className="text-xs font-semibold text-slate-600">Search method
           <select value={value.mode} onChange={event => {
             const mode = event.target.value === 'structured' ? 'structured' : 'hybrid'
@@ -21,36 +22,15 @@ export default function AdvancedPatentSearch({ value, onChange, disabled }: {
             <option value="hybrid">By meaning</option><option value="structured">By fields and dates</option>
           </select>
         </label>
-        <label className="text-xs font-semibold text-slate-600">Search coverage
-          <select value={scope} onChange={event => {
-            const scopes = { india: [], worldwide: ['*'], selected: ['IN'] }
-            onChange({ ...value, jurisdictions: scopes[event.target.value as keyof typeof scopes] })
-          }} className={inputClass}>
-            <option value="india">India (default)</option>
-            <option value="worldwide">All available offices</option>
-            <option value="selected">Selected patent offices</option>
-          </select>
-        </label>
         {value.mode === 'structured' ? <label className="text-xs font-semibold text-slate-600">Order all matches by
           <select value={value.sort} onChange={event => onChange({ ...value, sort: event.target.value as PatentAdvancedSearch['sort'] })} className={inputClass}>
             <option value="publicationDateDesc">Publication date, newest first</option><option value="filingDateDesc">Filing date, newest first</option><option value="grantDateDesc">Grant date, newest first</option><option value="titleAsc">Title, A–Z</option>
           </select>
         </label> : null}
       </div>
-      {scope === 'selected' ? <label className="block text-xs font-semibold text-slate-600">Patent office codes
-        <input
-          required
-          pattern={String.raw`\s*[A-Za-z]{2}(\s*,\s*[A-Za-z]{2}){0,19}\s*`}
-          placeholder="US, EP, WO"
-          value={value.jurisdictions.join(',')}
-          onChange={event => onChange({ ...value, jurisdictions: event.target.value.split(',') })}
-          className={inputClass}
-        />
-        <span className="mt-1 block font-normal text-slate-500">Enter up to 20 two-letter office codes, separated by commas.</span>
-      </label> : null}
       <p className="text-xs leading-5 text-slate-500">{value.mode === 'structured' ? 'Find individual publications with filters and page through matches. A query is optional and matches literal text in the title or abstract.' : 'Describe the invention to retrieve a ranked shortlist. The filters below narrow the corpus before matching.'}</p>
       <details open={value.mode === 'structured' || Object.keys(value.filters).length > 0}>
-        <summary className="cursor-pointer text-sm font-semibold text-blue-700">Filter the patent corpus</summary>
+        <summary className="cursor-pointer text-sm font-semibold text-blue-700">Advanced filters{Object.keys(value.filters).length ? ` (${Object.keys(value.filters).length} set)` : ''}</summary>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {PATENT_TEXT_FILTERS.map(([key, label]) => {
             const raw = value.filters[key]
