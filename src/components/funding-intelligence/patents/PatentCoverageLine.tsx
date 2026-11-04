@@ -30,7 +30,9 @@ export default function PatentCoverageLine({
 }) {
   const corpusLabel = coverage?.description || coverage?.corpus || 'the PatentNest patent corpus'
   const bits = [
-    coverage?.jurisdictions?.length ? `offices ${coverage.jurisdictions.join(', ')}` : coverage?.jurisdiction ? `jurisdiction ${coverage.jurisdiction}` : null,
+    coverage?.jurisdictions?.includes('*') ? 'all available offices'
+      : coverage?.jurisdictions?.length ? `offices ${coverage.jurisdictions.join(', ')}`
+      : coverage?.jurisdiction ? `jurisdiction ${coverage.jurisdiction}` : null,
     coverage?.documents != null ? `${formatCount(coverage.documents)} documents` : null,
     coverage?.semanticCoveragePercent != null ? `${Math.round(coverage.semanticCoveragePercent)}% semantically indexed` : null,
   ].filter(Boolean)

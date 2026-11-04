@@ -20,6 +20,7 @@ describe('PatentNest v1.3 boundary validation', () => {
     { filters: { title: 'battery' }, offset: 10001 }, { filters: { title: 'battery' }, limit: 51 },
     { filters: { title: 'battery' }, fields: ['claims'] }, { filters: { title: 'battery' }, jurisdictions: ['USA'] },
     { filters: { applicants: [] } }, { filters: { applicationNumber: ' / ' } },
+    { query: 'battery', jurisdictions: ['*', 'US'] }, { query: 'battery', jurisdictions: ['*', '*'] },
   ])('rejects invalid requests without issuing an upstream call: %j', async input => {
     const fetchMock = vi.fn<typeof fetch>()
     const client = new PatentNestClient({ apiKey: 'pn_live_test', fetchImplementation: fetchMock })

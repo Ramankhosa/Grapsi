@@ -8,6 +8,7 @@ export default function AdvancedPatentSearch({ value, onChange, disabled }: {
   disabled?: boolean
 }) {
   const inputClass = 'mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800'
+  const scope = value.jurisdictions.length === 0 ? 'india' : value.jurisdictions.join(',') === '*' ? 'worldwide' : 'selected'
   return (
     <fieldset disabled={disabled} className="space-y-4 border-t border-slate-100 pt-4">
       <legend className="sr-only">Search options</legend>
@@ -20,8 +21,15 @@ export default function AdvancedPatentSearch({ value, onChange, disabled }: {
             <option value="hybrid">By meaning</option><option value="structured">By fields and dates</option>
           </select>
         </label>
-        <label className="text-xs font-semibold text-slate-600">Patent offices
-          <input aria-label="Patent offices" placeholder="IN (default), US, EP or * for worldwide" value={value.jurisdictions.join(',')} onChange={event => onChange({ ...value, jurisdictions: event.target.value.split(',') })} className={inputClass} />
+        <label className="text-xs font-semibold text-slate-600">Search coverage
+          <select value={scope} onChange={event => {
+            const scopes = { india: [], worldwide: ['*'], selected: ['IN'] }
+            onChange({ ...value, jurisdictions: scopes[event.target.value as keyof typeof scopes] })
+          }} className={inputClass}>
+            <option value="india">India (default)</option>
+            <option value="worldwide">All available offices</option>
+            <option value="selected">Selected patent offices</option>
+          </select>
         </label>
         {value.mode === 'structured' ? <label className="text-xs font-semibold text-slate-600">Order all matches by
           <select value={value.sort} onChange={event => onChange({ ...value, sort: event.target.value as PatentAdvancedSearch['sort'] })} className={inputClass}>
@@ -29,6 +37,17 @@ export default function AdvancedPatentSearch({ value, onChange, disabled }: {
           </select>
         </label> : null}
       </div>
+      {scope === 'selected' ? <label className="block text-xs font-semibold text-slate-600">Patent office codes
+        <input
+          required
+          pattern={String.raw`\s*[A-Za-z]{2}(\s*,\s*[A-Za-z]{2}){0,19}\s*`}
+          placeholder="US, EP, WO"
+          value={value.jurisdictions.join(',')}
+          onChange={event => onChange({ ...value, jurisdictions: event.target.value.split(',') })}
+          className={inputClass}
+        />
+        <span className="mt-1 block font-normal text-slate-500">Enter up to 20 two-letter office codes, separated by commas.</span>
+      </label> : null}
       <p className="text-xs leading-5 text-slate-500">{value.mode === 'structured' ? 'Find individual publications with filters and page through matches. A query is optional and matches literal text in the title or abstract.' : 'Describe the invention to retrieve a ranked shortlist. The filters below narrow the corpus before matching.'}</p>
       <details open={value.mode === 'structured' || Object.keys(value.filters).length > 0}>
         <summary className="cursor-pointer text-sm font-semibold text-blue-700">Filter the patent corpus</summary>

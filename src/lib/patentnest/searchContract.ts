@@ -40,6 +40,9 @@ export function createPatentNestSearchSchema(defaultLimit = 20) {
   }).strict().superRefine((value, ctx) => {
     const mode = value.mode || (value.query ? 'hybrid' : 'structured')
     const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message })
+    if (value.jurisdictions?.includes('*') && value.jurisdictions.length > 1) {
+      issue('Choose all available offices or enter specific patent office codes.')
+    }
     if (!value.query && !Object.keys(value.filters || {}).length) issue('Supply a query or at least one search filter.')
     if (mode === 'hybrid' && !value.query) issue('Search by meaning requires a query.')
     if (mode === 'hybrid' && ((value.offset || 0) !== 0 || (value.sort && value.sort !== 'relevance'))) {
