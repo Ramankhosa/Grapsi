@@ -49,6 +49,9 @@ const nextConfig = {
 
   experimental: {
     webpackBuildWorker: true,
+    // Runs src/instrumentation.ts once at server boot (sets the outbound
+    // connect timeout, see that file).
+    instrumentationHook: true,
     // `optimizeCss` (critters) was inlining 1.8 kB of a 285 kB stylesheet, i.e.
     // nothing, while costing ~130 ms on each of 218 prerendered pages. Removed.
     serverComponentsExternalPackages: ['pdfjs-dist', '@resvg/resvg-js'],
